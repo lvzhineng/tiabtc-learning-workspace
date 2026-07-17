@@ -7,7 +7,7 @@
 body[data-review-standalone="true"] {
   margin: 0;
   overflow: hidden;
-  background: #0d1117;
+  background: #ffffff;
 }
 
 body[data-review-standalone="true"] .chart-dialog {
@@ -32,15 +32,15 @@ body[data-review-standalone="true"] .chart-dialog {
   max-width: none;
   max-height: none;
   padding: 0;
-  border: 1px solid #27354a;
+  border: 1px solid #d9e1ec;
   border-radius: 14px;
-  background: #0d1117;
-  color: #d6dee7;
-  box-shadow: 0 26px 80px rgba(8, 15, 28, .42);
+  background: #ffffff;
+  color: #172033;
+  box-shadow: 0 26px 80px rgba(42, 63, 95, .18);
 }
 
 .chart-dialog::backdrop {
-  background: rgba(15, 23, 42, .68);
+  background: rgba(71, 85, 105, .28);
   backdrop-filter: blur(4px);
 }
 
@@ -58,8 +58,8 @@ body[data-review-standalone="true"] .chart-dialog {
   justify-content: space-between;
   gap: 18px;
   padding: 12px 14px;
-  border-bottom: 1px solid #27354a;
-  background: #0b1017;
+  border-bottom: 1px solid #d9e1ec;
+  background: #ffffff;
 }
 
 .chart-heading {
@@ -80,7 +80,7 @@ body[data-review-standalone="true"] .chart-dialog {
 
 .chart-heading span {
   margin-top: 4px;
-  color: #8b949e;
+  color: #64748b;
   font-size: 12px;
 }
 
@@ -97,16 +97,17 @@ body[data-review-standalone="true"] .chart-dialog {
 .chart-controls input,
 .drawing-tools button {
   min-height: 32px;
-  border: 1px solid #303844;
+  border: 1px solid #c5d0e0;
   border-radius: 6px;
-  background: #161b22;
-  color: #d6dee7;
+  background: #ffffff;
+  color: #243b61;
   padding: 5px 9px;
 }
 
 .chart-controls button:hover,
 .drawing-tools button:hover:not(:disabled),
 .drawing-tools button.active,
+.chart-controls button.active,
 .interval-buttons button.active {
   background: #2563eb;
   border-color: #3b82f6;
@@ -117,9 +118,9 @@ body[data-review-standalone="true"] .chart-dialog {
   display: flex;
   gap: 4px;
   padding: 3px;
-  border: 1px solid #303844;
+  border: 1px solid #c5d0e0;
   border-radius: 7px;
-  background: #0d1117;
+  background: #f4f7fb;
 }
 
 .interval-buttons button {
@@ -128,23 +129,38 @@ body[data-review-standalone="true"] .chart-dialog {
   padding-inline: 8px;
 }
 
-.future-days-control {
+.future-days-control,
+.offline-mode-control {
   display: flex;
   align-items: center;
   gap: 5px;
-  color: #aeb8c5;
+  color: #64748b;
   font-size: 12px;
+}
+
+#price-scale-mode {
+  min-width: 44px;
+  font-weight: 700;
 }
 
 .future-days-control input {
   width: 62px;
 }
 
+.offline-mode-control input {
+  min-height: auto;
+  width: 16px;
+  height: 16px;
+  margin: 0;
+  padding: 0;
+  accent-color: #2563eb;
+}
+
 .chart-stage {
   position: relative;
   min-height: 0;
   overflow: hidden;
-  background: #101318;
+  background: #ffffff;
 }
 
 #review-chart {
@@ -158,65 +174,75 @@ body[data-review-standalone="true"] .chart-dialog {
   top: 10px;
   left: 10px;
   display: flex;
-  gap: 5px;
-  padding: 5px;
-  border: 1px solid #303844;
-  border-radius: 7px;
-  background: rgba(13, 17, 23, .9);
+  max-width: calc(100% - 20px);
+  align-items: center;
+  gap: 0;
+  padding: 4px;
+  overflow-x: auto;
+  border: 1px solid #c5d0e0;
+  border-radius: 8px;
+  background: rgba(255, 255, 255, .96);
+  box-shadow: 0 4px 14px rgba(42, 63, 95, .12);
   backdrop-filter: blur(6px);
+  scrollbar-width: none;
+}
+
+.drawing-tools::-webkit-scrollbar {
+  display: none;
+}
+
+.drawing-tool-group {
+  display: flex;
+  gap: 3px;
+  padding: 0 4px;
+}
+
+.drawing-tool-group:first-child {
+  padding-left: 4px;
+}
+
+.drawing-tool-group:last-child {
+  padding-right: 0;
+}
+
+.drawing-tool-group + .drawing-tool-group {
+  border-left: 1px solid #e2e8f0;
 }
 
 .drawing-tools button {
-  min-width: 38px;
-  padding: 5px 8px;
-  font-size: 12px;
+  display: grid;
+  place-items: center;
+  width: 36px;
+  min-width: 36px;
+  height: 34px;
+  min-height: 34px;
+  padding: 0;
+  font-size: 18px;
+  line-height: 1;
   cursor: pointer;
+}
+
+.drawing-tools .drawing-tools-handle {
+  width: 28px;
+  min-width: 28px;
+  color: #64748b;
+  cursor: grab;
+  touch-action: none;
+  user-select: none;
+}
+
+.drawing-tools.dragging,
+.drawing-tools.dragging .drawing-tools-handle {
+  cursor: grabbing;
+}
+
+.drawing-tools.dragging {
+  box-shadow: 0 8px 24px rgba(42, 63, 95, .22);
 }
 
 .drawing-tools button:disabled {
   opacity: .42;
   cursor: not-allowed;
-}
-
-#drawing-overlay {
-  position: absolute;
-  z-index: 4;
-  inset: 0;
-  width: 100%;
-  height: 100%;
-  pointer-events: none;
-}
-
-#drawing-overlay.drawing {
-  pointer-events: auto;
-  cursor: crosshair;
-}
-
-.drawing-shape {
-  pointer-events: none;
-}
-
-.drawing-hit {
-  pointer-events: stroke;
-  cursor: grab;
-}
-
-.drawing-hit:active {
-  cursor: grabbing;
-}
-
-.drawing-handle {
-  fill: #facc15;
-  stroke: #101318;
-  stroke-width: 2;
-  pointer-events: all;
-  cursor: move;
-}
-
-.fibo-label {
-  fill: #a5d8ff;
-  font-size: 11px;
-  pointer-events: none;
 }
 
 .chart-loading {
@@ -225,8 +251,8 @@ body[data-review-standalone="true"] .chart-dialog {
   inset: 0;
   display: grid;
   place-items: center;
-  background: rgba(16, 19, 24, .82);
-  color: #b8c2cf;
+  background: rgba(255, 255, 255, .86);
+  color: #465a78;
 }
 
 .chart-loading[hidden] {
@@ -240,9 +266,9 @@ body[data-review-standalone="true"] .chart-dialog {
   gap: 12px;
   min-height: 38px;
   padding: 8px 14px;
-  border-top: 1px solid #27354a;
-  background: #0b1017;
-  color: #8b949e;
+  border-top: 1px solid #d9e1ec;
+  background: #ffffff;
+  color: #64748b;
   font-size: 12px;
 }
 
@@ -269,6 +295,5 @@ body[data-review-standalone="true"] .chart-dialog {
 
   .drawing-tools {
     max-width: calc(100% - 20px);
-    overflow-x: auto;
   }
 }

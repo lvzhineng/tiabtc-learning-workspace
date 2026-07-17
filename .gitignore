@@ -2,3 +2,5 @@ __pycache__/
 learning-state.json
 learning-state.json.tmp
 tiabtc-review.sqlite*
+data/*.sqlite-wal
+data/*.sqlite-shm

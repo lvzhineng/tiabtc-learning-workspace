@@ -1,9 +1,11 @@
 import json
+import math
 import os
+import shutil
 import sqlite3
 import threading
 import time
-import uuid
+from contextlib import contextmanager
 from datetime import datetime
 from http import HTTPStatus
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
@@ -15,13 +17,24 @@ from urllib.request import Request, urlopen
 
 ROOT = Path(__file__).resolve().parent
 STATE_FILE = ROOT / "learning-state.json"
-DATABASE_FILE = ROOT / "tiabtc-review.sqlite"
+DEFAULT_DATABASE_FILE = ROOT / "tiabtc-review.sqlite"
+DATABASE_FILE = DEFAULT_DATABASE_FILE
+SEED_DATABASE_FILE = ROOT / "data" / "tiabtc-review-seed.sqlite"
 HOST = "127.0.0.1"
 PORT = 8765
 VALID_STATUSES = {"unlearned", "learning", "learned"}
 VALID_SYMBOLS = {"BTCUSDT", "ETHUSDT"}
 VALID_INTERVALS = {"5", "15", "60", "240", "D", "W"}
-VALID_DRAWING_KINDS = {"horizontal", "trend", "fibonacci"}
+VALID_DRAWING_TYPES = {
+    "TrendLine", "HorizontalLine", "FibRetracement", "Ray",
+    "ExtendedLine", "Arrow", "Rectangle", "ParallelChannel",
+}
+DRAWING_POINT_COUNTS = {
+    "TrendLine": 2, "HorizontalLine": 1, "FibRetracement": 2, "Ray": 2,
+    "ExtendedLine": 2, "Arrow": 2, "Rectangle": 2, "ParallelChannel": 3,
+}
+SYSTEM_DRAWING_PREFIX = "__system__:"
+MAX_DRAWING_JSON_BYTES = 200_000
 INTERVAL_MILLISECONDS = {
     "5": 5 * 60_000,
     "15": 15 * 60_000,
@@ -50,15 +63,22 @@ def write_state(state):
     os.replace(temporary_file, STATE_FILE)
 
 
+@contextmanager
 def database():
     connection = sqlite3.connect(DATABASE_FILE, timeout=30)
     connection.row_factory = sqlite3.Row
     connection.execute("PRAGMA journal_mode=WAL")
     connection.execute("PRAGMA busy_timeout=30000")
-    return connection
+    try:
+        with connection:
+            yield connection
+    finally:
+        connection.close()
 
 
 def initialize_database():
+    if DATABASE_FILE == DEFAULT_DATABASE_FILE and not DATABASE_FILE.exists() and SEED_DATABASE_FILE.exists():
+        shutil.copy2(SEED_DATABASE_FILE, DATABASE_FILE)
     with DATABASE_LOCK, database() as connection:
         connection.executescript(
             """
@@ -90,15 +110,41 @@ def initialize_database():
                 video_id TEXT NOT NULL,
                 symbol TEXT NOT NULL,
                 interval TEXT NOT NULL,
-                kind TEXT NOT NULL,
-                points_json TEXT NOT NULL,
+                tool_type TEXT NOT NULL,
+                tool_json TEXT NOT NULL,
                 created_at TEXT NOT NULL,
                 updated_at TEXT NOT NULL
             );
-            CREATE INDEX IF NOT EXISTS idx_chart_drawings_scope
-                ON chart_drawings (video_id, symbol, interval);
             INSERT OR IGNORE INTO app_settings (key, value) VALUES ('future_days', '3');
+            INSERT OR IGNORE INTO app_settings (key, value) VALUES ('offline_mode', 'true');
             """
+        )
+        drawing_columns = {
+            row["name"] for row in connection.execute("PRAGMA table_info(chart_drawings)").fetchall()
+        }
+        expected_columns = {
+            "id", "video_id", "symbol", "interval", "tool_type",
+            "tool_json", "created_at", "updated_at",
+        }
+        if drawing_columns != expected_columns:
+            connection.executescript(
+                """
+                DROP TABLE chart_drawings;
+                CREATE TABLE chart_drawings (
+                    id TEXT PRIMARY KEY,
+                    video_id TEXT NOT NULL,
+                    symbol TEXT NOT NULL,
+                    interval TEXT NOT NULL,
+                    tool_type TEXT NOT NULL,
+                    tool_json TEXT NOT NULL,
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL
+                );
+                """
+            )
+        connection.execute("DROP INDEX IF EXISTS idx_chart_drawings_scope")
+        connection.execute(
+            "CREATE INDEX idx_chart_drawings_scope ON chart_drawings (video_id, symbol)"
         )
 
 
@@ -126,6 +172,24 @@ def set_future_days(value):
     return days
 
 
+def get_offline_mode():
+    with DATABASE_LOCK, database() as connection:
+        row = connection.execute("SELECT value FROM app_settings WHERE key = 'offline_mode'").fetchone()
+    return row is None or str(row["value"]).lower() not in {"0", "false", "off"}
+
+
+def set_offline_mode(value):
+    if not isinstance(value, bool):
+        raise ValueError("仅本地模式必须是布尔值")
+    with DATABASE_LOCK, database() as connection:
+        connection.execute(
+            "INSERT INTO app_settings (key, value) VALUES ('offline_mode', ?) "
+            "ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+            ("true" if value else "false",),
+        )
+    return value
+
+
 def validate_market_scope(symbol, interval):
     if symbol not in VALID_SYMBOLS:
         raise ValueError("仅支持 BTCUSDT 和 ETHUSDT")
@@ -135,14 +199,23 @@ def validate_market_scope(symbol, interval):
 
 def cached_range_contains(symbol, interval, start_timestamp, end_timestamp):
     with DATABASE_LOCK, database() as connection:
-        row = connection.execute(
-            """SELECT 1 FROM market_cache_ranges
+        rows = connection.execute(
+            """SELECT start_timestamp, end_timestamp FROM market_cache_ranges
                WHERE symbol = ? AND interval = ?
-                 AND start_timestamp <= ? AND end_timestamp >= ?
-               LIMIT 1""",
+                 AND end_timestamp >= ? AND start_timestamp <= ?
+               ORDER BY start_timestamp ASC""",
             (symbol, interval, start_timestamp, end_timestamp),
-        ).fetchone()
-    return row is not None
+        ).fetchall()
+    covered_until = start_timestamp - 1
+    for row in rows:
+        range_start = int(row["start_timestamp"])
+        range_end = int(row["end_timestamp"])
+        if range_start > covered_until + 1:
+            return False
+        covered_until = max(covered_until, range_end)
+        if covered_until >= end_timestamp:
+            return True
+    return False
 
 
 def fetch_bybit_candles(symbol, interval, start_timestamp, end_timestamp):
@@ -226,10 +299,12 @@ def list_candles(symbol, interval, start_timestamp, end_timestamp):
     return [dict(row) for row in rows]
 
 
-def load_candle_range(symbol, interval, start_timestamp, end_timestamp):
+def load_candle_range(symbol, interval, start_timestamp, end_timestamp, offline=None):
     source = "sqlite"
     warning = ""
-    if not cached_range_contains(symbol, interval, start_timestamp, end_timestamp):
+    offline = get_offline_mode() if offline is None else offline
+    covered = cached_range_contains(symbol, interval, start_timestamp, end_timestamp)
+    if not covered and not offline:
         try:
             fetched = fetch_bybit_candles(symbol, interval, start_timestamp, end_timestamp)
             save_candles(symbol, interval, start_timestamp, end_timestamp, fetched)
@@ -237,6 +312,8 @@ def load_candle_range(symbol, interval, start_timestamp, end_timestamp):
         except RuntimeError as error:
             warning = str(error)
     candles = list_candles(symbol, interval, start_timestamp, end_timestamp)
+    if offline and not covered:
+        warning = "仅本地模式：该时间范围的缓存不完整"
     if not candles and warning:
         raise RuntimeError(warning)
     return candles, source, warning
@@ -284,93 +361,149 @@ def validate_drawing(payload):
     video_id = str(payload.get("videoId", "")).strip()
     symbol = str(payload.get("symbol", ""))
     interval = str(payload.get("interval", ""))
-    kind = str(payload.get("kind", ""))
+    drawing_id = str(payload.get("id", "")).strip()
+    tool_type = str(payload.get("toolType", ""))
     validate_market_scope(symbol, interval)
     if not video_id or "/" in video_id or len(video_id) > 100:
         raise ValueError("视频 ID 无效")
-    if kind not in VALID_DRAWING_KINDS:
+    if not drawing_id or len(drawing_id) > 100 or drawing_id.startswith(SYSTEM_DRAWING_PREFIX):
+        raise ValueError("画图 ID 无效")
+    if tool_type not in VALID_DRAWING_TYPES:
         raise ValueError("画图类型无效")
     points = payload.get("points")
-    expected = 1 if kind == "horizontal" else 2
+    expected = DRAWING_POINT_COUNTS[tool_type]
     if not isinstance(points, list) or len(points) != expected:
         raise ValueError("画图控制点数量无效")
     normalized_points = []
     for point in points:
         if not isinstance(point, dict):
             raise ValueError("画图控制点无效")
-        timestamp = float(point.get("time"))
-        price = float(point.get("price"))
-        if not timestamp > 0 or not price > 0:
+        try:
+            timestamp = float(point.get("timestamp"))
+            price = float(point.get("price"))
+        except (TypeError, ValueError):
+            raise ValueError("画图控制点无效") from None
+        if not math.isfinite(timestamp) or not math.isfinite(price) or timestamp <= 0 or price <= 0:
             raise ValueError("画图控制点无效")
-        normalized_points.append({"time": timestamp, "price": price})
-    return {
-        "id": str(payload.get("id") or uuid.uuid4()),
-        "videoId": video_id,
-        "symbol": symbol,
-        "interval": interval,
-        "kind": kind,
-        "points": normalized_points,
-    }
+        normalized_points.append({"timestamp": timestamp, "price": price})
+    options = payload.get("options")
+    if not isinstance(options, dict):
+        raise ValueError("画图选项无效")
+    drawing = {"id": drawing_id, "toolType": tool_type, "points": normalized_points, "options": options}
+    try:
+        encoded = json.dumps(drawing, ensure_ascii=False, separators=(",", ":"), allow_nan=False)
+    except (TypeError, ValueError):
+        raise ValueError("画图选项无效") from None
+    if len(encoded.encode("utf-8")) > MAX_DRAWING_JSON_BYTES:
+        raise ValueError("画图记录过大")
+    return video_id, symbol, interval, drawing, encoded
 
 
 def save_drawing(payload):
-    drawing = validate_drawing(payload)
+    video_id, symbol, interval, drawing, encoded = validate_drawing(payload)
     now = datetime.now().astimezone().isoformat()
     with DATABASE_LOCK, database() as connection:
         existing = connection.execute("SELECT created_at FROM chart_drawings WHERE id = ?", (drawing["id"],)).fetchone()
         created_at = existing["created_at"] if existing else now
         connection.execute(
             """INSERT INTO chart_drawings
-               (id, video_id, symbol, interval, kind, points_json, created_at, updated_at)
+               (id, video_id, symbol, interval, tool_type, tool_json, created_at, updated_at)
                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
                ON CONFLICT(id) DO UPDATE SET
                  video_id = excluded.video_id, symbol = excluded.symbol,
-                 interval = excluded.interval, kind = excluded.kind,
-                 points_json = excluded.points_json, updated_at = excluded.updated_at""",
+                 interval = excluded.interval, tool_type = excluded.tool_type,
+                 tool_json = excluded.tool_json, updated_at = excluded.updated_at""",
             (
-                drawing["id"], drawing["videoId"], drawing["symbol"], drawing["interval"],
-                drawing["kind"], json.dumps(drawing["points"], ensure_ascii=False), created_at, now,
+                drawing["id"], video_id, symbol, interval,
+                drawing["toolType"], encoded, created_at, now,
             ),
         )
-    drawing.update({"createdAt": created_at, "updatedAt": now})
     return drawing
+
+
+def replace_drawings(payload):
+    if not isinstance(payload, dict):
+        raise ValueError("画图批量记录必须是对象")
+    video_id = str(payload.get("videoId", "")).strip()
+    symbol = str(payload.get("symbol", ""))
+    interval = str(payload.get("interval", ""))
+    drawings = payload.get("drawings")
+    validate_market_scope(symbol, interval)
+    if not video_id or "/" in video_id or len(video_id) > 100:
+        raise ValueError("视频 ID 无效")
+    if not isinstance(drawings, list) or len(drawings) > 500:
+        raise ValueError("画图批量记录无效")
+    validated = []
+    seen_ids = set()
+    for drawing in drawings:
+        drawing_payload = {**drawing, "videoId": video_id, "symbol": symbol, "interval": interval}
+        item_video, item_symbol, item_interval, normalized, encoded = validate_drawing(drawing_payload)
+        if normalized["id"] in seen_ids:
+            raise ValueError("画图 ID 重复")
+        seen_ids.add(normalized["id"])
+        validated.append((item_video, item_symbol, item_interval, normalized, encoded))
+
+    now = datetime.now().astimezone().isoformat()
+    with DATABASE_LOCK, database() as connection:
+        created_times = {
+            row["id"]: row["created_at"]
+            for row in connection.execute(
+                "SELECT id, created_at FROM chart_drawings WHERE video_id = ? AND symbol = ?",
+                (video_id, symbol),
+            ).fetchall()
+        }
+        connection.execute(
+            "DELETE FROM chart_drawings WHERE video_id = ? AND symbol = ?",
+            (video_id, symbol),
+        )
+        connection.executemany(
+            """INSERT INTO chart_drawings
+               (id, video_id, symbol, interval, tool_type, tool_json, created_at, updated_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+            [
+                (
+                    drawing["id"], item_video, item_symbol, item_interval,
+                    drawing["toolType"], encoded, created_times.get(drawing["id"], now), now,
+                )
+                for item_video, item_symbol, item_interval, drawing, encoded in validated
+            ],
+        )
+    return [item[3] for item in validated]
 
 
 def list_drawings(video_id, symbol, interval):
     validate_market_scope(symbol, interval)
+    if not video_id or "/" in video_id or len(video_id) > 100:
+        raise ValueError("视频 ID 无效")
     with DATABASE_LOCK, database() as connection:
         rows = connection.execute(
-            """SELECT * FROM chart_drawings
-               WHERE video_id = ? AND symbol = ? AND interval = ?
+            """SELECT tool_json FROM chart_drawings
+               WHERE video_id = ? AND symbol = ?
                ORDER BY created_at ASC""",
-            (video_id, symbol, interval),
+            (video_id, symbol),
         ).fetchall()
-    return [
-        {
-            "id": row["id"], "videoId": row["video_id"], "symbol": row["symbol"],
-            "interval": row["interval"], "kind": row["kind"],
-            "points": json.loads(row["points_json"]),
-            "createdAt": row["created_at"], "updatedAt": row["updated_at"],
-        }
-        for row in rows
-    ]
+    return [json.loads(row["tool_json"]) for row in rows]
 
 
 def delete_drawings(query):
     drawing_id = query.get("id", [""])[0]
+    video_id = query.get("videoId", [""])[0]
+    symbol = query.get("symbol", [""])[0]
+    interval = query.get("interval", [""])[0]
+    validate_market_scope(symbol, interval)
+    if not video_id or "/" in video_id or len(video_id) > 100:
+        raise ValueError("缺少视频 ID")
     with DATABASE_LOCK, database() as connection:
         if drawing_id:
-            connection.execute("DELETE FROM chart_drawings WHERE id = ?", (drawing_id,))
+            connection.execute(
+                """DELETE FROM chart_drawings
+                   WHERE id = ? AND video_id = ? AND symbol = ?""",
+                (drawing_id, video_id, symbol),
+            )
             return
-        video_id = query.get("videoId", [""])[0]
-        symbol = query.get("symbol", [""])[0]
-        interval = query.get("interval", [""])[0]
-        validate_market_scope(symbol, interval)
-        if not video_id:
-            raise ValueError("缺少视频 ID")
         connection.execute(
-            "DELETE FROM chart_drawings WHERE video_id = ? AND symbol = ? AND interval = ?",
-            (video_id, symbol, interval),
+            "DELETE FROM chart_drawings WHERE video_id = ? AND symbol = ?",
+            (video_id, symbol),
         )
 
 
@@ -385,7 +518,10 @@ class StudyHandler(SimpleHTTPRequestHandler):
         if parsed.path == "/api/state":
             return self.send_json(HTTPStatus.OK, load_state())
         if parsed.path == "/api/chart/config":
-            return self.send_json(HTTPStatus.OK, {"futureDays": get_future_days()})
+            return self.send_json(
+                HTTPStatus.OK,
+                {"futureDays": get_future_days(), "offlineMode": get_offline_mode()},
+            )
         if parsed.path == "/api/chart/candles":
             try:
                 query = parse_qs(parsed.query)
@@ -430,10 +566,25 @@ class StudyHandler(SimpleHTTPRequestHandler):
 
     def do_PUT(self):
         path = urlparse(self.path).path
+        if path == "/api/chart/drawings":
+            try:
+                payload = self.read_json_body()
+                return self.send_json(HTTPStatus.OK, {"drawings": replace_drawings(payload)})
+            except (ValueError, json.JSONDecodeError, AttributeError) as error:
+                return self.send_json(HTTPStatus.BAD_REQUEST, {"error": str(error)})
         if path == "/api/chart/config":
             try:
                 payload = self.read_json_body()
-                return self.send_json(HTTPStatus.OK, {"futureDays": set_future_days(payload.get("futureDays"))})
+                if "futureDays" in payload:
+                    set_future_days(payload["futureDays"])
+                if "offlineMode" in payload:
+                    set_offline_mode(payload["offlineMode"])
+                if "futureDays" not in payload and "offlineMode" not in payload:
+                    raise ValueError("没有可保存的图表配置")
+                return self.send_json(
+                    HTTPStatus.OK,
+                    {"futureDays": get_future_days(), "offlineMode": get_offline_mode()},
+                )
             except (ValueError, json.JSONDecodeError, AttributeError) as error:
                 return self.send_json(HTTPStatus.BAD_REQUEST, {"error": str(error)})
         if not path.startswith("/api/state/"):

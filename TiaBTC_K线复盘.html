@@ -16,27 +16,52 @@
           <div id="chart-interval" class="interval-buttons" role="group" aria-label="K 线周期">
             <button type="button" data-chart-interval="5">5min</button><button type="button" data-chart-interval="15">15min</button><button type="button" data-chart-interval="60" class="active">1h</button><button type="button" data-chart-interval="240">4h</button><button type="button" data-chart-interval="D">1d</button><button type="button" data-chart-interval="W">1w</button>
           </div>
+          <button id="price-scale-mode" type="button" aria-pressed="false" title="切换对数价格坐标">Log</button>
           <label class="future-days-control">发布后 <input id="future-days" type="number" min="0" max="30" step="1" value="3"> 天</label>
+          <label class="offline-mode-control"><input id="offline-mode" type="checkbox" checked> 仅本地</label>
           <button id="close-review" type="button">关闭</button>
         </div>
       </header>
       <div class="chart-stage">
         <div id="review-chart"></div>
-        <div class="drawing-tools" aria-label="画图工具栏">
-          <button type="button" data-drawing-tool="select" title="选择、移动已有画图">选择</button>
-          <button type="button" data-drawing-tool="trend" title="选择两点绘制趋势线">趋势线</button>
-          <button type="button" data-drawing-tool="horizontal" title="点击价格位置绘制水平线">水平线</button>
-          <button type="button" data-drawing-tool="fibonacci" title="选择起点和终点绘制斐波那契回撤">Fibo</button>
-          <button id="delete-drawing" type="button" disabled title="删除选中的画图">删除</button>
-          <button id="clear-drawings" type="button" disabled title="清空当前范围的画图">清空</button>
-        </div>
-        <svg id="drawing-overlay" aria-label="K 线画图层"></svg>
+        <nav class="drawing-tools" aria-label="画图工具栏">
+          <button id="drawing-tools-handle" class="drawing-tools-handle" type="button" aria-label="拖动画图工具栏" title="拖动画图工具栏（方向键可微调）"><span aria-hidden="true">⠿</span></button>
+          <div class="drawing-tool-group">
+            <button type="button" data-drawing-action="select" class="active" aria-label="选择" title="选择工具或取消未完成的绘制"><span aria-hidden="true">↖</span></button>
+          </div>
+          <div class="drawing-tool-group">
+            <button type="button" data-drawing-tool="TrendLine" aria-label="趋势线" title="选择两点绘制趋势线"><span aria-hidden="true">╱</span></button>
+            <button type="button" data-drawing-tool="HorizontalLine" aria-label="水平线" title="点击价格位置绘制水平线"><span aria-hidden="true">―</span></button>
+            <button type="button" data-drawing-tool="Ray" aria-label="射线" title="绘制单向延伸的射线"><span aria-hidden="true">↗</span></button>
+            <button type="button" data-drawing-tool="ExtendedLine" aria-label="延长线" title="绘制双向延伸线"><span aria-hidden="true">↔</span></button>
+            <button type="button" data-drawing-tool="Arrow" aria-label="箭头" title="绘制带箭头的线"><span aria-hidden="true">➜</span></button>
+          </div>
+          <div class="drawing-tool-group">
+            <button type="button" data-drawing-tool="FibRetracement" aria-label="Fibo" title="选择起点和终点绘制斐波那契回撤"><span aria-hidden="true">Φ</span></button>
+            <button type="button" data-drawing-tool="Rectangle" aria-label="矩形" title="绘制矩形区域"><span aria-hidden="true">□</span></button>
+            <button type="button" data-drawing-tool="ParallelChannel" aria-label="平行通道" title="选择三点绘制平行通道"><span aria-hidden="true">≋</span></button>
+          </div>
+          <div class="drawing-tool-group">
+            <button id="undo-drawing" type="button" disabled aria-label="撤销" title="撤销（Ctrl+Z）"><span aria-hidden="true">↶</span></button>
+            <button id="redo-drawing" type="button" disabled aria-label="重做" title="重做（Ctrl+Shift+Z / Ctrl+Y）"><span aria-hidden="true">↷</span></button>
+          </div>
+          <div class="drawing-tool-group">
+            <button id="lock-drawing" type="button" disabled aria-label="锁定选中画图" title="锁定选中画图"><span aria-hidden="true">🔒</span></button>
+            <button id="delete-drawing" type="button" disabled aria-label="删除" title="删除选中的画图"><span aria-hidden="true">⌫</span></button>
+            <button id="clear-drawings" type="button" disabled aria-label="清空" title="清空当前范围的画图"><span aria-hidden="true">✕</span></button>
+          </div>
+        </nav>
         <div id="chart-loading" class="chart-loading" hidden></div>
       </div>
       <footer class="chart-footer"><span id="chart-status">正在准备复盘…</span><span id="chart-cutoff"></span></footer>
     </section>
   </dialog>
   <script src="/vendor/lightweight-charts.standalone.production.js"></script>
+  <script src="/vendor/line-tools/core.min.js"></script>
+  <script src="/vendor/line-tools/lines.min.js"></script>
+  <script src="/vendor/line-tools/fib-retracement.min.js"></script>
+  <script src="/vendor/line-tools/rectangle.min.js"></script>
+  <script src="/vendor/line-tools/parallel-channel.min.js"></script>
   <script src="/review_chart.js"></script>
   <script>
     const params = new URLSearchParams(window.location.search);

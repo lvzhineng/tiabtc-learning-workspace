@@ -1,29 +1,47 @@
 (function () {
   'use strict';
 
-  const FIB_LEVELS = [0, 0.618, 0.66, 1];
   const INTERVAL_LABELS = { '5': '5 分钟', '15': '15 分钟', '60': '1 小时', '240': '4 小时', D: '日线', W: '周线' };
-  const INTERVAL_SECONDS = { '5': 300, '15': 900, '60': 3600, '240': 14400, D: 86400, W: 604800 };
-  const RIGHT_WHITESPACE_BARS = 500;
+  const USER_TOOL_TYPES = new Set([
+    'TrendLine', 'HorizontalLine', 'FibRetracement', 'Ray',
+    'ExtendedLine', 'Arrow', 'Rectangle', 'ParallelChannel',
+  ]);
+  const FIBONACCI_LEVELS = [
+    { coeff: 0, color: '#787b86' },
+    { coeff: 1, color: '#787b86' },
+    { coeff: 0.618, color: '#089981' },
+    { coeff: 0.66, color: '#16a34a' },
+    { coeff: 1.68, color: '#2962ff' },
+  ];
+  const SYSTEM_MARKER_ID = '__system__:video-published';
+  const TOOLBAR_POSITION_KEY = 'tia-review-drawing-toolbar-position-v1';
+  const PRICE_SCALE_MODE_KEY = 'tia-review-price-scale-mode-v1';
   const state = {
     initialized: false,
     video: null,
     symbol: 'BTCUSDT',
     interval: '60',
     futureDays: 3,
+    offlineMode: true,
+    logarithmicScale: false,
     chart: null,
     series: null,
-    drawings: [],
+    lineTools: null,
+    drawingIds: new Set(),
     selectedId: '',
-    tool: null,
-    draftPoint: null,
-    hoverPoint: null,
-    drag: null,
+    selectedLocked: false,
+    activeDrawingId: '',
+    activeToolType: '',
     anchor: 0,
     resizeObserver: null,
     candleData: [],
     loadingEarlier: false,
     noMoreEarlier: false,
+    undoStack: [],
+    redoStack: [],
+    historySnapshot: '[]',
+    restoringHistory: false,
+    persistenceQueue: Promise.resolve(),
   };
 
   const elements = {};
@@ -33,9 +51,12 @@
     state.initialized = true;
     [
       'review-dialog', 'review-video-title', 'review-video-time', 'chart-symbol', 'chart-interval',
-      'future-days', 'close-review', 'review-chart', 'drawing-overlay', 'chart-loading',
-      'chart-status', 'chart-cutoff', 'delete-drawing', 'clear-drawings',
+      'price-scale-mode', 'future-days', 'offline-mode', 'close-review', 'review-chart', 'chart-loading',
+      'chart-status', 'chart-cutoff', 'undo-drawing', 'redo-drawing',
+      'lock-drawing', 'delete-drawing', 'clear-drawings', 'drawing-tools-handle',
     ].forEach((id) => { elements[toCamel(id)] = document.getElementById(id); });
+    elements.drawingTools = document.querySelector('.drawing-tools');
+    elements.chartStage = document.querySelector('.chart-stage');
 
     elements.closeReview.addEventListener('click', close);
     elements.chartSymbol.addEventListener('change', () => {
@@ -53,16 +74,31 @@
       });
     });
     elements.futureDays.addEventListener('change', saveFutureDays);
+    elements.offlineMode.addEventListener('change', saveOfflineMode);
+    elements.priceScaleMode.addEventListener('click', togglePriceScaleMode);
     document.querySelectorAll('[data-drawing-tool]').forEach((button) => {
-      button.addEventListener('click', () => setTool(state.tool === button.dataset.drawingTool ? null : button.dataset.drawingTool));
+      button.addEventListener('click', () => startDrawing(button.dataset.drawingTool));
     });
+    document.querySelector('[data-drawing-action="select"]').addEventListener('click', cancelActiveDrawing);
+    document.addEventListener('keydown', (event) => {
+      if (event.key === 'Escape' && state.activeDrawingId) cancelActiveDrawing();
+      if (!(event.ctrlKey || event.metaKey) || isTextInput(event.target)) return;
+      if (event.key.toLowerCase() === 'z') {
+        event.preventDefault();
+        void (event.shiftKey ? redoDrawing() : undoDrawing());
+      } else if (event.key.toLowerCase() === 'y') {
+        event.preventDefault();
+        void redoDrawing();
+      }
+    });
+    elements.undoDrawing.addEventListener('click', undoDrawing);
+    elements.redoDrawing.addEventListener('click', redoDrawing);
+    elements.lockDrawing.addEventListener('click', toggleSelectedDrawingLock);
     elements.deleteDrawing.addEventListener('click', deleteSelectedDrawing);
     elements.clearDrawings.addEventListener('click', clearDrawings);
-    elements.drawingOverlay.addEventListener('click', handleOverlayClick);
-    elements.drawingOverlay.addEventListener('pointermove', handleOverlayPointerMove);
-    elements.drawingOverlay.addEventListener('pointerup', handleOverlayPointerUp);
-    elements.drawingOverlay.addEventListener('pointercancel', handleOverlayPointerUp);
-    elements.reviewDialog.addEventListener('close', resetDrawingInteraction);
+    elements.reviewDialog.addEventListener('close', cancelActiveDrawing);
+    initializeDraggableToolbar();
+    restorePriceScaleMode();
   }
 
   async function open(video) {
@@ -77,7 +113,9 @@
       const response = await fetch('/api/chart/config');
       const config = await readJson(response);
       state.futureDays = Number(config.futureDays ?? 3);
+      state.offlineMode = config.offlineMode !== false;
       elements.futureDays.value = state.futureDays;
+      elements.offlineMode.checked = state.offlineMode;
     } catch (error) {
       setStatus('读取图表配置失败，暂用默认 3 天。', true);
     }
@@ -106,15 +144,20 @@
       width: elements.reviewChart.clientWidth,
       height: elements.reviewChart.clientHeight,
       layout: {
-        background: { type: window.LightweightCharts.ColorType.Solid, color: '#101318' },
-        textColor: '#9aa4b2',
+        background: { type: window.LightweightCharts.ColorType.Solid, color: '#ffffff' },
+        textColor: '#475569',
       },
       grid: {
-        vertLines: { color: '#1f2732' },
-        horzLines: { color: '#1f2732' },
+        vertLines: { color: '#edf1f6' },
+        horzLines: { color: '#edf1f6' },
       },
-      rightPriceScale: { borderColor: '#303844' },
-      timeScale: { borderColor: '#303844', timeVisible: true, secondsVisible: false, rightOffset: 8 },
+      rightPriceScale: {
+        borderColor: '#d9e1ec',
+        mode: state.logarithmicScale
+          ? window.LightweightCharts.PriceScaleMode.Logarithmic
+          : window.LightweightCharts.PriceScaleMode.Normal,
+      },
+      timeScale: { borderColor: '#d9e1ec', timeVisible: true, secondsVisible: false, rightOffset: 8 },
       crosshair: { mode: window.LightweightCharts.CrosshairMode.Normal },
       localization: { locale: 'zh-CN' },
     });
@@ -125,13 +168,12 @@
     state.series = typeof state.chart.addSeries === 'function'
       ? state.chart.addSeries(window.LightweightCharts.CandlestickSeries, options)
       : state.chart.addCandlestickSeries(options);
+    initializeLineTools();
     state.chart.timeScale().subscribeVisibleLogicalRangeChange((range) => {
-      renderDrawings();
       if (range && range.from < 40) void loadEarlierCandles();
     });
     state.resizeObserver = new ResizeObserver(() => {
       resizeChart();
-      renderDrawings();
     });
     state.resizeObserver.observe(elements.reviewChart);
   }
@@ -139,10 +181,170 @@
   function resizeChart() {
     if (!state.chart) return;
     state.chart.applyOptions({ width: elements.reviewChart.clientWidth, height: elements.reviewChart.clientHeight });
+    constrainToolbarPosition();
+  }
+
+  function togglePriceScaleMode() {
+    state.logarithmicScale = !state.logarithmicScale;
+    applyPriceScaleMode();
+    try {
+      localStorage.setItem(PRICE_SCALE_MODE_KEY, state.logarithmicScale ? 'logarithmic' : 'normal');
+    } catch (_) {
+      // Private browsing or storage policies may disable localStorage.
+    }
+  }
+
+  function restorePriceScaleMode() {
+    try {
+      state.logarithmicScale = localStorage.getItem(PRICE_SCALE_MODE_KEY) === 'logarithmic';
+    } catch (_) {
+      state.logarithmicScale = false;
+    }
+    applyPriceScaleMode();
+  }
+
+  function applyPriceScaleMode() {
+    const mode = state.logarithmicScale ? 'Log' : '线性';
+    elements.priceScaleMode.classList.toggle('active', state.logarithmicScale);
+    elements.priceScaleMode.setAttribute('aria-pressed', String(state.logarithmicScale));
+    elements.priceScaleMode.title = state.logarithmicScale ? '切换为线性价格坐标' : '切换为对数价格坐标';
+    if (state.chart) {
+      state.chart.priceScale('right').applyOptions({
+        mode: state.logarithmicScale
+          ? window.LightweightCharts.PriceScaleMode.Logarithmic
+          : window.LightweightCharts.PriceScaleMode.Normal,
+      });
+      setStatus(`价格坐标已切换为${mode}模式。`);
+    }
+  }
+
+  function initializeDraggableToolbar() {
+    let drag = null;
+    const handle = elements.drawingToolsHandle;
+
+    const startDragging = (event, pointerId = null) => {
+      const toolbarRect = elements.drawingTools.getBoundingClientRect();
+      const stageRect = elements.chartStage.getBoundingClientRect();
+      drag = {
+        pointerId,
+        offsetX: event.clientX - toolbarRect.left,
+        offsetY: event.clientY - toolbarRect.top,
+        stageLeft: stageRect.left,
+        stageTop: stageRect.top,
+      };
+      elements.drawingTools.classList.add('dragging');
+      event.preventDefault();
+    };
+
+    handle.addEventListener('pointerdown', (event) => {
+      if (event.button !== 0) return;
+      startDragging(event, event.pointerId);
+      handle.setPointerCapture(event.pointerId);
+    });
+
+    handle.addEventListener('pointermove', (event) => {
+      if (!drag || drag.pointerId !== event.pointerId) return;
+      positionToolbar(event.clientX - drag.stageLeft - drag.offsetX, event.clientY - drag.stageTop - drag.offsetY);
+    });
+
+    const stopDragging = (event) => {
+      if (!drag || drag.pointerId !== event.pointerId) return;
+      drag = null;
+      elements.drawingTools.classList.remove('dragging');
+      persistToolbarPosition();
+    };
+    handle.addEventListener('pointerup', stopDragging);
+    handle.addEventListener('pointercancel', stopDragging);
+    handle.addEventListener('mousedown', (event) => {
+      if (event.button === 0 && !drag) startDragging(event);
+    });
+    document.addEventListener('mousemove', (event) => {
+      if (!drag) return;
+      positionToolbar(event.clientX - drag.stageLeft - drag.offsetX, event.clientY - drag.stageTop - drag.offsetY);
+    });
+    document.addEventListener('mouseup', () => {
+      if (!drag) return;
+      drag = null;
+      elements.drawingTools.classList.remove('dragging');
+      persistToolbarPosition();
+    });
+    handle.addEventListener('keydown', (event) => {
+      const movement = { ArrowLeft: [-10, 0], ArrowRight: [10, 0], ArrowUp: [0, -10], ArrowDown: [0, 10] }[event.key];
+      if (!movement) return;
+      event.preventDefault();
+      const left = Number.parseFloat(elements.drawingTools.style.left) || elements.drawingTools.offsetLeft;
+      const top = Number.parseFloat(elements.drawingTools.style.top) || elements.drawingTools.offsetTop;
+      positionToolbar(left + movement[0], top + movement[1]);
+      persistToolbarPosition();
+    });
+
+    requestAnimationFrame(restoreToolbarPosition);
+  }
+
+  function positionToolbar(left, top) {
+    const margin = 6;
+    const maxLeft = Math.max(margin, elements.chartStage.clientWidth - elements.drawingTools.offsetWidth - margin);
+    const maxTop = Math.max(margin, elements.chartStage.clientHeight - elements.drawingTools.offsetHeight - margin);
+    elements.drawingTools.style.left = `${Math.min(Math.max(margin, left), maxLeft)}px`;
+    elements.drawingTools.style.top = `${Math.min(Math.max(margin, top), maxTop)}px`;
+  }
+
+  function persistToolbarPosition() {
+    try {
+      localStorage.setItem(TOOLBAR_POSITION_KEY, JSON.stringify({
+        left: Number.parseFloat(elements.drawingTools.style.left) || elements.drawingTools.offsetLeft,
+        top: Number.parseFloat(elements.drawingTools.style.top) || elements.drawingTools.offsetTop,
+      }));
+    } catch (_) {
+      // Private browsing or storage policies may disable localStorage.
+    }
+  }
+
+  function restoreToolbarPosition() {
+    let position = { left: 10, top: 10 };
+    try {
+      position = { ...position, ...JSON.parse(localStorage.getItem(TOOLBAR_POSITION_KEY) || '{}') };
+    } catch (_) {
+      // Ignore invalid or unavailable local state and use the default position.
+    }
+    positionToolbar(Number(position.left) || 10, Number(position.top) || 10);
+  }
+
+  function constrainToolbarPosition() {
+    if (!elements.drawingTools) return;
+    const left = Number.parseFloat(elements.drawingTools.style.left) || elements.drawingTools.offsetLeft;
+    const top = Number.parseFloat(elements.drawingTools.style.top) || elements.drawingTools.offsetTop;
+    positionToolbar(left, top);
+  }
+
+  function initializeLineTools() {
+    const core = window.LightweightChartsLineToolsCore;
+    const lines = window.LightweightChartsLineToolsLines;
+    const fib = window.LightweightChartsLineToolsFibRetracement;
+    const rectangle = window.LightweightChartsLineToolsRectangle;
+    const channel = window.LightweightChartsLineToolsParallelChannel;
+    if (!core || !lines || !fib || !rectangle || !channel) {
+      throw new Error('画图插件未完整加载，请刷新页面。');
+    }
+    state.lineTools = core.createLineToolsPlugin(state.chart, state.series);
+    lines.registerLinesPlugin(state.lineTools);
+    fib.registerFibRetracementPlugin(state.lineTools);
+    state.lineTools.registerLineTool('Rectangle', rectangle.LineToolRectangle);
+    channel.registerParallelChannelPlugin(state.lineTools);
+    state.lineTools.setMagnetThreshold(10);
+    state.lineTools.subscribeLineToolsAfterEdit(handleLineToolAfterEdit);
+    state.lineTools.subscribeLineToolsSingleClick(handleLineToolSelection);
   }
 
   async function reloadScope() {
-    if (!state.video || !state.chart || !state.series) return;
+    if (!state.video || !state.chart || !state.series || !state.lineTools) return;
+    cancelActiveDrawing();
+    state.lineTools.removeAllLineTools();
+    state.drawingIds.clear();
+    state.selectedId = '';
+    state.selectedLocked = false;
+    resetDrawingHistory([]);
+    updateDrawingButtons();
     state.loadingEarlier = false;
     state.noMoreEarlier = false;
     state.candleData = [];
@@ -161,18 +363,27 @@
       const candles = candlePayload.candles || [];
       state.candleData = candles.map(toChartCandle);
       renderCandleData();
-      state.drawings = drawingPayload.drawings || [];
-      state.selectedId = '';
+      const drawings = (drawingPayload.drawings || [])
+        .filter((drawing) => USER_TOOL_TYPES.has(drawing.toolType))
+        .map(normalizeDrawingStyle);
+      if (drawings.length && !state.lineTools.importLineTools(JSON.stringify(drawings))) {
+        throw new Error('已保存的画图数据无法导入。');
+      }
+      state.drawingIds = new Set(drawings.map((drawing) => drawing.id));
+      addVideoPublishedMarker();
+      resetDrawingHistory(drawings);
       const from = Math.max(0, candles.length - 160);
       if (candles.length) state.chart.timeScale().setVisibleLogicalRange({ from, to: candles.length + 55 });
       elements.chartCutoff.textContent = `严格截止：${formatTimestamp(candlePayload.requestedCutoff)}（发布后 ${state.futureDays} 天）`;
       const cacheLabel = candlePayload.source === 'bybit' ? 'Bybit 已写入 SQLite' : '已从 SQLite 读取';
       setStatus(candlePayload.warning ? `${cacheLabel}；${candlePayload.warning}` : `${cacheLabel} · ${candles.length} 根 K 线 · 向左拖动自动加载更早数据`, Boolean(candlePayload.warning));
-      renderDrawings();
+      updateDrawingButtons();
     } catch (error) {
       state.series.setData([]);
       state.candleData = [];
-      state.drawings = [];
+      state.lineTools.removeAllLineTools();
+      state.drawingIds.clear();
+      resetDrawingHistory([]);
       setStatus(error.message || 'K 线加载失败', true);
     } finally {
       hideLoading();
@@ -213,7 +424,6 @@
       const cacheLabel = payload.source === 'bybit' ? '更早数据已写入 SQLite' : '更早数据已从 SQLite 读取';
       const suffix = state.noMoreEarlier ? ' · 已到最早数据' : ' · 继续向左可加载更多';
       setStatus(payload.warning ? `${cacheLabel}；${payload.warning}` : `${cacheLabel} · 当前共 ${state.candleData.length} 根${suffix}`, Boolean(payload.warning));
-      renderDrawings();
     } catch (error) {
       setStatus(error.message || '更早 K 线加载失败，请稍后重试', true);
     } finally {
@@ -232,7 +442,7 @@
   }
 
   function renderCandleData() {
-    state.series.setData([...state.candleData, ...rightWhitespace(state.candleData, state.interval)]);
+    state.series.setData(state.candleData);
   }
 
   async function saveFutureDays() {
@@ -256,104 +466,163 @@
     }
   }
 
-  function setTool(tool) {
-    state.tool = tool;
-    state.draftPoint = null;
-    state.hoverPoint = null;
+  function startDrawing(toolType) {
+    if (!state.lineTools || !USER_TOOL_TYPES.has(toolType)) return;
+    cancelActiveDrawing();
     state.selectedId = '';
-    elements.drawingOverlay.classList.toggle('drawing', Boolean(tool));
-    document.querySelectorAll('[data-drawing-tool]').forEach((button) => {
-      button.classList.toggle('active', button.dataset.drawingTool === tool);
-    });
+    state.activeToolType = toolType;
+    state.activeDrawingId = state.lineTools.addLineTool(toolType, [], drawingOptions(toolType));
+    if (!state.activeDrawingId) {
+      state.activeToolType = '';
+      setStatus('无法启动该画图工具。', true);
+    }
     updateDrawingButtons();
-    renderDrawings();
+  }
+
+  async function saveOfflineMode() {
+    const next = elements.offlineMode.checked;
+    try {
+      const payload = await fetch('/api/chart/config', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ offlineMode: next }),
+      }).then(readJson);
+      state.offlineMode = payload.offlineMode;
+      elements.offlineMode.checked = state.offlineMode;
+      await reloadScope();
+    } catch (error) {
+      elements.offlineMode.checked = state.offlineMode;
+      setStatus(error.message || '仅本地模式保存失败', true);
+    }
+  }
+
+  function cancelActiveDrawing() {
+    if (state.activeDrawingId && state.lineTools) {
+      state.lineTools.removeLineToolsById([state.activeDrawingId]);
+    }
+    state.activeDrawingId = '';
+    state.activeToolType = '';
+    updateDrawingButtons();
   }
 
   function resetDrawingInteraction() {
-    state.drag = null;
-    setTool(null);
+    cancelActiveDrawing();
   }
 
-  async function handleOverlayClick(event) {
-    if (!state.tool || state.drag) return;
-    if (state.tool === 'select') {
-      state.selectedId = drawingAtClientPoint(event.clientX, event.clientY)?.id || '';
-      updateDrawingButtons();
-      renderDrawings();
-      return;
+  function drawingOptions(toolType) {
+    const line = { color: '#2563eb', width: 2 };
+    if (toolType === 'FibRetracement') {
+      return { line: { width: 2 }, levels: fibonacciLevels(), magnetThreshold: 10 };
     }
-    const point = pointFromEvent(event);
-    if (!point) return;
-    if (state.tool === 'horizontal') {
-      await createDrawing('horizontal', [point]);
-      return;
+    if (toolType === 'Rectangle') {
+      return { line, background: { color: 'rgba(37, 99, 235, 0.10)' }, magnetThreshold: 10 };
     }
-    if (!state.draftPoint) {
-      state.draftPoint = point;
-      state.hoverPoint = point;
-      renderDrawings();
-      return;
+    if (toolType === 'ParallelChannel') {
+      return { line, background: { color: 'rgba(37, 99, 235, 0.08)' }, magnetThreshold: 10 };
     }
-    await createDrawing(state.tool, [state.draftPoint, point]);
+    return { line, magnetThreshold: 10 };
   }
 
-  function handleOverlayPointerMove(event) {
-    const point = pointFromEvent(event);
-    if (!point) return;
-    if (state.drag) {
-      const updated = moveDrawing(state.drag.original, state.drag.target, state.drag.startPoint, point);
-      state.drawings = state.drawings.map((drawing) => drawing.id === updated.id ? updated : drawing);
-      state.drag.current = updated;
-      renderDrawings();
-      return;
-    }
-    if (state.tool && state.tool !== 'select' && state.draftPoint) {
-      state.hoverPoint = point;
-      renderDrawings();
-    }
+  function fibonacciLevels() {
+    return FIBONACCI_LEVELS.map((level) => ({
+      ...level,
+      opacity: 0,
+      distanceFromCoeffEnabled: false,
+      distanceFromCoeff: 0,
+    }));
   }
 
-  async function handleOverlayPointerUp(event) {
-    if (!state.drag) return;
-    try { elements.drawingOverlay.releasePointerCapture(event.pointerId); } catch (_) { /* capture may already be released */ }
-    const updated = state.drag.current;
-    state.drag = null;
-    if (updated) await persistDrawing(updated);
+  function normalizeDrawingStyle(drawing) {
+    if (drawing.toolType !== 'FibRetracement') return drawing;
+    return {
+      ...drawing,
+      options: {
+        ...drawing.options,
+        line: { ...drawing.options?.line, width: 2 },
+        levels: fibonacciLevels(),
+      },
+    };
   }
 
-  async function createDrawing(kind, points) {
+  async function handleLineToolAfterEdit(params) {
+    const drawing = params?.selectedLineTool;
+    if (!drawing || drawing.id === SYSTEM_MARKER_ID || !USER_TOOL_TYPES.has(drawing.toolType)) return;
+    if (drawing.id === state.activeDrawingId && params.stage === 'lineToolFinished') {
+      state.activeDrawingId = '';
+      state.activeToolType = '';
+    }
+    recordDrawingHistory(currentDrawingSnapshot());
     try {
-      const saved = await persistDrawing({
-        videoId: state.video['视频ID'], symbol: state.symbol, interval: state.interval, kind, points,
-      });
-      setTool(null);
-      state.selectedId = saved.id;
-      updateDrawingButtons();
+      await queuePersistence(() => persistDrawing(drawing));
+      state.drawingIds.add(drawing.id);
       setStatus('画图已保存到 SQLite。');
     } catch (error) {
       setStatus(error.message || '画图保存失败', true);
     }
+    updateDrawingButtons();
+  }
+
+  function handleLineToolSelection(params) {
+    const drawing = params?.selectedLineTool;
+    if (!drawing || drawing.id === SYSTEM_MARKER_ID) {
+      state.selectedId = '';
+      state.selectedLocked = false;
+    } else if (params.selectionState === 'selected' && USER_TOOL_TYPES.has(drawing.toolType)) {
+      state.selectedId = drawing.id;
+      state.selectedLocked = drawing.options?.editable === false;
+    } else if (state.selectedId === drawing.id) {
+      state.selectedId = '';
+      state.selectedLocked = false;
+    }
+    updateDrawingButtons();
+  }
+
+  async function toggleSelectedDrawingLock() {
+    const id = state.selectedId;
+    if (!id || id === SYSTEM_MARKER_ID) return;
+    const current = JSON.parse(state.lineTools.getLineToolByID(id) || '[]')[0];
+    if (!current) return;
+    const locked = current.options?.editable !== false;
+    const updated = {
+      ...current,
+      options: { ...current.options, editable: !locked },
+    };
+    try {
+      state.lineTools.applyLineToolOptions(updated);
+      recordDrawingHistory(currentDrawingSnapshot());
+      await queuePersistence(() => persistDrawing(updated));
+      state.selectedId = '';
+      state.selectedLocked = false;
+      updateDrawingButtons();
+      setStatus(locked ? '画图已锁定。' : '画图已解锁。');
+    } catch (error) {
+      setStatus(error.message || '锁定状态保存失败', true);
+    }
   }
 
   async function persistDrawing(drawing) {
-    const saved = await fetch('/api/chart/drawings', {
+    return fetch('/api/chart/drawings', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(drawing),
+      body: JSON.stringify({
+        videoId: state.video['视频ID'], symbol: state.symbol, interval: state.interval,
+        ...drawing,
+      }),
     }).then(readJson);
-    state.drawings = [...state.drawings.filter((item) => item.id !== saved.id), saved];
-    renderDrawings();
-    return saved;
   }
 
   async function deleteSelectedDrawing() {
-    if (!state.selectedId) return;
+    const id = state.selectedId;
+    if (!id || id === SYSTEM_MARKER_ID) return;
     try {
-      await fetch(`/api/chart/drawings?${new URLSearchParams({ id: state.selectedId })}`, { method: 'DELETE' }).then(readJson);
-      state.drawings = state.drawings.filter((drawing) => drawing.id !== state.selectedId);
+      const params = new URLSearchParams({ ...drawingScopeObject(), id });
+      state.lineTools.removeLineToolsById([id]);
+      state.drawingIds.delete(id);
+      recordDrawingHistory(currentDrawingSnapshot());
+      await queuePersistence(() => fetch(`/api/chart/drawings?${params}`, { method: 'DELETE' }).then(readJson));
       state.selectedId = '';
+      state.selectedLocked = false;
       updateDrawingButtons();
-      renderDrawings();
       setStatus('已删除选中的画图。');
     } catch (error) {
       setStatus(error.message || '删除失败', true);
@@ -361,170 +630,134 @@
   }
 
   async function clearDrawings() {
-    if (!state.drawings.length || !window.confirm('清空当前视频、合约和周期下的全部画图？')) return;
+    if (!state.drawingIds.size || !window.confirm('清空当前视频和合约在所有周期下的全部画图？')) return;
     try {
-      await fetch(`/api/chart/drawings?${drawingScopeParams()}`, { method: 'DELETE' }).then(readJson);
-      state.drawings = [];
+      state.lineTools.removeLineToolsById(Array.from(state.drawingIds));
+      state.drawingIds.clear();
+      recordDrawingHistory('[]');
+      await queuePersistence(() => fetch(`/api/chart/drawings?${drawingScopeParams()}`, { method: 'DELETE' }).then(readJson));
       state.selectedId = '';
+      state.selectedLocked = false;
       updateDrawingButtons();
-      renderDrawings();
       setStatus('当前范围的画图已清空。');
     } catch (error) {
       setStatus(error.message || '清空失败', true);
     }
   }
 
-  function renderDrawings() {
-    if (!state.chart || !state.series || !elements.drawingOverlay) return;
-    const width = elements.drawingOverlay.clientWidth;
-    const height = elements.drawingOverlay.clientHeight;
-    const parts = [];
-    const anchorX = state.chart.timeScale().timeToCoordinate(Math.floor(state.anchor / 1000));
-    if (anchorX != null) {
-      parts.push(`<line x1="${anchorX}" x2="${anchorX}" y1="0" y2="${height}" stroke="#fb7185" stroke-width="1" stroke-dasharray="5 5" opacity=".9" />`);
-      parts.push(`<text x="${Math.min(anchorX + 5, Math.max(5, width - 58))}" y="58" fill="#fb7185" font-size="11">视频发布</text>`);
-    }
-    state.drawings.forEach((drawing) => parts.push(drawingMarkup(drawing, drawing.id === state.selectedId, width)));
-    if (state.draftPoint && state.hoverPoint && state.tool) {
-      parts.push(drawingMarkup({ id: 'draft', kind: state.tool, points: [state.draftPoint, state.hoverPoint] }, false, width, true));
-    }
-    elements.drawingOverlay.innerHTML = parts.join('');
-    elements.drawingOverlay.querySelectorAll('[data-drawing-id]').forEach((node) => {
-      node.addEventListener('click', (event) => {
-        event.stopPropagation();
-        if (node.dataset.drawingId === 'draft') return;
-        state.selectedId = node.dataset.drawingId;
-        updateDrawingButtons();
-        renderDrawings();
-      });
-      node.addEventListener('pointerdown', startDrawingDrag);
-    });
+  function currentDrawingSnapshot() {
+    if (!state.lineTools) return '[]';
+    const drawings = JSON.parse(state.lineTools.exportLineTools() || '[]')
+      .filter((drawing) => drawing.id !== SYSTEM_MARKER_ID && USER_TOOL_TYPES.has(drawing.toolType))
+      .map(normalizeDrawingStyle)
+      .sort((left, right) => left.id.localeCompare(right.id));
+    return JSON.stringify(drawings);
+  }
+
+  function resetDrawingHistory(drawings) {
+    const normalized = [...drawings]
+      .filter((drawing) => drawing.id !== SYSTEM_MARKER_ID && USER_TOOL_TYPES.has(drawing.toolType))
+      .map(normalizeDrawingStyle)
+      .sort((left, right) => left.id.localeCompare(right.id));
+    state.undoStack = [];
+    state.redoStack = [];
+    state.historySnapshot = JSON.stringify(normalized);
     updateDrawingButtons();
   }
 
-  function drawingMarkup(drawing, selected, width, draft = false) {
-    const color = draft ? '#94a3b8' : selected ? '#facc15' : '#38bdf8';
-    const strokeWidth = selected ? 2.5 : 1.5;
-    const id = escapeAttribute(drawing.id);
-    if (drawing.kind === 'horizontal') {
-      const y = state.series.priceToCoordinate(drawing.points[0]?.price);
-      if (y == null) return '';
-      return `<g><line x1="0" x2="${width}" y1="${y}" y2="${y}" stroke="transparent" stroke-width="14" class="drawing-hit" data-drawing-id="${id}" data-drag-target="body" /><line x1="0" x2="${width}" y1="${y}" y2="${y}" stroke="${color}" stroke-width="${strokeWidth}" class="drawing-shape" />${selected ? handleMarkup(24, y, id, 'body') : ''}</g>`;
-    }
-    const first = pointToScreen(drawing.points[0]);
-    const second = pointToScreen(drawing.points[1]);
-    if (!first || !second) return '';
-    if (drawing.kind === 'fibonacci') {
-      const x1 = Math.min(first.x, second.x);
-      const x2 = Math.max(first.x, second.x);
-      const labelX = Math.min(width - 35, x2 + 4);
-      const lines = FIB_LEVELS.map((level) => {
-        const y = first.y + (second.y - first.y) * level;
-        return `<line x1="${x1}" x2="${x2}" y1="${y}" y2="${y}" stroke="transparent" stroke-width="14" class="drawing-hit" data-drawing-id="${id}" data-drag-target="body" /><line x1="${x1}" x2="${x2}" y1="${y}" y2="${y}" stroke="${color}" stroke-width="${strokeWidth}" opacity="${level === 0 || level === 1 ? 1 : .78}" class="drawing-shape" /><text x="${labelX}" y="${y - 3}" class="fibo-label">${(level * 100).toFixed(level === 0 || level === 1 ? 0 : 1)}%</text>`;
-      }).join('');
-      return `<g>${lines}${selected ? `${handleMarkup(first.x, first.y, id, 'start')}${handleMarkup(second.x, second.y, id, 'end')}` : ''}</g>`;
-    }
-    return `<g><line x1="${first.x}" y1="${first.y}" x2="${second.x}" y2="${second.y}" stroke="transparent" stroke-width="14" class="drawing-hit" data-drawing-id="${id}" data-drag-target="body" /><line x1="${first.x}" y1="${first.y}" x2="${second.x}" y2="${second.y}" stroke="${color}" stroke-width="${strokeWidth}" class="drawing-shape" />${selected ? `${handleMarkup(first.x, first.y, id, 'start')}${handleMarkup(second.x, second.y, id, 'end')}` : ''}</g>`;
-  }
-
-  function handleMarkup(x, y, id, target) {
-    return `<circle cx="${x}" cy="${y}" r="5" class="drawing-handle" data-drawing-id="${id}" data-drag-target="${target}" />`;
-  }
-
-  function startDrawingDrag(event) {
-    if (state.tool !== 'select') return;
-    event.stopPropagation();
-    const id = event.currentTarget.dataset.drawingId;
-    const drawing = state.drawings.find((item) => item.id === id);
-    const point = pointFromEvent(event);
-    if (!drawing || !point) return;
-    state.selectedId = id;
-    state.drag = {
-      original: JSON.parse(JSON.stringify(drawing)),
-      current: drawing,
-      target: event.currentTarget.dataset.dragTarget || 'body',
-      startPoint: point,
-    };
-    elements.drawingOverlay.setPointerCapture(event.pointerId);
+  function recordDrawingHistory(afterSnapshot) {
+    if (state.restoringHistory || afterSnapshot === state.historySnapshot) return;
+    state.undoStack.push({ before: state.historySnapshot, after: afterSnapshot });
+    if (state.undoStack.length > 50) state.undoStack.shift();
+    state.redoStack = [];
+    state.historySnapshot = afterSnapshot;
     updateDrawingButtons();
   }
 
-  function moveDrawing(drawing, target, startPoint, currentPoint) {
-    const priceDelta = currentPoint.price - startPoint.price;
-    const timeDelta = currentPoint.time - startPoint.time;
-    return {
-      ...drawing,
-      points: drawing.points.map((point, index) => {
-        if (drawing.kind === 'horizontal') return { ...point, price: point.price + priceDelta };
-        if (target === 'body') return { time: point.time + timeDelta, price: point.price + priceDelta };
-        const moves = (target === 'start' && index === 0) || (target === 'end' && index === 1);
-        return moves ? { time: currentPoint.time, price: currentPoint.price } : point;
-      }),
-    };
+  async function undoDrawing() {
+    if (!state.undoStack.length || state.restoringHistory) return;
+    const entry = state.undoStack.pop();
+    state.redoStack.push(entry);
+    await restoreDrawingSnapshot(entry.before, '已撤销上一步画图操作。');
   }
 
-  function pointFromEvent(event) {
-    if (!state.chart || !state.series) return null;
-    const rect = elements.drawingOverlay.getBoundingClientRect();
-    const time = state.chart.timeScale().coordinateToTime(event.clientX - rect.left);
-    const price = state.series.coordinateToPrice(event.clientY - rect.top);
-    if (typeof time !== 'number' || price == null || price <= 0) return null;
-    return { time, price };
+  async function redoDrawing() {
+    if (!state.redoStack.length || state.restoringHistory) return;
+    const entry = state.redoStack.pop();
+    state.undoStack.push(entry);
+    await restoreDrawingSnapshot(entry.after, '已重做画图操作。');
   }
 
-  function pointToScreen(point) {
-    if (!point) return null;
-    const x = state.chart.timeScale().timeToCoordinate(point.time);
-    const y = state.series.priceToCoordinate(point.price);
-    return x == null || y == null ? null : { x, y };
-  }
-
-  function drawingAtClientPoint(clientX, clientY) {
-    const rect = elements.drawingOverlay.getBoundingClientRect();
-    const point = { x: clientX - rect.left, y: clientY - rect.top };
-    let nearest = null;
-    let nearestDistance = 14;
-    for (const drawing of state.drawings) {
-      const segments = drawingSegments(drawing, rect.width);
-      for (const segment of segments) {
-        const distance = distanceToSegment(point, segment[0], segment[1]);
-        if (distance <= nearestDistance) {
-          nearestDistance = distance;
-          nearest = drawing;
-        }
+  async function restoreDrawingSnapshot(snapshot, message) {
+    state.restoringHistory = true;
+    updateDrawingButtons();
+    try {
+      cancelActiveDrawing();
+      const drawings = JSON.parse(snapshot);
+      state.lineTools.removeLineToolsById(Array.from(state.drawingIds));
+      state.drawingIds.clear();
+      if (drawings.length && !state.lineTools.importLineTools(JSON.stringify(drawings))) {
+        throw new Error('画图历史无法恢复。');
       }
+      state.drawingIds = new Set(drawings.map((drawing) => drawing.id));
+      state.selectedId = '';
+      state.selectedLocked = false;
+      await queuePersistence(() => replacePersistedDrawings(drawings));
+      state.historySnapshot = snapshot;
+      setStatus(message);
+    } catch (error) {
+      setStatus(error.message || '画图历史恢复失败', true);
+    } finally {
+      state.restoringHistory = false;
+      updateDrawingButtons();
     }
-    return nearest;
   }
 
-  function drawingSegments(drawing, width) {
-    if (drawing.kind === 'horizontal') {
-      const y = state.series.priceToCoordinate(drawing.points[0]?.price);
-      return y == null ? [] : [[{ x: 0, y }, { x: width, y }]];
-    }
-    const first = pointToScreen(drawing.points[0]);
-    const second = pointToScreen(drawing.points[1]);
-    if (!first || !second) return [];
-    if (drawing.kind !== 'fibonacci') return [[first, second]];
-    const x1 = Math.min(first.x, second.x);
-    const x2 = Math.max(first.x, second.x);
-    return FIB_LEVELS.map((level) => {
-      const y = first.y + (second.y - first.y) * level;
-      return [{ x: x1, y }, { x: x2, y }];
-    });
+  function replacePersistedDrawings(drawings) {
+    return fetch('/api/chart/drawings', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ ...drawingScopeObject(), drawings }),
+    }).then(readJson);
   }
 
-  function distanceToSegment(point, start, end) {
-    const dx = end.x - start.x;
-    const dy = end.y - start.y;
-    if (dx === 0 && dy === 0) return Math.hypot(point.x - start.x, point.y - start.y);
-    const ratio = Math.max(0, Math.min(1, ((point.x - start.x) * dx + (point.y - start.y) * dy) / (dx * dx + dy * dy)));
-    return Math.hypot(point.x - (start.x + ratio * dx), point.y - (start.y + ratio * dy));
+  function queuePersistence(task) {
+    state.persistenceQueue = state.persistenceQueue.catch(() => {}).then(task);
+    return state.persistenceQueue;
+  }
+
+  function addVideoPublishedMarker() {
+    const price = state.candleData.find((candle) => Number(candle.time) >= Math.floor(state.anchor / 1000))?.close
+      || state.candleData[state.candleData.length - 1]?.close;
+    if (!price) return;
+    state.lineTools.createOrUpdateLineTool(
+      'VerticalLine',
+      [{ timestamp: Math.floor(state.anchor / 1000), price }],
+      {
+        editable: false,
+        showTimeAxisLabels: true,
+        timeAxisLabelAlwaysVisible: true,
+        line: { color: '#fb7185', width: 1, style: window.LightweightCharts.LineStyle.Dashed },
+        text: { value: '视频发布', font: { color: '#fb7185', size: 11 } },
+      },
+      SYSTEM_MARKER_ID,
+    );
   }
 
   function updateDrawingButtons() {
+    elements.undoDrawing.disabled = state.restoringHistory || state.undoStack.length === 0;
+    elements.redoDrawing.disabled = state.restoringHistory || state.redoStack.length === 0;
+    elements.lockDrawing.disabled = !state.selectedId;
+    elements.lockDrawing.textContent = state.selectedLocked ? '🔓' : '🔒';
+    elements.lockDrawing.title = state.selectedLocked ? '解锁选中画图' : '锁定选中画图';
+    elements.lockDrawing.setAttribute('aria-label', elements.lockDrawing.title);
+    elements.lockDrawing.classList.toggle('active', state.selectedLocked);
     elements.deleteDrawing.disabled = !state.selectedId;
-    elements.clearDrawings.disabled = state.drawings.length === 0;
+    elements.clearDrawings.disabled = state.drawingIds.size === 0;
+    document.querySelectorAll('[data-drawing-tool]').forEach((button) => {
+      button.classList.toggle('active', button.dataset.drawingTool === state.activeToolType);
+    });
+    document.querySelector('[data-drawing-action="select"]').classList.toggle('active', !state.activeToolType);
   }
 
   function updateIntervalButtons() {
@@ -534,14 +767,11 @@
   }
 
   function drawingScopeParams() {
-    return new URLSearchParams({ videoId: state.video['视频ID'], symbol: state.symbol, interval: state.interval }).toString();
+    return new URLSearchParams(drawingScopeObject()).toString();
   }
 
-  function rightWhitespace(candleData, interval) {
-    if (!candleData.length) return [];
-    const step = INTERVAL_SECONDS[interval];
-    const lastTime = Number(candleData[candleData.length - 1].time);
-    return Array.from({ length: RIGHT_WHITESPACE_BARS }, (_, index) => ({ time: lastTime + step * (index + 1) }));
+  function drawingScopeObject() {
+    return { videoId: state.video['视频ID'], symbol: state.symbol, interval: state.interval };
   }
 
   function videoTimestamp(video) {
@@ -577,14 +807,13 @@
     }).format(new Date(timestamp));
   }
 
-  function escapeAttribute(value) {
-    return String(value).replace(/[&<>"']/g, (character) => ({
-      '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;',
-    }[character]));
-  }
-
   function toCamel(value) {
     return value.replace(/-([a-z])/g, (_, character) => character.toUpperCase());
+  }
+
+  function isTextInput(target) {
+    return target instanceof HTMLElement
+      && (target.isContentEditable || ['INPUT', 'TEXTAREA', 'SELECT'].includes(target.tagName));
   }
 
   window.TiaReviewChart = { init, open, close };
