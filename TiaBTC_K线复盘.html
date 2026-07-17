@@ -1,0 +1,57 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>TiaBTC K线复盘</title>
+  <link rel="stylesheet" href="/review_chart.css">
+</head>
+<body data-review-standalone="true">
+  <dialog id="review-dialog" class="chart-dialog" open>
+    <section class="chart-shell">
+      <header class="chart-header">
+        <div class="chart-heading"><strong id="review-video-title">视频 K 线复盘</strong><span id="review-video-time"></span></div>
+        <div class="chart-controls">
+          <select id="chart-symbol" aria-label="合约"><option value="BTCUSDT">BTCUSDT 永续</option><option value="ETHUSDT">ETHUSDT 永续</option></select>
+          <div id="chart-interval" class="interval-buttons" role="group" aria-label="K 线周期">
+            <button type="button" data-chart-interval="5">5min</button><button type="button" data-chart-interval="15">15min</button><button type="button" data-chart-interval="60" class="active">1h</button><button type="button" data-chart-interval="240">4h</button><button type="button" data-chart-interval="D">1d</button><button type="button" data-chart-interval="W">1w</button>
+          </div>
+          <label class="future-days-control">发布后 <input id="future-days" type="number" min="0" max="30" step="1" value="3"> 天</label>
+          <button id="close-review" type="button">关闭</button>
+        </div>
+      </header>
+      <div class="chart-stage">
+        <div id="review-chart"></div>
+        <div class="drawing-tools" aria-label="画图工具栏">
+          <button type="button" data-drawing-tool="select" title="选择、移动已有画图">选择</button>
+          <button type="button" data-drawing-tool="trend" title="选择两点绘制趋势线">趋势线</button>
+          <button type="button" data-drawing-tool="horizontal" title="点击价格位置绘制水平线">水平线</button>
+          <button type="button" data-drawing-tool="fibonacci" title="选择起点和终点绘制斐波那契回撤">Fibo</button>
+          <button id="delete-drawing" type="button" disabled title="删除选中的画图">删除</button>
+          <button id="clear-drawings" type="button" disabled title="清空当前范围的画图">清空</button>
+        </div>
+        <svg id="drawing-overlay" aria-label="K 线画图层"></svg>
+        <div id="chart-loading" class="chart-loading" hidden></div>
+      </div>
+      <footer class="chart-footer"><span id="chart-status">正在准备复盘…</span><span id="chart-cutoff"></span></footer>
+    </section>
+  </dialog>
+  <script src="/vendor/lightweight-charts.standalone.production.js"></script>
+  <script src="/review_chart.js"></script>
+  <script>
+    const params = new URLSearchParams(window.location.search);
+    const video = {
+      '视频ID': params.get('videoId') || '',
+      '视频标题': params.get('title') || '视频 K 线复盘',
+      '发布日期': params.get('date') || '',
+      '发布时间（页面时区）': params.get('time') || ''
+    };
+    if (video['视频ID'] && video['发布日期']) {
+      window.TiaReviewChart.open(video);
+    } else {
+      document.querySelector('#chart-status').textContent = '缺少视频日期参数，请从学习列表打开复盘。';
+      document.querySelector('#chart-status').classList.add('error');
+    }
+  </script>
+</body>
+</html>

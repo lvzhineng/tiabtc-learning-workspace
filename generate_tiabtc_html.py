@@ -18,6 +18,7 @@ def main():
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>TiaBTC 顺序学习工作台</title>
+  <link rel="stylesheet" href="/review_chart.css">
   <style>
     :root {{
       color-scheme: light; font-family: "Microsoft YaHei", "PingFang SC", system-ui, sans-serif;
@@ -196,7 +197,7 @@ def main():
           <td><a class="video-title" href="${{escapeHtml(video['视频链接'])}}" target="_blank" rel="noopener">${{escapeHtml(video['视频标题'])}}</a>
             <div class="video-meta"><details class="note" ${{record.note ? 'open' : ''}}><summary>${{record.note ? '📝 已有备注' : '＋ 添加备注'}}</summary><textarea placeholder="记录观点、问题或复盘…">${{escapeHtml(record.note)}}</textarea></details></div></td>
           <td><select class="status-select" aria-label="学习状态">${{Object.entries(statusLabels).map(([value, label]) => `<option value="${{value}}" ${{record.status === value ? 'selected' : ''}}>${{label}}</option>`).join('')}}</select></td>
-          <td><button class="quick-toggle" type="button">${{learned ? '撤销完成' : '标记已学'}}</button></td>
+          <td><div class="quick-actions"><button class="review-open" type="button">K 线复盘</button><button class="quick-toggle" type="button">${{learned ? '撤销完成' : '标记已学'}}</button></div></td>
         </tr>`;
       }}).join('') || '<tr><td colspan="6" class="empty">没有符合当前条件的视频，请调整筛选条件。</td></tr>';
       const rangeStart = filtered.length ? start + 1 : 0; const rangeEnd = Math.min(start + pageSize, filtered.length);
@@ -231,6 +232,13 @@ def main():
     $('#continue-learning').addEventListener('click', () => {{ const filtered = filteredVideos(); const index = filtered.findIndex((video) => !isLearned(video)); if (index < 0) return; currentPage = Math.floor(index / pageSize) + 1; highlightedVideoId = filtered[index]['视频ID']; render(); }});
     $('#videos').addEventListener('click', (event) => {{
       const row = event.target.closest('tr[data-video-id]'); if (!row) return; const videoId = row.dataset.videoId;
+      if (event.target.closest('.review-open')) {{
+        const video = rawVideos.find((item) => item['视频ID'] === videoId); if (!video) return;
+        const params = new URLSearchParams({{ videoId: video['视频ID'], title: video['视频标题'], date: video['发布日期'], time: video['发布时间（页面时区）'] }});
+        const reviewTab = window.open(`/TiaBTC_K%E7%BA%BF%E5%A4%8D%E7%9B%98.html?${{params}}`, '_blank');
+        if (reviewTab) reviewTab.focus(); else showSaveError('浏览器阻止了打开新标签页，请允许此页面打开链接。');
+        return;
+      }}
       if (event.target.closest('.bookmark')) {{ const record = recordFor(videoId); record.bookmarked = !record.bookmarked; state.records[videoId] = record; saveRecord(videoId); return; }}
       if (event.target.closest('.quick-toggle')) {{ const record = recordFor(videoId); record.status = record.status === 'learned' ? 'unlearned' : 'learned'; state.records[videoId] = record; saveRecord(videoId); return; }}
       if (event.target.closest('.video-title')) {{ const record = recordFor(videoId); if (record.status !== 'learned') {{ record.status = 'learned'; state.records[videoId] = record; saveRecord(videoId); }} }}
