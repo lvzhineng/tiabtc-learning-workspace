@@ -226,6 +226,22 @@ def list_candles(symbol, interval, start_timestamp, end_timestamp):
     return [dict(row) for row in rows]
 
 
+def load_candle_range(symbol, interval, start_timestamp, end_timestamp):
+    source = "sqlite"
+    warning = ""
+    if not cached_range_contains(symbol, interval, start_timestamp, end_timestamp):
+        try:
+            fetched = fetch_bybit_candles(symbol, interval, start_timestamp, end_timestamp)
+            save_candles(symbol, interval, start_timestamp, end_timestamp, fetched)
+            source = "bybit"
+        except RuntimeError as error:
+            warning = str(error)
+    candles = list_candles(symbol, interval, start_timestamp, end_timestamp)
+    if not candles and warning:
+        raise RuntimeError(warning)
+    return candles, source, warning
+
+
 def load_chart_candles(symbol, interval, anchor_timestamp, future_days):
     validate_market_scope(symbol, interval)
     if anchor_timestamp < 1_500_000_000_000 or anchor_timestamp > int(time.time() * 1000) + 31 * 86_400_000:
@@ -233,18 +249,7 @@ def load_chart_candles(symbol, interval, anchor_timestamp, future_days):
     requested_cutoff = anchor_timestamp + future_days * 86_400_000
     effective_cutoff = min(requested_cutoff, int(time.time() * 1000))
     start_timestamp = anchor_timestamp - INTERVAL_MILLISECONDS[interval] * 500
-    source = "sqlite"
-    warning = ""
-    if not cached_range_contains(symbol, interval, start_timestamp, effective_cutoff):
-        try:
-            fetched = fetch_bybit_candles(symbol, interval, start_timestamp, effective_cutoff)
-            save_candles(symbol, interval, start_timestamp, effective_cutoff, fetched)
-            source = "bybit"
-        except RuntimeError as error:
-            warning = str(error)
-    candles = list_candles(symbol, interval, start_timestamp, effective_cutoff)
-    if not candles and warning:
-        raise RuntimeError(warning)
+    candles, source, warning = load_candle_range(symbol, interval, start_timestamp, effective_cutoff)
     return {
         "candles": candles,
         "anchor": anchor_timestamp,
@@ -253,6 +258,23 @@ def load_chart_candles(symbol, interval, anchor_timestamp, future_days):
         "futureDays": future_days,
         "source": source,
         "warning": warning,
+    }
+
+
+def load_earlier_candles(symbol, interval, before_timestamp, limit):
+    validate_market_scope(symbol, interval)
+    if before_timestamp < 1_000_000_000_000 or before_timestamp > int(time.time() * 1000) + 31 * 86_400_000:
+        raise ValueError("K 线时间无效")
+    if limit < 100 or limit > 1000:
+        raise ValueError("单次加载数量必须是 100–1000")
+    end_timestamp = before_timestamp - 1
+    start_timestamp = before_timestamp - INTERVAL_MILLISECONDS[interval] * limit
+    candles, source, warning = load_candle_range(symbol, interval, start_timestamp, end_timestamp)
+    return {
+        "candles": candles,
+        "source": source,
+        "warning": warning,
+        "hasMore": len(candles) >= limit and not warning,
     }
 
 
@@ -369,6 +391,13 @@ class StudyHandler(SimpleHTTPRequestHandler):
                 query = parse_qs(parsed.query)
                 symbol = query.get("symbol", [""])[0]
                 interval = query.get("interval", [""])[0]
+                before = query.get("before", [""])[0]
+                if before:
+                    limit = int(query.get("limit", ["1000"])[0])
+                    return self.send_json(
+                        HTTPStatus.OK,
+                        load_earlier_candles(symbol, interval, int(before), limit),
+                    )
                 anchor = int(query.get("anchor", ["0"])[0])
                 days = int(query.get("futureDays", [str(get_future_days())])[0])
                 if days < 0 or days > 30:

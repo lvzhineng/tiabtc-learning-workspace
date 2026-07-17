@@ -21,6 +21,9 @@
     drag: null,
     anchor: 0,
     resizeObserver: null,
+    candleData: [],
+    loadingEarlier: false,
+    noMoreEarlier: false,
   };
 
   const elements = {};
@@ -122,7 +125,10 @@
     state.series = typeof state.chart.addSeries === 'function'
       ? state.chart.addSeries(window.LightweightCharts.CandlestickSeries, options)
       : state.chart.addCandlestickSeries(options);
-    state.chart.timeScale().subscribeVisibleLogicalRangeChange(renderDrawings);
+    state.chart.timeScale().subscribeVisibleLogicalRangeChange((range) => {
+      renderDrawings();
+      if (range && range.from < 40) void loadEarlierCandles();
+    });
     state.resizeObserver = new ResizeObserver(() => {
       resizeChart();
       renderDrawings();
@@ -137,6 +143,9 @@
 
   async function reloadScope() {
     if (!state.video || !state.chart || !state.series) return;
+    state.loadingEarlier = false;
+    state.noMoreEarlier = false;
+    state.candleData = [];
     showLoading(`正在读取 ${state.symbol} ${INTERVAL_LABELS[state.interval]} K 线…`);
     try {
       const params = new URLSearchParams({
@@ -150,29 +159,80 @@
         fetch(`/api/chart/drawings?${drawingScopeParams()}`).then(readJson),
       ]);
       const candles = candlePayload.candles || [];
-      const candleData = candles.map((candle) => ({
-        time: Math.floor(candle.timestamp / 1000),
-        open: candle.open,
-        high: candle.high,
-        low: candle.low,
-        close: candle.close,
-      }));
-      state.series.setData([...candleData, ...rightWhitespace(candleData, state.interval)]);
+      state.candleData = candles.map(toChartCandle);
+      renderCandleData();
       state.drawings = drawingPayload.drawings || [];
       state.selectedId = '';
       const from = Math.max(0, candles.length - 160);
       if (candles.length) state.chart.timeScale().setVisibleLogicalRange({ from, to: candles.length + 55 });
       elements.chartCutoff.textContent = `严格截止：${formatTimestamp(candlePayload.requestedCutoff)}（发布后 ${state.futureDays} 天）`;
       const cacheLabel = candlePayload.source === 'bybit' ? 'Bybit 已写入 SQLite' : '已从 SQLite 读取';
-      setStatus(candlePayload.warning ? `${cacheLabel}；${candlePayload.warning}` : `${cacheLabel} · ${candles.length} 根 K 线`, Boolean(candlePayload.warning));
+      setStatus(candlePayload.warning ? `${cacheLabel}；${candlePayload.warning}` : `${cacheLabel} · ${candles.length} 根 K 线 · 向左拖动自动加载更早数据`, Boolean(candlePayload.warning));
       renderDrawings();
     } catch (error) {
       state.series.setData([]);
+      state.candleData = [];
       state.drawings = [];
       setStatus(error.message || 'K 线加载失败', true);
     } finally {
       hideLoading();
     }
+  }
+
+  async function loadEarlierCandles() {
+    if (state.loadingEarlier || state.noMoreEarlier || !state.candleData.length) return;
+    state.loadingEarlier = true;
+    const before = Number(state.candleData[0].time) * 1000;
+    const visibleRange = state.chart.timeScale().getVisibleLogicalRange();
+    setStatus(`正在加载更早的 ${INTERVAL_LABELS[state.interval]} K 线…`);
+    try {
+      const params = new URLSearchParams({
+        symbol: state.symbol,
+        interval: state.interval,
+        before: String(before),
+        limit: '1000',
+      });
+      const payload = await fetch(`/api/chart/candles?${params}`).then(readJson);
+      const knownTimes = new Set(state.candleData.map((candle) => Number(candle.time)));
+      const earlier = (payload.candles || []).map(toChartCandle).filter((candle) => !knownTimes.has(Number(candle.time)));
+      if (!earlier.length) {
+        state.noMoreEarlier = true;
+        setStatus(payload.warning || `已到达当前可获取的最早 K 线 · 共 ${state.candleData.length} 根`, Boolean(payload.warning));
+        return;
+      }
+      earlier.sort((left, right) => Number(left.time) - Number(right.time));
+      state.candleData = [...earlier, ...state.candleData];
+      renderCandleData();
+      if (visibleRange) {
+        state.chart.timeScale().setVisibleLogicalRange({
+          from: visibleRange.from + earlier.length,
+          to: visibleRange.to + earlier.length,
+        });
+      }
+      state.noMoreEarlier = payload.hasMore === false;
+      const cacheLabel = payload.source === 'bybit' ? '更早数据已写入 SQLite' : '更早数据已从 SQLite 读取';
+      const suffix = state.noMoreEarlier ? ' · 已到最早数据' : ' · 继续向左可加载更多';
+      setStatus(payload.warning ? `${cacheLabel}；${payload.warning}` : `${cacheLabel} · 当前共 ${state.candleData.length} 根${suffix}`, Boolean(payload.warning));
+      renderDrawings();
+    } catch (error) {
+      setStatus(error.message || '更早 K 线加载失败，请稍后重试', true);
+    } finally {
+      state.loadingEarlier = false;
+    }
+  }
+
+  function toChartCandle(candle) {
+    return {
+      time: Math.floor(candle.timestamp / 1000),
+      open: candle.open,
+      high: candle.high,
+      low: candle.low,
+      close: candle.close,
+    };
+  }
+
+  function renderCandleData() {
+    state.series.setData([...state.candleData, ...rightWhitespace(state.candleData, state.interval)]);
   }
 
   async function saveFutureDays() {
