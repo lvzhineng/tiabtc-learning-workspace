@@ -12,6 +12,14 @@
       <header class="chart-header">
         <div class="chart-heading"><strong id="review-video-title">视频 K 线复盘</strong><span id="review-video-time"></span></div>
         <div class="chart-controls">
+          <div id="replay-controls" class="replay-controls" hidden>
+            <label>复盘日期 <input id="replay-date" type="date" min="2021-04-25"></label>
+            <button id="start-replay" type="button">开始复盘</button>
+            <button id="toggle-replay" type="button" disabled>▶ 播放</button>
+            <button id="step-replay" type="button" disabled>下一根</button>
+            <label>速度 <select id="replay-speed" aria-label="播放速度"><option value="0.5">0.5×</option><option value="1" selected>1×</option><option value="2">2×</option><option value="4">4×</option><option value="8">8×</option></select></label>
+            <span id="replay-progress" role="status">请选择日期</span>
+          </div>
           <select id="chart-symbol" aria-label="合约"><option value="BTCUSDT">BTCUSDT 永续</option><option value="ETHUSDT">ETHUSDT 永续</option></select>
           <div id="chart-interval" class="interval-buttons" role="group" aria-label="K 线周期">
             <button type="button" data-chart-interval="5">5min</button><button type="button" data-chart-interval="15">15min</button><button type="button" data-chart-interval="60" class="active">1h</button><button type="button" data-chart-interval="240">4h</button><button type="button" data-chart-interval="D">1d</button><button type="button" data-chart-interval="W">1w</button>
@@ -24,24 +32,28 @@
       </header>
       <div class="chart-stage">
         <div id="review-chart"></div>
+        <div id="drawing-input-layer" class="drawing-input-layer" hidden aria-label="画图输入区域"></div>
         <nav class="drawing-tools" aria-label="画图工具栏">
           <button id="drawing-tools-handle" class="drawing-tools-handle" type="button" aria-label="拖动画图工具栏" title="拖动画图工具栏（方向键可微调）"><span aria-hidden="true">⠿</span></button>
           <div class="drawing-tool-group">
+            <button type="button" data-drawing-tool="FibRetracement" aria-label="斐波那契回撤" title="斐波那契回撤：0 / 0.618 / 0.66 / 1"><svg viewBox="0 0 24 24"><path d="M5 5h13M5 10h10M5 15h13M5 20h10"/><circle cx="19" cy="5" r="1.5"/><circle cx="16" cy="10" r="1.5"/><circle cx="19" cy="15" r="1.5"/><circle cx="16" cy="20" r="1.5"/></svg></button>
+            <button type="button" data-enhanced-tool="short-position" aria-label="空头仓位" title="空头仓位"><svg viewBox="0 0 24 24"><path d="M5 5h14M5 10h11M5 15h14M5 20h11"/><circle cx="5" cy="5" r="1.5"/><circle cx="5" cy="10" r="1.5"/><circle cx="5" cy="15" r="1.5"/><circle cx="5" cy="20" r="1.5"/><text x="11" y="18">S</text></svg></button>
+            <button type="button" data-enhanced-tool="long-position" aria-label="多头仓位" title="多头仓位"><svg viewBox="0 0 24 24"><path d="M5 5h14M5 10h11M5 15h14M5 20h11"/><circle cx="5" cy="5" r="1.5"/><circle cx="5" cy="10" r="1.5"/><circle cx="5" cy="15" r="1.5"/><circle cx="5" cy="20" r="1.5"/><text x="11" y="18">L</text></svg></button>
+            <button type="button" data-enhanced-tool="date-price-range" aria-label="日期与价格范围" title="日期与价格范围"><svg viewBox="0 0 24 24"><rect x="4" y="4" width="14" height="16"/><path d="M8 8h7M11 5v14M8 11l3-3 3 3"/><circle cx="19" cy="4" r="1.5"/></svg></button>
+            <button type="button" data-drawing-tool="HorizontalRay" aria-label="水平射线" title="水平射线"><svg viewBox="0 0 24 24"><path d="M6 12h14"/><circle cx="5" cy="12" r="2"/></svg></button>
+            <button type="button" data-enhanced-tool="path" aria-label="路径" title="路径：逐点点击，双击或 Enter 完成"><svg viewBox="0 0 24 24"><path d="M4 18 10 8l5 6 5-9"/><circle cx="4" cy="18" r="2"/><circle cx="10" cy="8" r="2"/><circle cx="15" cy="14" r="2"/><circle cx="20" cy="5" r="2"/></svg></button>
+            <button type="button" data-drawing-tool="Rectangle" aria-label="矩形" title="矩形"><svg viewBox="0 0 24 24"><rect x="5" y="5" width="14" height="14"/><circle cx="5" cy="5" r="1.7"/><circle cx="19" cy="5" r="1.7"/><circle cx="5" cy="19" r="1.7"/><circle cx="19" cy="19" r="1.7"/></svg></button>
+            <button type="button" data-enhanced-tool="text-annotation" aria-label="文字" title="文字"><svg viewBox="0 0 24 24"><path d="M5 5h14M12 5v15M8 20h8"/></svg></button>
+            <button type="button" data-enhanced-tool="fixed-range-volume-profile" aria-label="固定范围成交量分布" title="固定范围成交量分布"><svg viewBox="0 0 24 24"><path d="M6 4v16M6 6h8M6 9h12M6 12h6M6 15h10M6 18h5"/><circle cx="20" cy="5" r="1.5"/></svg></button>
+            <button type="button" data-drawing-tool="VerticalLine" aria-label="垂直线" title="垂直线"><svg viewBox="0 0 24 24"><path d="M12 4v16"/><circle cx="12" cy="4" r="2"/></svg></button>
+            <button type="button" data-drawing-tool="TrendLine" aria-label="趋势线" title="趋势线"><svg viewBox="0 0 24 24"><path d="M5 18 19 5"/><circle cx="5" cy="18" r="2"/><circle cx="19" cy="5" r="2"/></svg></button>
+            <button type="button" data-enhanced-tool="arrow-mark-up" aria-label="向上箭头" title="向上箭头"><svg viewBox="0 0 24 24"><path d="M12 20V7M6 12l6-7 6 7"/></svg></button>
+            <button type="button" data-enhanced-tool="arrow-mark-down" aria-label="向下箭头" title="向下箭头"><svg viewBox="0 0 24 24"><path d="M12 4v13M6 12l6 7 6-7"/></svg></button>
+            <button type="button" data-enhanced-tool="brush" aria-label="画笔" title="画笔：按住鼠标自由绘制"><svg viewBox="0 0 24 24"><path d="M5 18c4 1 5-8 9-7 3 1 0 6-3 8-2 1-5 1-7-1M14 11l5-6"/></svg></button>
+            <button type="button" data-enhanced-tool="rotated-rectangle" aria-label="旋转矩形" title="旋转矩形"><svg viewBox="0 0 24 24"><path d="m5 10 9-6 6 9-9 6z"/><circle cx="5" cy="10" r="1.7"/><circle cx="14" cy="4" r="1.7"/><circle cx="20" cy="13" r="1.7"/><circle cx="11" cy="19" r="1.7"/></svg></button>
+          </div>
+          <div class="drawing-tool-group">
             <button type="button" data-drawing-action="select" class="active" aria-label="选择" title="选择工具或取消未完成的绘制"><span aria-hidden="true">↖</span></button>
-          </div>
-          <div class="drawing-tool-group">
-            <button type="button" data-drawing-tool="TrendLine" aria-label="趋势线" title="选择两点绘制趋势线"><span aria-hidden="true">╱</span></button>
-            <button type="button" data-drawing-tool="HorizontalLine" aria-label="水平线" title="点击价格位置绘制水平线"><span aria-hidden="true">―</span></button>
-            <button type="button" data-drawing-tool="Ray" aria-label="射线" title="绘制单向延伸的射线"><span aria-hidden="true">↗</span></button>
-            <button type="button" data-drawing-tool="ExtendedLine" aria-label="延长线" title="绘制双向延伸线"><span aria-hidden="true">↔</span></button>
-            <button type="button" data-drawing-tool="Arrow" aria-label="箭头" title="绘制带箭头的线"><span aria-hidden="true">➜</span></button>
-          </div>
-          <div class="drawing-tool-group">
-            <button type="button" data-drawing-tool="FibRetracement" aria-label="Fibo" title="选择起点和终点绘制斐波那契回撤"><span aria-hidden="true">Φ</span></button>
-            <button type="button" data-drawing-tool="Rectangle" aria-label="矩形" title="绘制矩形区域"><span aria-hidden="true">□</span></button>
-            <button type="button" data-drawing-tool="ParallelChannel" aria-label="平行通道" title="选择三点绘制平行通道"><span aria-hidden="true">≋</span></button>
-          </div>
-          <div class="drawing-tool-group">
             <button id="undo-drawing" type="button" disabled aria-label="撤销" title="撤销（Ctrl+Z）"><span aria-hidden="true">↶</span></button>
             <button id="redo-drawing" type="button" disabled aria-label="重做" title="重做（Ctrl+Shift+Z / Ctrl+Y）"><span aria-hidden="true">↷</span></button>
           </div>
@@ -62,7 +74,8 @@
   <script src="/vendor/line-tools/fib-retracement.min.js"></script>
   <script src="/vendor/line-tools/rectangle.min.js"></script>
   <script src="/vendor/line-tools/parallel-channel.min.js"></script>
-  <script src="/review_chart.js"></script>
+  <script src="/vendor/lightweight-charts-drawing.umd.js"></script>
+  <script src="/review_chart.js?v=20260718-3"></script>
   <script>
     const params = new URLSearchParams(window.location.search);
     const video = {
@@ -71,7 +84,9 @@
       '发布日期': params.get('date') || '',
       '发布时间（页面时区）': params.get('time') || ''
     };
-    if (video['视频ID'] && video['发布日期']) {
+    if (params.get('mode') === 'replay') {
+      window.TiaReviewChart.openReplay();
+    } else if (video['视频ID'] && video['发布日期']) {
       window.TiaReviewChart.open(video);
     } else {
       document.querySelector('#chart-status').textContent = '缺少视频日期参数，请从学习列表打开复盘。';

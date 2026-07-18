@@ -92,6 +92,50 @@ body[data-review-standalone="true"] .chart-dialog {
   flex-wrap: wrap;
 }
 
+.replay-controls {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 6px;
+  border: 1px solid #bfdbfe;
+  border-radius: 8px;
+  background: #eff6ff;
+}
+
+.replay-controls[hidden] {
+  display: none;
+}
+
+.replay-controls label {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  color: #475569;
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+#replay-date {
+  width: 138px;
+}
+
+#replay-speed {
+  min-height: 32px;
+  border: 1px solid #c5d0e0;
+  border-radius: 6px;
+  background: #fff;
+  color: #243b61;
+  padding: 5px 7px;
+}
+
+#replay-progress {
+  min-width: 170px;
+  color: #315fce;
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
 .chart-controls button,
 .chart-controls select,
 .chart-controls input,
@@ -168,6 +212,18 @@ body[data-review-standalone="true"] .chart-dialog {
   inset: 0;
 }
 
+.drawing-input-layer {
+  position: absolute;
+  z-index: 4;
+  inset: 0;
+  cursor: crosshair;
+  touch-action: none;
+}
+
+.drawing-input-layer[hidden] {
+  display: none;
+}
+
 .drawing-tools {
   position: absolute;
   z-index: 5;
@@ -220,6 +276,33 @@ body[data-review-standalone="true"] .chart-dialog {
   font-size: 18px;
   line-height: 1;
   cursor: pointer;
+}
+
+.drawing-tools button svg {
+  width: 25px;
+  height: 25px;
+  overflow: visible;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.5;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.drawing-tools button svg circle {
+  fill: #fff;
+}
+
+.drawing-tools button.active svg circle,
+.drawing-tools button:hover svg circle {
+  fill: #2563eb;
+}
+
+.drawing-tools button svg text {
+  fill: currentColor;
+  stroke: none;
+  font: 7px system-ui, sans-serif;
+  font-weight: 700;
 }
 
 .drawing-tools .drawing-tools-handle {
@@ -291,6 +374,11 @@ body[data-review-standalone="true"] .chart-dialog {
 
   .chart-controls {
     justify-content: flex-start;
+  }
+
+  .replay-controls {
+    width: 100%;
+    flex-wrap: wrap;
   }
 
   .drawing-tools {

@@ -38,6 +38,8 @@ def main():
     .subtitle {{ margin: 9px 0 0; color: var(--muted); line-height: 1.6; }}
     .primary {{ background: var(--blue); color: #fff; border-color: var(--blue); font-weight: 700; padding: 11px 18px; box-shadow: 0 8px 20px rgba(49, 95, 206, .18); }}
     .primary:hover:not(:disabled) {{ background: var(--blue-dark); border-color: var(--blue-dark); }}
+    .hero-actions {{ display: flex; gap: 10px; flex-wrap: wrap; justify-content: flex-end; }}
+    .replay-primary {{ border-color: #6e91d8; color: var(--blue-dark); font-weight: 700; padding: 11px 18px; }}
     .dashboard {{ display: grid; grid-template-columns: repeat(4, minmax(130px, 1fr)) 2fr; gap: 12px; margin-bottom: 18px; }}
     .metric, .progress-card {{ background: rgba(255,255,255,.92); border: 1px solid var(--line); border-radius: 14px; padding: 15px 17px; box-shadow: 0 6px 20px rgba(42, 63, 95, .05); }}
     .metric-label, .progress-label {{ color: var(--muted); font-size: 13px; }} .metric-value {{ display: block; margin-top: 5px; font-size: 24px; font-weight: 800; }}
@@ -71,7 +73,7 @@ def main():
     .empty {{ padding: 44px 20px; text-align: center; color: var(--muted); }}
     @media (max-width: 960px) {{ .dashboard {{ grid-template-columns: repeat(2, 1fr); }} .progress-card {{ grid-column: 1 / -1; }} .table-wrap {{ max-height: none; }} }}
     @media (max-width: 680px) {{
-      main {{ padding: 22px 10px 38px; }} .hero {{ flex-direction: column; }} .hero .primary {{ width: 100%; }}
+      main {{ padding: 22px 10px 38px; }} .hero {{ flex-direction: column; }} .hero-actions, .hero-actions button {{ width: 100%; }}
       .dashboard {{ grid-template-columns: repeat(2, 1fr); }} .metric, .progress-card {{ padding: 12px; }}
       .filter-row > input, .filter-row > select {{ width: 100%; }} .quick-filters {{ width: 100%; }} .context-bar {{ align-items: flex-start; flex-direction: column; }}
       th, td {{ padding: 9px 10px; }} .note textarea {{ width: min(520px, 75vw); }}
@@ -82,7 +84,7 @@ def main():
   <main>
     <section class="hero">
       <div><p class="eyebrow">TIA BTC · SYSTEMATIC LEARNING</p><h1>顺序学习工作台</h1><p class="subtitle">从最早的视频开始，按年月推进。书签、状态和备注会自动保存在本机。</p></div>
-      <button id="continue-learning" class="primary" type="button">继续学习 →</button>
+      <div class="hero-actions"><button id="open-market-replay" class="replay-primary" type="button">行情复盘</button><button id="continue-learning" class="primary" type="button">继续学习 →</button></div>
     </section>
 
     <section class="dashboard" aria-label="学习概览">
@@ -230,6 +232,10 @@ def main():
     $('#first-page').addEventListener('click', () => updatePage(1)); $('#previous-page').addEventListener('click', () => updatePage(currentPage - 1));
     $('#next-page').addEventListener('click', () => updatePage(currentPage + 1)); $('#last-page').addEventListener('click', () => updatePage(Number($('#page-input').max))); $('#page-input').addEventListener('change', (event) => updatePage(Number(event.target.value)));
     $('#continue-learning').addEventListener('click', () => {{ const filtered = filteredVideos(); const index = filtered.findIndex((video) => !isLearned(video)); if (index < 0) return; currentPage = Math.floor(index / pageSize) + 1; highlightedVideoId = filtered[index]['视频ID']; render(); }});
+    $('#open-market-replay').addEventListener('click', () => {{
+      const reviewTab = window.open('/TiaBTC_K%E7%BA%BF%E5%A4%8D%E7%9B%98.html?mode=replay', '_blank');
+      if (reviewTab) reviewTab.focus(); else showSaveError('浏览器阻止了打开新标签页，请允许此页面打开链接。');
+    }});
     $('#videos').addEventListener('click', (event) => {{
       const row = event.target.closest('tr[data-video-id]'); if (!row) return; const videoId = row.dataset.videoId;
       if (event.target.closest('.review-open')) {{

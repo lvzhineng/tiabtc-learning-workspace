@@ -26,14 +26,21 @@ VALID_STATUSES = {"unlearned", "learning", "learned"}
 VALID_SYMBOLS = {"BTCUSDT", "ETHUSDT"}
 VALID_INTERVALS = {"5", "15", "60", "240", "D", "W"}
 VALID_DRAWING_TYPES = {
-    "TrendLine", "HorizontalLine", "FibRetracement", "Ray",
-    "ExtendedLine", "Arrow", "Rectangle", "ParallelChannel",
+    "TrendLine", "HorizontalLine", "HorizontalRay", "VerticalLine", "FibRetracement", "Ray",
+    "ExtendedLine", "Arrow", "Rectangle", "ParallelChannel", "ShortPosition", "LongPosition",
+    "DatePriceRange", "Path", "TextAnnotation", "FixedRangeVolumeProfile", "ArrowMarkUp",
+    "ArrowMarkDown", "Brush", "RotatedRectangle",
 }
 DRAWING_POINT_COUNTS = {
-    "TrendLine": 2, "HorizontalLine": 1, "FibRetracement": 2, "Ray": 2,
+    "TrendLine": 2, "HorizontalLine": 1, "HorizontalRay": 1, "VerticalLine": 1,
+    "FibRetracement": 2, "Ray": 2,
     "ExtendedLine": 2, "Arrow": 2, "Rectangle": 2, "ParallelChannel": 3,
+    "ShortPosition": 3, "LongPosition": 3, "DatePriceRange": 2, "Path": (2, 500),
+    "TextAnnotation": 1, "FixedRangeVolumeProfile": 2, "ArrowMarkUp": 1,
+    "ArrowMarkDown": 1, "Brush": (2, 1000), "RotatedRectangle": 3,
 }
 SYSTEM_DRAWING_PREFIX = "__system__:"
+GLOBAL_DRAWING_SCOPE = "__global__"
 MAX_DRAWING_JSON_BYTES = 200_000
 INTERVAL_MILLISECONDS = {
     "5": 5 * 60_000,
@@ -142,9 +149,13 @@ def initialize_database():
                 );
                 """
             )
+        connection.execute(
+            "UPDATE chart_drawings SET video_id = ? WHERE video_id <> ?",
+            (GLOBAL_DRAWING_SCOPE, GLOBAL_DRAWING_SCOPE),
+        )
         connection.execute("DROP INDEX IF EXISTS idx_chart_drawings_scope")
         connection.execute(
-            "CREATE INDEX idx_chart_drawings_scope ON chart_drawings (video_id, symbol)"
+            "CREATE INDEX idx_chart_drawings_scope ON chart_drawings (symbol)"
         )
 
 
@@ -372,7 +383,15 @@ def validate_drawing(payload):
         raise ValueError("画图类型无效")
     points = payload.get("points")
     expected = DRAWING_POINT_COUNTS[tool_type]
-    if not isinstance(points, list) or len(points) != expected:
+    valid_point_count = (
+        isinstance(points, list)
+        and (
+            expected[0] <= len(points) <= expected[1]
+            if isinstance(expected, tuple)
+            else len(points) == expected
+        )
+    )
+    if not valid_point_count:
         raise ValueError("画图控制点数量无效")
     normalized_points = []
     for point in points:
@@ -401,6 +420,7 @@ def validate_drawing(payload):
 
 def save_drawing(payload):
     video_id, symbol, interval, drawing, encoded = validate_drawing(payload)
+    video_id = GLOBAL_DRAWING_SCOPE
     now = datetime.now().astimezone().isoformat()
     with DATABASE_LOCK, database() as connection:
         existing = connection.execute("SELECT created_at FROM chart_drawings WHERE id = ?", (drawing["id"],)).fetchone()
@@ -448,13 +468,13 @@ def replace_drawings(payload):
         created_times = {
             row["id"]: row["created_at"]
             for row in connection.execute(
-                "SELECT id, created_at FROM chart_drawings WHERE video_id = ? AND symbol = ?",
-                (video_id, symbol),
+                "SELECT id, created_at FROM chart_drawings WHERE symbol = ?",
+                (symbol,),
             ).fetchall()
         }
         connection.execute(
-            "DELETE FROM chart_drawings WHERE video_id = ? AND symbol = ?",
-            (video_id, symbol),
+            "DELETE FROM chart_drawings WHERE symbol = ?",
+            (symbol,),
         )
         connection.executemany(
             """INSERT INTO chart_drawings
@@ -462,7 +482,7 @@ def replace_drawings(payload):
                VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
             [
                 (
-                    drawing["id"], item_video, item_symbol, item_interval,
+                    drawing["id"], GLOBAL_DRAWING_SCOPE, item_symbol, item_interval,
                     drawing["toolType"], encoded, created_times.get(drawing["id"], now), now,
                 )
                 for item_video, item_symbol, item_interval, drawing, encoded in validated
@@ -478,9 +498,9 @@ def list_drawings(video_id, symbol, interval):
     with DATABASE_LOCK, database() as connection:
         rows = connection.execute(
             """SELECT tool_json FROM chart_drawings
-               WHERE video_id = ? AND symbol = ?
+               WHERE symbol = ?
                ORDER BY created_at ASC""",
-            (video_id, symbol),
+            (symbol,),
         ).fetchall()
     return [json.loads(row["tool_json"]) for row in rows]
 
@@ -496,14 +516,13 @@ def delete_drawings(query):
     with DATABASE_LOCK, database() as connection:
         if drawing_id:
             connection.execute(
-                """DELETE FROM chart_drawings
-                   WHERE id = ? AND video_id = ? AND symbol = ?""",
-                (drawing_id, video_id, symbol),
+                "DELETE FROM chart_drawings WHERE id = ? AND symbol = ?",
+                (drawing_id, symbol),
             )
             return
         connection.execute(
-            "DELETE FROM chart_drawings WHERE video_id = ? AND symbol = ?",
-            (video_id, symbol),
+            "DELETE FROM chart_drawings WHERE symbol = ?",
+            (symbol,),
         )
 
 
