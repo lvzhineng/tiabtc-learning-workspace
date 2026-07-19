@@ -36,6 +36,7 @@
   const TOOLBAR_POSITION_KEY = 'tia-review-drawing-toolbar-position-v1';
   const PRICE_SCALE_MODE_KEY = 'tia-review-price-scale-mode-v1';
   const FUTURE_WHITESPACE_BARS = 500;
+  const VISIBLE_RIGHT_PADDING_BARS = 4;
   const state = {
     initialized: false,
     mode: 'review',
@@ -129,6 +130,11 @@
     document.querySelector('[data-drawing-action="select"]').addEventListener('click', cancelActiveDrawing);
     initializeEnhancedDrawingInput();
     document.addEventListener('keydown', (event) => {
+      if (event.key === 'ArrowRight' && state.mode === 'replay' && state.replayReady && !isTextInput(event.target)) {
+        event.preventDefault();
+        stepReplay(true);
+        return;
+      }
       if (event.key === 'Escape' && (state.activeDrawingId || state.activeToolType)) cancelActiveDrawing();
       if (event.key === 'Enter' && state.activeToolType === 'path' && state.enhancedPendingAnchors.length >= 2) {
         event.preventDefault();
@@ -519,7 +525,12 @@
       renderCandleData();
       const visibleCount = state.mode === 'replay' ? state.replayVisibleCount : candles.length;
       const from = Math.max(0, visibleCount - 160);
-      if (visibleCount) state.chart.timeScale().setVisibleLogicalRange({ from, to: visibleCount + 25 });
+      if (visibleCount) {
+        state.chart.timeScale().setVisibleLogicalRange({
+          from,
+          to: visibleCount + VISIBLE_RIGHT_PADDING_BARS,
+        });
+      }
       const cacheLabel = candlePayload.source === 'bybit' ? 'Bybit 已写入 SQLite' : '已从 SQLite 读取';
       if (state.mode === 'replay') {
         elements.chartCutoff.textContent = `回放起点：${formatTimestamp(state.anchor)} · 可播放至 ${formatTimestamp(candlePayload.requestedCutoff)}`;
@@ -636,14 +647,29 @@
 
   function drawingAnchorTimes() {
     const times = [];
+    const firstCandleTime = Number(state.candleData[0]?.time || 0);
+    const lastCandleTime = Number(state.candleData[state.candleData.length - 1]?.time || 0);
+    const addUserAnchor = (time) => {
+      const normalized = Number(time);
+      if (!Number.isFinite(normalized) || normalized <= 0) return;
+      // Anchors inside the loaded market range must not become standalone whitespace
+      // entries. On higher timeframes an intraday anchor would otherwise insert an
+      // extra logical bar and create a visible gap between consecutive daily candles.
+      if (firstCandleTime && lastCandleTime && normalized >= firstCandleTime && normalized <= lastCandleTime) return;
+      times.push(normalized);
+    };
     state.enhancedDrawings?.getAllDrawings().forEach((drawing) => {
       if (drawing.id === '__enhanced-preview') return;
-      drawing.anchors?.forEach((anchor) => times.push(Number(anchor.time)));
+      drawing.anchors?.forEach((anchor) => addUserAnchor(anchor.time));
     });
     if (state.lineTools) {
       try {
         JSON.parse(state.lineTools.exportLineTools() || '[]').forEach((drawing) => {
-          drawing.points?.forEach((point) => times.push(Number(point.timestamp)));
+          drawing.points?.forEach((point) => {
+            const timestamp = Number(point.timestamp);
+            if (drawing.id === SYSTEM_MARKER_ID) times.push(timestamp);
+            else addUserAnchor(timestamp);
+          });
         });
       } catch (_) {
         // An incomplete drawing should not prevent the chart from rendering.
@@ -747,10 +773,15 @@
       updateReplayControls();
       return;
     }
+    const visibleRange = state.chart.timeScale().getVisibleLogicalRange();
+    const candleLogicalIndex = state.replayVisibleCount;
     const candle = state.candleData[state.replayVisibleCount];
     state.replayVisibleCount += 1;
-    renderCandleData();
-    followReplayCandle();
+    // Hidden replay candles already exist as whitespace entries. Replacing just the
+    // revealed entry avoids setData(), which resets the user's viewport on every step.
+    state.series.update(candle, true);
+    refreshVolumeProfiles();
+    followReplayCandle(visibleRange, candleLogicalIndex);
     updateReplayControls();
     if (state.replayVisibleCount >= state.candleData.length) {
       stopReplayPlayback();
@@ -760,12 +791,23 @@
     }
   }
 
-  function followReplayCandle() {
-    const visibleRange = state.chart.timeScale().getVisibleLogicalRange();
-    const span = visibleRange ? Math.max(40, visibleRange.to - visibleRange.from) : 160;
+  function followReplayCandle(visibleRange, candleLogicalIndex) {
+    if (!visibleRange) return;
+    const span = visibleRange.to - visibleRange.from;
+    if (!Number.isFinite(span) || span <= 0) return;
+
+    // Do not snap back when the user has deliberately panned away from the replay head.
+    const replayHeadWasVisible = candleLogicalIndex >= visibleRange.from - 1
+      && candleLogicalIndex <= visibleRange.to + 1;
+    if (!replayHeadWasVisible) return;
+
+    const rightPadding = VISIBLE_RIGHT_PADDING_BARS;
+    const desiredRightEdge = candleLogicalIndex + rightPadding;
+    if (desiredRightEdge <= visibleRange.to) return;
+    const shift = desiredRightEdge - visibleRange.to;
     state.chart.timeScale().setVisibleLogicalRange({
-      from: Math.max(0, state.replayVisibleCount - span + 18),
-      to: state.replayVisibleCount + 18,
+      from: visibleRange.from + shift,
+      to: visibleRange.to + shift,
     });
   }
 
@@ -1461,10 +1503,10 @@
       [{ timestamp: Math.floor(state.anchor / 1000), price }],
       {
         editable: false,
-        showTimeAxisLabels: true,
-        timeAxisLabelAlwaysVisible: true,
+        showTimeAxisLabels: false,
+        timeAxisLabelAlwaysVisible: false,
         line: { color: '#fb7185', width: 1, style: window.LightweightCharts.LineStyle.Dashed },
-        text: { value: state.mode === 'replay' ? '回放起点' : '视频发布', font: { color: '#fb7185', size: 11 } },
+        text: { value: '' },
       },
       SYSTEM_MARKER_ID,
     );
