@@ -50,7 +50,12 @@ INTERVAL_MILLISECONDS = {
     "D": 24 * 60 * 60_000,
     "W": 7 * 24 * 60 * 60_000,
 }
+INITIAL_FUTURE_BARS = 1000
+FETCH_FAILURE_COOLDOWN_SECONDS = 60
 DATABASE_LOCK = threading.RLock()
+MARKET_FETCH_LOCKS_GUARD = threading.Lock()
+MARKET_FETCH_LOCKS = {}
+MARKET_FETCH_FAILURES = {}
 
 
 def load_state():
@@ -74,7 +79,6 @@ def write_state(state):
 def database():
     connection = sqlite3.connect(DATABASE_FILE, timeout=30)
     connection.row_factory = sqlite3.Row
-    connection.execute("PRAGMA journal_mode=WAL")
     connection.execute("PRAGMA busy_timeout=30000")
     try:
         with connection:
@@ -87,6 +91,7 @@ def initialize_database():
     if DATABASE_FILE == DEFAULT_DATABASE_FILE and not DATABASE_FILE.exists() and SEED_DATABASE_FILE.exists():
         shutil.copy2(SEED_DATABASE_FILE, DATABASE_FILE)
     with DATABASE_LOCK, database() as connection:
+        connection.execute("PRAGMA journal_mode=WAL")
         connection.executescript(
             """
             CREATE TABLE IF NOT EXISTS app_settings (
@@ -248,7 +253,7 @@ def fetch_bybit_candles(symbol, interval, start_timestamp, end_timestamp):
             headers={"Accept": "application/json", "User-Agent": "TiaBTC-Learning-Workspace/1.0"},
         )
         try:
-            with urlopen(request, timeout=20) as response:
+            with urlopen(request, timeout=8) as response:
                 payload = json.loads(response.read().decode("utf-8"))
         except (HTTPError, URLError, TimeoutError) as error:
             raise RuntimeError(f"Bybit K 线请求失败：{error}") from error
@@ -310,18 +315,35 @@ def list_candles(symbol, interval, start_timestamp, end_timestamp):
     return [dict(row) for row in rows]
 
 
+def market_fetch_lock(symbol, interval):
+    key = (symbol, interval)
+    with MARKET_FETCH_LOCKS_GUARD:
+        return MARKET_FETCH_LOCKS.setdefault(key, threading.Lock())
+
+
 def load_candle_range(symbol, interval, start_timestamp, end_timestamp, offline=None):
     source = "sqlite"
     warning = ""
     offline = get_offline_mode() if offline is None else offline
     covered = cached_range_contains(symbol, interval, start_timestamp, end_timestamp)
     if not covered and not offline:
-        try:
-            fetched = fetch_bybit_candles(symbol, interval, start_timestamp, end_timestamp)
-            save_candles(symbol, interval, start_timestamp, end_timestamp, fetched)
-            source = "bybit"
-        except RuntimeError as error:
-            warning = str(error)
+        fetch_key = (symbol, interval)
+        with market_fetch_lock(symbol, interval):
+            covered = cached_range_contains(symbol, interval, start_timestamp, end_timestamp)
+            if not covered:
+                failed_at, failed_message = MARKET_FETCH_FAILURES.get(fetch_key, (0, ""))
+                cooldown_remaining = FETCH_FAILURE_COOLDOWN_SECONDS - (time.monotonic() - failed_at)
+                if failed_message and cooldown_remaining > 0:
+                    warning = f"{failed_message}（稍后再试，避免重复等待）"
+                else:
+                    try:
+                        fetched = fetch_bybit_candles(symbol, interval, start_timestamp, end_timestamp)
+                        save_candles(symbol, interval, start_timestamp, end_timestamp, fetched)
+                        MARKET_FETCH_FAILURES.pop(fetch_key, None)
+                        source = "bybit"
+                    except RuntimeError as error:
+                        warning = str(error)
+                        MARKET_FETCH_FAILURES[fetch_key] = (time.monotonic(), warning)
     candles = list_candles(symbol, interval, start_timestamp, end_timestamp)
     if offline and not covered:
         warning = "仅本地模式：该时间范围的缓存不完整"
@@ -337,12 +359,18 @@ def load_chart_candles(symbol, interval, anchor_timestamp, future_days):
     requested_cutoff = anchor_timestamp + future_days * 86_400_000
     effective_cutoff = min(requested_cutoff, int(time.time() * 1000))
     start_timestamp = anchor_timestamp - INTERVAL_MILLISECONDS[interval] * 500
-    candles, source, warning = load_candle_range(symbol, interval, start_timestamp, effective_cutoff)
+    loaded_cutoff = min(
+        effective_cutoff,
+        anchor_timestamp + INTERVAL_MILLISECONDS[interval] * INITIAL_FUTURE_BARS,
+    )
+    candles, source, warning = load_candle_range(symbol, interval, start_timestamp, loaded_cutoff)
     return {
         "candles": candles,
         "anchor": anchor_timestamp,
         "requestedCutoff": requested_cutoff,
         "effectiveCutoff": effective_cutoff,
+        "loadedCutoff": loaded_cutoff,
+        "hasMoreLater": loaded_cutoff < effective_cutoff,
         "futureDays": future_days,
         "source": source,
         "warning": warning,
@@ -363,6 +391,62 @@ def load_earlier_candles(symbol, interval, before_timestamp, limit):
         "source": source,
         "warning": warning,
         "hasMore": len(candles) >= limit and not warning,
+    }
+
+
+def load_replay_candles(symbol, interval, cursor_timestamp, limit):
+    validate_market_scope(symbol, interval)
+    now_timestamp = int(time.time() * 1000)
+    if cursor_timestamp < 1_230_768_000_000 or cursor_timestamp > now_timestamp:
+        raise ValueError("复盘时间无效")
+    if limit < 100 or limit > 1000:
+        raise ValueError("单次加载数量必须是 100–1000")
+    interval_milliseconds = INTERVAL_MILLISECONDS[interval]
+    start_timestamp = cursor_timestamp - interval_milliseconds * 500
+    end_timestamp = min(now_timestamp, cursor_timestamp + interval_milliseconds * limit)
+    candles, source, warning = load_candle_range(symbol, interval, start_timestamp, end_timestamp)
+    candles = [
+        candle for candle in candles
+        if int(candle["timestamp"]) + interval_milliseconds <= now_timestamp
+    ]
+    return {
+        "candles": candles,
+        "cursor": cursor_timestamp,
+        "effectiveCutoff": end_timestamp,
+        "source": source,
+        "warning": warning,
+        "hasMore": end_timestamp < now_timestamp,
+    }
+
+
+def load_later_candles(symbol, interval, after_timestamp, limit, cutoff_timestamp=None):
+    validate_market_scope(symbol, interval)
+    now_timestamp = int(time.time() * 1000)
+    if after_timestamp < 1_230_768_000_000 or after_timestamp > now_timestamp:
+        raise ValueError("K 线时间无效")
+    if limit < 100 or limit > 1000:
+        raise ValueError("单次加载数量必须是 100–1000")
+    interval_milliseconds = INTERVAL_MILLISECONDS[interval]
+    target_end = now_timestamp
+    if cutoff_timestamp is not None:
+        if cutoff_timestamp < 1_230_768_000_000 or cutoff_timestamp > now_timestamp + 31 * 86_400_000:
+            raise ValueError("K 线截止时间无效")
+        target_end = min(target_end, cutoff_timestamp)
+    start_timestamp = after_timestamp + 1
+    end_timestamp = min(target_end, after_timestamp + interval_milliseconds * limit)
+    if start_timestamp > end_timestamp:
+        return {"candles": [], "source": "sqlite", "warning": "", "hasMore": False}
+    candles, source, warning = load_candle_range(symbol, interval, start_timestamp, end_timestamp)
+    candles = [
+        candle for candle in candles
+        if int(candle["timestamp"]) > after_timestamp
+        and int(candle["timestamp"]) + interval_milliseconds <= now_timestamp
+    ]
+    return {
+        "candles": candles,
+        "source": source,
+        "warning": warning,
+        "hasMore": end_timestamp < target_end,
     }
 
 
@@ -547,11 +631,32 @@ class StudyHandler(SimpleHTTPRequestHandler):
                 symbol = query.get("symbol", [""])[0]
                 interval = query.get("interval", [""])[0]
                 before = query.get("before", [""])[0]
+                after = query.get("after", [""])[0]
+                replay_cursor = query.get("replayCursor", [""])[0]
                 if before:
                     limit = int(query.get("limit", ["1000"])[0])
                     return self.send_json(
                         HTTPStatus.OK,
                         load_earlier_candles(symbol, interval, int(before), limit),
+                    )
+                if after:
+                    limit = int(query.get("limit", ["1000"])[0])
+                    cutoff = query.get("cutoff", [""])[0]
+                    return self.send_json(
+                        HTTPStatus.OK,
+                        load_later_candles(
+                            symbol,
+                            interval,
+                            int(after),
+                            limit,
+                            int(cutoff) if cutoff else None,
+                        ),
+                    )
+                if replay_cursor:
+                    limit = int(query.get("limit", ["1000"])[0])
+                    return self.send_json(
+                        HTTPStatus.OK,
+                        load_replay_candles(symbol, interval, int(replay_cursor), limit),
                     )
                 anchor = int(query.get("anchor", ["0"])[0])
                 days = int(query.get("futureDays", [str(get_future_days())])[0])

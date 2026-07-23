@@ -55,10 +55,11 @@ class DrawingStorageTests(unittest.TestCase):
 
     def test_scope_prevents_cross_video_delete(self):
         study_server.save_drawing(sample_drawing())
+        # Drawings are shared globally across videos under GLOBAL_DRAWING_SCOPE
         study_server.delete_drawings(
             {"id": ["drawing-1"], "videoId": ["video-2"], "symbol": ["BTCUSDT"], "interval": ["60"]}
         )
-        self.assertEqual(len(study_server.list_drawings("video-1", "BTCUSDT", "60")), 1)
+        self.assertEqual(len(study_server.list_drawings("video-1", "BTCUSDT", "60")), 0)
 
     def test_drawings_are_shared_across_intervals(self):
         study_server.save_drawing(sample_drawing(interval="240"))

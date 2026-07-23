@@ -1,20 +1,30 @@
 <!doctype html>
-<html lang="zh-CN">
+<html lang="zh-CN" data-theme="dark">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>TiaBTC K线复盘</title>
-  <link rel="stylesheet" href="/review_chart.css">
+  <link rel="stylesheet" href="/review_chart.css?v=20260723-1">
+  <script>
+    const savedTheme = localStorage.getItem('tiabtc-theme') || 'dark';
+    document.documentElement.setAttribute('data-theme', savedTheme);
+  </script>
 </head>
-<body data-review-standalone="true">
+<body data-review-standalone="true" data-theme="dark">
   <dialog id="review-dialog" class="chart-dialog" open>
     <section class="chart-shell">
       <header class="chart-header">
         <div class="chart-heading"><strong id="review-video-title">视频 K 线复盘</strong><span id="review-video-time"></span></div>
         <div class="chart-controls">
           <div id="replay-controls" class="replay-controls" hidden>
-            <label>复盘日期 <input id="replay-date" type="date" min="2021-04-25"></label>
-            <button id="start-replay" type="button">开始复盘</button>
+            <label class="replay-date-picker">
+              <span class="replay-date-caption">回放起点</span>
+              <span class="replay-date-field">
+                <svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" aria-hidden="true"><rect x="3.5" y="5.5" width="17" height="15" rx="3"/><path d="M7.5 3.5v4M16.5 3.5v4M3.5 10h17"/></svg>
+                <input id="replay-date" type="date" aria-label="复盘起点日期">
+              </span>
+            </label>
+            <button id="start-replay" class="replay-start" type="button">开始复盘</button>
             <button id="toggle-replay" type="button" disabled>▶ 播放</button>
             <button id="step-replay" type="button" disabled>下一根</button>
             <label>速度 <select id="replay-speed" aria-label="播放速度"><option value="0.5">0.5×</option><option value="1" selected>1×</option><option value="2">2×</option><option value="4">4×</option><option value="8">8×</option></select></label>
@@ -32,6 +42,13 @@
       </header>
       <div class="chart-stage">
         <div id="review-chart"></div>
+        <div id="chart-candle-data" class="chart-candle-data" aria-label="当前 K 线数据">
+          <span>开=<strong id="candle-open">--</strong></span>
+          <span>高=<strong id="candle-high">--</strong></span>
+          <span>低=<strong id="candle-low">--</strong></span>
+          <span>收=<strong id="candle-close">--</strong></span>
+          <strong id="candle-change">--</strong>
+        </div>
         <div id="drawing-input-layer" class="drawing-input-layer" hidden aria-label="画图输入区域"></div>
         <nav class="drawing-tools" aria-label="画图工具栏">
           <button id="drawing-tools-handle" class="drawing-tools-handle" type="button" aria-label="拖动画图工具栏" title="拖动画图工具栏（方向键可微调）"><span aria-hidden="true">⠿</span></button>
@@ -75,7 +92,7 @@
   <script src="/vendor/line-tools/rectangle.min.js"></script>
   <script src="/vendor/line-tools/parallel-channel.min.js"></script>
   <script src="/vendor/lightweight-charts-drawing.umd.js"></script>
-  <script src="/review_chart.js?v=20260718-3"></script>
+  <script src="/review_chart.js?v=20260723-3"></script>
   <script>
     const params = new URLSearchParams(window.location.search);
     const video = {

@@ -77,8 +77,18 @@
     replayReady: false,
     replayStartIndex: 0,
     replayVisibleCount: 0,
+    replayCursorTimestamp: 0,
+    replayHasMore: false,
+    loadingLater: false,
     replaySpeed: 1,
     replayTimer: null,
+    reloadEpoch: 0,
+    reloadAbortController: null,
+    earlierAbortController: null,
+    laterAbortController: null,
+    reviewCutoffTimestamp: 0,
+    reviewHasMoreLater: false,
+    reviewRightLoadArmed: false,
   };
 
   const elements = {};
@@ -93,7 +103,8 @@
       'lock-drawing', 'delete-drawing', 'clear-drawings', 'drawing-tools-handle',
       'replay-controls', 'replay-date', 'start-replay', 'toggle-replay', 'step-replay',
       'replay-speed', 'replay-progress',
-      'drawing-input-layer',
+      'drawing-input-layer', 'chart-candle-data', 'candle-open', 'candle-high',
+      'candle-low', 'candle-close', 'candle-change',
     ].forEach((id) => { elements[toCamel(id)] = document.getElementById(id); });
     elements.drawingTools = document.querySelector('.drawing-tools');
     elements.chartStage = document.querySelector('.chart-stage');
@@ -116,10 +127,15 @@
     elements.futureDays.addEventListener('change', saveFutureDays);
     elements.offlineMode.addEventListener('change', saveOfflineMode);
     elements.priceScaleMode.addEventListener('click', togglePriceScaleMode);
+    const armReviewLaterLoad = () => {
+      if (state.mode === 'review') state.reviewRightLoadArmed = true;
+    };
+    elements.reviewChart.addEventListener('pointerdown', armReviewLaterLoad);
+    elements.reviewChart.addEventListener('wheel', armReviewLaterLoad, { passive: true });
     elements.replayDate.addEventListener('change', resetReplaySelection);
     elements.startReplay.addEventListener('click', startReplayFromSelection);
     elements.toggleReplay.addEventListener('click', toggleReplayPlayback);
-    elements.stepReplay.addEventListener('click', () => stepReplay(true));
+    elements.stepReplay.addEventListener('click', () => void stepReplay(true));
     elements.replaySpeed.addEventListener('change', changeReplaySpeed);
     document.querySelectorAll('[data-drawing-tool]').forEach((button) => {
       button.addEventListener('click', () => startDrawing(button.dataset.drawingTool));
@@ -132,7 +148,7 @@
     document.addEventListener('keydown', (event) => {
       if (event.key === 'ArrowRight' && state.mode === 'replay' && state.replayReady && !isTextInput(event.target)) {
         event.preventDefault();
-        stepReplay(true);
+        void stepReplay(true);
         return;
       }
       if (event.key === 'Escape' && (state.activeDrawingId || state.activeToolType)) cancelActiveDrawing();
@@ -168,7 +184,11 @@
     stopReplayPlayback();
     state.mode = 'review';
     state.replayReady = false;
+    state.reviewCutoffTimestamp = 0;
+    state.reviewHasMoreLater = false;
+    state.reviewRightLoadArmed = false;
     elements.replayControls.hidden = true;
+    elements.futureDays.closest('.future-days-control').hidden = false;
     state.video = video;
     state.anchor = videoTimestamp(video);
     elements.reviewVideoTitle.textContent = video['视频标题'];
@@ -187,13 +207,19 @@
     state.anchor = 0;
     state.replayDate = '';
     state.replayReady = false;
+    state.replayCursorTimestamp = 0;
+    state.replayHasMore = false;
+    state.reviewCutoffTimestamp = 0;
+    state.reviewHasMoreLater = false;
+    state.reviewRightLoadArmed = false;
     state.replaySpeed = 1;
     elements.replayControls.hidden = false;
+    elements.futureDays.closest('.future-days-control').hidden = true;
     elements.replayDate.max = beijingDateString(new Date());
     elements.replayDate.value = elements.replayDate.max;
     elements.replaySpeed.value = '1';
     elements.reviewVideoTitle.textContent = 'BTC / ETH 行情复盘';
-    elements.reviewVideoTime.textContent = '选择日期后，从北京时间 00:00 开始逐根回放';
+    elements.reviewVideoTime.textContent = '选择日期后，从北京时间 00:00 开始逐根回放 · 无固定结束时间';
     if (!elements.reviewDialog.open) elements.reviewDialog.showModal();
     ensureChart();
     await loadChartConfig();
@@ -215,6 +241,10 @@
 
   function close() {
     stopReplayPlayback();
+    state.reloadEpoch += 1;
+    state.reloadAbortController?.abort();
+    state.earlierAbortController?.abort();
+    state.laterAbortController?.abort();
     if (document.body.dataset.reviewStandalone === 'true') {
       window.close();
       if (!window.closed) window.location.href = '/';
@@ -223,8 +253,35 @@
     elements.reviewDialog.close();
   }
 
+  function getChartThemeOptions() {
+    const isDark = (document.documentElement.getAttribute('data-theme') || 'dark') === 'dark';
+    return {
+      layout: {
+        background: { type: window.LightweightCharts.ColorType.Solid, color: isDark ? '#0b0e14' : '#ffffff' },
+        textColor: isDark ? '#94a3b8' : '#475569',
+      },
+      grid: {
+        vertLines: { color: isDark ? 'rgba(255, 255, 255, 0.05)' : 'rgba(0, 0, 0, 0.05)' },
+        horzLines: { color: isDark ? 'rgba(255, 255, 255, 0.05)' : 'rgba(0, 0, 0, 0.05)' },
+      },
+      rightPriceScale: {
+        borderColor: isDark ? 'rgba(255, 255, 255, 0.08)' : '#d9e1ec',
+        mode: state.logarithmicScale
+          ? window.LightweightCharts.PriceScaleMode.Logarithmic
+          : window.LightweightCharts.PriceScaleMode.Normal,
+      },
+      timeScale: { borderColor: isDark ? 'rgba(255, 255, 255, 0.08)' : '#d9e1ec', timeVisible: true, secondsVisible: false, rightOffset: 8 },
+    };
+  }
+
+  function applyChartTheme() {
+    if (!state.chart) return;
+    state.chart.applyOptions(getChartThemeOptions());
+  }
+
   function ensureChart() {
     if (state.chart) {
+      applyChartTheme();
       resizeChart();
       return;
     }
@@ -232,24 +289,14 @@
       setStatus('图表组件未加载，请刷新页面。', true);
       return;
     }
+    const themeOpts = getChartThemeOptions();
     state.chart = window.LightweightCharts.createChart(elements.reviewChart, {
       width: elements.reviewChart.clientWidth,
       height: elements.reviewChart.clientHeight,
-      layout: {
-        background: { type: window.LightweightCharts.ColorType.Solid, color: '#ffffff' },
-        textColor: '#475569',
-      },
-      grid: {
-        vertLines: { color: '#edf1f6' },
-        horzLines: { color: '#edf1f6' },
-      },
-      rightPriceScale: {
-        borderColor: '#d9e1ec',
-        mode: state.logarithmicScale
-          ? window.LightweightCharts.PriceScaleMode.Logarithmic
-          : window.LightweightCharts.PriceScaleMode.Normal,
-      },
-      timeScale: { borderColor: '#d9e1ec', timeVisible: true, secondsVisible: false, rightOffset: 8 },
+      layout: themeOpts.layout,
+      grid: themeOpts.grid,
+      rightPriceScale: themeOpts.rightPriceScale,
+      timeScale: themeOpts.timeScale,
       crosshair: { mode: window.LightweightCharts.CrosshairMode.Normal },
       localization: { locale: 'zh-CN' },
     });
@@ -264,11 +311,20 @@
     initializeEnhancedDrawingManager();
     state.chart.timeScale().subscribeVisibleLogicalRangeChange((range) => {
       if (range && range.from < 40) void loadEarlierCandles();
+      if (range && shouldLoadLaterReviewCandles(range)) void loadLaterReviewCandles();
+    });
+    state.chart.subscribeCrosshairMove((param) => {
+      const candle = param.seriesData?.get(state.series);
+      updateCandleData(candle || latestVisibleCandle());
     });
     state.resizeObserver = new ResizeObserver(() => {
       resizeChart();
     });
     state.resizeObserver.observe(elements.reviewChart);
+
+    // Watch theme changes
+    const themeObserver = new MutationObserver(() => applyChartTheme());
+    themeObserver.observe(document.documentElement, { attributes: true, attributeFilter: ['data-theme'] });
   }
 
   function resizeChart() {
@@ -283,7 +339,7 @@
     try {
       localStorage.setItem(PRICE_SCALE_MODE_KEY, state.logarithmicScale ? 'logarithmic' : 'normal');
     } catch (_) {
-      // Private browsing or storage policies may disable localStorage.
+      // Private browsing
     }
   }
 
@@ -394,13 +450,16 @@
   }
 
   function restoreToolbarPosition() {
-    let position = { left: 10, top: 10 };
+    let position = { left: 10, top: 52 };
     try {
       position = { ...position, ...JSON.parse(localStorage.getItem(TOOLBAR_POSITION_KEY) || '{}') };
     } catch (_) {
       // Ignore invalid or unavailable local state and use the default position.
     }
-    positionToolbar(Number(position.left) || 10, Number(position.top) || 10);
+    const left = Number(position.left) || 10;
+    const savedTop = Number(position.top) || 52;
+    const top = left <= 12 && savedTop <= 12 ? 52 : savedTop;
+    positionToolbar(left, top);
   }
 
   function constrainToolbarPosition() {
@@ -470,6 +529,17 @@
 
   async function reloadScope() {
     if (!state.video || !state.chart || !state.series || !state.lineTools) return;
+    state.reloadAbortController?.abort();
+    state.earlierAbortController?.abort();
+    state.laterAbortController?.abort();
+    state.earlierAbortController = null;
+    state.laterAbortController = null;
+    const reloadEpoch = ++state.reloadEpoch;
+    const abortController = new AbortController();
+    state.reloadAbortController = abortController;
+    const requestedSymbol = state.symbol;
+    const requestedInterval = state.interval;
+    const requestedMode = state.mode;
     invalidatePendingDrawingSaves();
     cancelActiveDrawing();
     state.lineTools.removeAllLineTools();
@@ -481,21 +551,30 @@
     updateDrawingButtons();
     state.loadingEarlier = false;
     state.noMoreEarlier = false;
+    state.loadingLater = false;
+    state.reviewHasMoreLater = false;
+    state.reviewRightLoadArmed = false;
     state.candleData = [];
     state.loadingDrawings = true;
     showLoading(`正在读取 ${state.symbol} ${INTERVAL_LABELS[state.interval]} K 线…`);
     let drawingsLoaded = false;
     try {
-      const params = new URLSearchParams({
-        symbol: state.symbol,
-        interval: state.interval,
-        anchor: String(state.anchor),
-        futureDays: String(state.futureDays),
-      });
+      const params = new URLSearchParams({ symbol: state.symbol, interval: state.interval });
+      if (state.mode === 'replay') {
+        params.set('replayCursor', String(state.replayCursorTimestamp || state.anchor));
+        params.set('limit', '1000');
+      } else {
+        params.set('anchor', String(state.anchor));
+        params.set('futureDays', String(state.futureDays));
+      }
       const [candleResult, drawingResult] = await Promise.allSettled([
-        fetch(`/api/chart/candles?${params}`).then(readJson),
-        fetch(`/api/chart/drawings?${drawingScopeParams()}`).then(readJson),
+        fetch(`/api/chart/candles?${params}`, { signal: abortController.signal }).then(readJson),
+        fetch(`/api/chart/drawings?${drawingScopeParams()}`, { signal: abortController.signal }).then(readJson),
       ]);
+      if (reloadEpoch !== state.reloadEpoch
+        || requestedSymbol !== state.symbol
+        || requestedInterval !== state.interval
+        || requestedMode !== state.mode) return;
       if (drawingResult.status === 'rejected') throw drawingResult.reason;
       const drawingPayload = drawingResult.value;
       const drawings = (drawingPayload.drawings || []).filter((drawing) => USER_TOOL_TYPES.has(drawing.toolType));
@@ -508,43 +587,42 @@
       const candles = candlePayload.candles || [];
       state.candleData = candles.map(toChartCandle);
       if (state.mode === 'replay') {
-        const anchorSeconds = Math.floor(state.anchor / 1000);
-        const firstFutureIndex = state.candleData.findIndex((candle) => Number(candle.time) + INTERVAL_SECONDS[state.interval] > anchorSeconds);
+        const cursorSeconds = Math.floor((state.replayCursorTimestamp || state.anchor) / 1000);
+        const firstFutureIndex = state.candleData.findIndex((candle) => Number(candle.time) + INTERVAL_SECONDS[state.interval] > cursorSeconds);
         state.replayVisibleCount = firstFutureIndex < 0 ? state.candleData.length : firstFutureIndex;
         state.replayStartIndex = state.replayVisibleCount;
         state.replayReady = state.replayVisibleCount > 0;
+        state.replayHasMore = candlePayload.hasMore !== false;
+      } else {
+        state.reviewCutoffTimestamp = Number(candlePayload.effectiveCutoff || candlePayload.requestedCutoff || 0);
+        state.reviewHasMoreLater = candlePayload.hasMoreLater === true;
       }
-      renderCandleData();
       const legacyDrawings = drawings.filter((drawing) => LEGACY_TOOL_TYPES.has(drawing.toolType)).map(normalizeDrawingStyle);
       const enhancedDrawings = drawings.filter((drawing) => ENHANCED_TOOL_TYPES.has(drawing.toolType));
+      renderCandleData(drawingAnchorTimesFromPayload(drawings));
       if (legacyDrawings.length && !state.lineTools.importLineTools(JSON.stringify(legacyDrawings))) {
         throw new Error('已保存的画图数据无法导入。');
       }
       enhancedDrawings.forEach(importEnhancedDrawing);
       addVideoPublishedMarker();
-      renderCandleData();
-      const visibleCount = state.mode === 'replay' ? state.replayVisibleCount : candles.length;
-      const from = Math.max(0, visibleCount - 160);
-      if (visibleCount) {
-        state.chart.timeScale().setVisibleLogicalRange({
-          from,
-          to: visibleCount + VISIBLE_RIGHT_PADDING_BARS,
-        });
-      }
+      setInitialVisibleRange();
       const cacheLabel = candlePayload.source === 'bybit' ? 'Bybit 已写入 SQLite' : '已从 SQLite 读取';
       if (state.mode === 'replay') {
-        elements.chartCutoff.textContent = `回放起点：${formatTimestamp(state.anchor)} · 可播放至 ${formatTimestamp(candlePayload.requestedCutoff)}`;
+        elements.chartCutoff.textContent = `起点：${formatTimestamp(state.anchor)} · 后续 K 线按需加载至最新可用行情`;
         const hiddenCount = Math.max(0, state.candleData.length - state.replayStartIndex);
-        setStatus(candlePayload.warning ? `${cacheLabel}；${candlePayload.warning}` : `准备完成 · 已隐藏后续 ${hiddenCount} 根 K 线`, Boolean(candlePayload.warning));
+        setStatus(candlePayload.warning ? `${cacheLabel}；${candlePayload.warning}` : `准备完成 · 已隐藏后续 ${hiddenCount} 根 K 线 · 播放到边界会自动续载`, Boolean(candlePayload.warning));
         updateReplayControls();
       } else {
         elements.chartCutoff.textContent = `严格截止：${formatTimestamp(candlePayload.requestedCutoff)}（发布后 ${state.futureDays} 天）`;
-        setStatus(candlePayload.warning ? `${cacheLabel}；${candlePayload.warning}` : `${cacheLabel} · ${candles.length} 根 K 线 · 向左拖动自动加载更早数据`, Boolean(candlePayload.warning));
+        const laterLabel = state.reviewHasMoreLater ? ' · 向右拖动按需加载后续数据' : '';
+        setStatus(candlePayload.warning ? `${cacheLabel}；${candlePayload.warning}` : `${cacheLabel} · ${candles.length} 根 K 线 · 向左拖动自动加载更早数据${laterLabel}`, Boolean(candlePayload.warning));
       }
       updateDrawingButtons();
     } catch (error) {
+      if (reloadEpoch !== state.reloadEpoch || error?.name === 'AbortError') return;
       state.series.setData([]);
       state.candleData = [];
+      updateCandleData(null);
       state.replayReady = false;
       state.lineTools.removeAllLineTools();
       state.enhancedDrawings?.clearAll();
@@ -558,15 +636,23 @@
         : '';
       setStatus(`${error.message || 'K 线加载失败'}${suffix}`, true);
     } finally {
-      state.loadingDrawings = false;
-      updateDrawingButtons();
-      hideLoading();
+      if (reloadEpoch === state.reloadEpoch) {
+        state.reloadAbortController = null;
+        state.loadingDrawings = false;
+        updateDrawingButtons();
+        hideLoading();
+      }
     }
   }
 
   async function loadEarlierCandles() {
     if (state.loadingEarlier || state.noMoreEarlier || !state.candleData.length) return;
     state.loadingEarlier = true;
+    const reloadEpoch = state.reloadEpoch;
+    const symbol = state.symbol;
+    const interval = state.interval;
+    const abortController = new AbortController();
+    state.earlierAbortController = abortController;
     const before = Number(state.candleData[0].time) * 1000;
     const visibleRange = state.chart.timeScale().getVisibleLogicalRange();
     setStatus(`正在加载更早的 ${INTERVAL_LABELS[state.interval]} K 线…`);
@@ -577,7 +663,8 @@
         before: String(before),
         limit: '1000',
       });
-      const payload = await fetch(`/api/chart/candles?${params}`).then(readJson);
+      const payload = await fetch(`/api/chart/candles?${params}`, { signal: abortController.signal }).then(readJson);
+      if (reloadEpoch !== state.reloadEpoch || symbol !== state.symbol || interval !== state.interval) return;
       const knownTimes = new Set(state.candleData.map((candle) => Number(candle.time)));
       const earlier = (payload.candles || []).map(toChartCandle).filter((candle) => !knownTimes.has(Number(candle.time)));
       if (!earlier.length) {
@@ -603,9 +690,77 @@
       const suffix = state.noMoreEarlier ? ' · 已到最早数据' : ' · 继续向左可加载更多';
       setStatus(payload.warning ? `${cacheLabel}；${payload.warning}` : `${cacheLabel} · 当前共 ${state.candleData.length} 根${suffix}`, Boolean(payload.warning));
     } catch (error) {
+      if (error?.name === 'AbortError' || reloadEpoch !== state.reloadEpoch) return;
       setStatus(error.message || '更早 K 线加载失败，请稍后重试', true);
     } finally {
-      state.loadingEarlier = false;
+      if (reloadEpoch === state.reloadEpoch) {
+        state.earlierAbortController = null;
+        state.loadingEarlier = false;
+      }
+    }
+  }
+
+  function shouldLoadLaterReviewCandles(visibleRange) {
+    if (state.mode !== 'review'
+      || !state.reviewRightLoadArmed
+      || !state.reviewHasMoreLater
+      || state.loadingLater
+      || !state.candleData.length) return false;
+    const lastCandle = state.candleData[state.candleData.length - 1];
+    const lastIndex = state.chart.timeScale().timeToIndex(lastCandle.time, true);
+    return Number.isFinite(lastIndex) && visibleRange.to >= lastIndex - 20;
+  }
+
+  async function loadLaterReviewCandles() {
+    if (state.mode !== 'review' || state.loadingLater || !state.reviewHasMoreLater || !state.candleData.length) return;
+    state.loadingLater = true;
+    state.reviewRightLoadArmed = false;
+    state.laterAbortController?.abort();
+    const abortController = new AbortController();
+    state.laterAbortController = abortController;
+    const reloadEpoch = state.reloadEpoch;
+    const symbol = state.symbol;
+    const interval = state.interval;
+    const cutoff = state.reviewCutoffTimestamp;
+    const after = Number(state.candleData[state.candleData.length - 1].time) * 1000;
+    const visibleRange = state.chart.timeScale().getVisibleLogicalRange();
+    setStatus(`正在加载后续 ${INTERVAL_LABELS[interval]} K 线…`);
+    try {
+      const params = new URLSearchParams({
+        symbol,
+        interval,
+        after: String(after),
+        cutoff: String(cutoff),
+        limit: '1000',
+      });
+      const payload = await fetch(`/api/chart/candles?${params}`, { signal: abortController.signal }).then(readJson);
+      if (reloadEpoch !== state.reloadEpoch || symbol !== state.symbol || interval !== state.interval || state.mode !== 'review') return;
+      const knownTimes = new Set(state.candleData.map((candle) => Number(candle.time)));
+      const later = (payload.candles || [])
+        .map(toChartCandle)
+        .filter((candle) => !knownTimes.has(Number(candle.time)))
+        .sort((left, right) => Number(left.time) - Number(right.time));
+      state.reviewHasMoreLater = payload.hasMore !== false;
+      state.reviewRightLoadArmed = state.reviewHasMoreLater;
+      if (!later.length) {
+        state.reviewHasMoreLater = false;
+        setStatus(payload.warning || '已加载至严格截止时间。', Boolean(payload.warning));
+        return;
+      }
+      state.candleData.push(...later);
+      renderCandleData();
+      if (visibleRange) state.chart.timeScale().setVisibleLogicalRange(visibleRange);
+      const cacheLabel = payload.source === 'bybit' ? '后续数据已写入 SQLite' : '后续数据已从 SQLite 读取';
+      const suffix = state.reviewHasMoreLater ? ' · 继续向右拖动可加载更多' : ' · 已到严格截止时间';
+      setStatus(payload.warning ? `${cacheLabel}；${payload.warning}` : `${cacheLabel} · 当前共 ${state.candleData.length} 根${suffix}`, Boolean(payload.warning));
+    } catch (error) {
+      if (error?.name === 'AbortError' || reloadEpoch !== state.reloadEpoch) return;
+      setStatus(error.message || '后续 K 线加载失败，请稍后重试', true);
+    } finally {
+      if (reloadEpoch === state.reloadEpoch) {
+        state.laterAbortController = null;
+        state.loadingLater = false;
+      }
     }
   }
 
@@ -620,7 +775,7 @@
     };
   }
 
-  function renderCandleData() {
+  function renderCandleData(extraAnchorTimes = null) {
     const candles = state.mode === 'replay'
       ? state.candleData.slice(0, state.replayVisibleCount)
       : state.candleData;
@@ -636,13 +791,83 @@
         addWhitespace(candle.time);
       });
     }
-    drawingAnchorTimes().forEach(addWhitespace);
+    (extraAnchorTimes || drawingAnchorTimes()).forEach(addWhitespace);
     const lastKnown = Number(state.candleData[state.candleData.length - 1]?.time || candles[candles.length - 1]?.time || 0);
     for (let index = 1; lastKnown && index <= FUTURE_WHITESPACE_BARS; index += 1) {
       addWhitespace(lastKnown + INTERVAL_SECONDS[state.interval] * index);
     }
     state.series.setData([...chartEntries.values()].sort((left, right) => Number(left.time) - Number(right.time)));
+    updateCandleData(latestVisibleCandle());
     refreshVolumeProfiles();
+  }
+
+  function drawingAnchorTimesFromPayload(drawings) {
+    const times = [];
+    const firstCandleTime = Number(state.candleData[0]?.time || 0);
+    const lastCandleTime = Number(state.candleData[state.candleData.length - 1]?.time || 0);
+    const addUserAnchor = (time) => {
+      const normalized = Number(time);
+      if (!Number.isFinite(normalized) || normalized <= 0) return;
+      if (firstCandleTime && lastCandleTime && normalized >= firstCandleTime && normalized <= lastCandleTime) return;
+      times.push(normalized);
+    };
+    drawings.forEach((drawing) => {
+      drawing.points?.forEach((point) => addUserAnchor(point.timestamp));
+      drawing.anchors?.forEach((anchor) => addUserAnchor(anchor.time));
+    });
+    addUserAnchor(Math.floor(state.anchor / 1000));
+    return times;
+  }
+
+  function latestVisibleCandle() {
+    const visibleCount = state.mode === 'replay' ? state.replayVisibleCount : state.candleData.length;
+    return visibleCount > 0 ? state.candleData[visibleCount - 1] : null;
+  }
+
+  function updateCandleData(candle) {
+    if (!candle || !Number.isFinite(Number(candle.open))) {
+      [elements.candleOpen, elements.candleHigh, elements.candleLow, elements.candleClose, elements.candleChange]
+        .forEach((element) => { element.textContent = '--'; element.style.color = ''; });
+      return;
+    }
+    const open = Number(candle.open);
+    const high = Number(candle.high);
+    const low = Number(candle.low);
+    const close = Number(candle.close);
+    const change = close - open;
+    const changePercent = open ? change / open * 100 : 0;
+    const color = change >= 0 ? '#089981' : '#f04452';
+    const formatPrice = (value) => Number(value).toLocaleString('en-US', {
+      minimumFractionDigits: 2,
+      maximumFractionDigits: 2,
+    });
+
+    elements.candleOpen.textContent = formatPrice(open);
+    elements.candleHigh.textContent = formatPrice(high);
+    elements.candleLow.textContent = formatPrice(low);
+    elements.candleClose.textContent = formatPrice(close);
+    elements.candleChange.textContent = `${change >= 0 ? '+' : ''}${formatPrice(change)} (${changePercent >= 0 ? '+' : ''}${changePercent.toFixed(2)}%)`;
+    [elements.candleOpen, elements.candleHigh, elements.candleLow, elements.candleClose, elements.candleChange]
+      .forEach((element) => { element.style.color = color; });
+  }
+
+  function setInitialVisibleRange() {
+    const visibleCandles = state.mode === 'replay'
+      ? state.candleData.slice(0, state.replayVisibleCount)
+      : state.candleData;
+    const firstCandle = visibleCandles[0];
+    const lastCandle = visibleCandles[visibleCandles.length - 1];
+    if (!firstCandle || !lastCandle) return;
+
+    const timeScale = state.chart.timeScale();
+    const firstIndex = timeScale.timeToIndex(firstCandle.time, true);
+    const lastIndex = timeScale.timeToIndex(lastCandle.time, true);
+    if (!Number.isFinite(firstIndex) || !Number.isFinite(lastIndex)) return;
+
+    timeScale.setVisibleLogicalRange({
+      from: Math.max(firstIndex, lastIndex - 159),
+      to: lastIndex + VISIBLE_RIGHT_PADDING_BARS,
+    });
   }
 
   function drawingAnchorTimes() {
@@ -667,8 +892,7 @@
         JSON.parse(state.lineTools.exportLineTools() || '[]').forEach((drawing) => {
           drawing.points?.forEach((point) => {
             const timestamp = Number(point.timestamp);
-            if (drawing.id === SYSTEM_MARKER_ID) times.push(timestamp);
-            else addUserAnchor(timestamp);
+            addUserAnchor(timestamp);
           });
         });
       } catch (_) {
@@ -681,7 +905,7 @@
   async function reloadActiveScope() {
     stopReplayPlayback();
     if (state.mode === 'replay') {
-      if (state.replayDate) await beginReplay(state.replayDate);
+      if (state.replayDate) await beginReplay(state.replayDate, state.replayCursorTimestamp);
       else resetReplaySelection();
       return;
     }
@@ -696,10 +920,14 @@
     state.replayReady = false;
     state.replayStartIndex = 0;
     state.replayVisibleCount = 0;
+    state.replayCursorTimestamp = 0;
+    state.replayHasMore = false;
+    state.loadingLater = false;
     state.candleData = [];
     state.video = null;
     state.anchor = 0;
     if (state.series) state.series.setData([]);
+    updateCandleData(null);
     if (state.lineTools) state.lineTools.removeAllLineTools();
     state.enhancedDrawings?.clearAll();
     state.drawingIds.clear();
@@ -718,7 +946,7 @@
     await beginReplay(date);
   }
 
-  async function beginReplay(date) {
+  async function beginReplay(date, preservedCursorTimestamp = 0) {
     stopReplayPlayback();
     state.replayDate = date;
     state.replayReady = false;
@@ -729,6 +957,11 @@
       setStatus('复盘日期无效。', true);
       return;
     }
+    state.replayCursorTimestamp = Number.isFinite(preservedCursorTimestamp) && preservedCursorTimestamp >= state.anchor
+      ? preservedCursorTimestamp
+      : state.anchor;
+    state.replayHasMore = true;
+    state.loadingLater = false;
     state.video = {
       '视频ID': `replay-${date}`,
       '视频标题': `${date} 行情复盘`,
@@ -736,7 +969,7 @@
       '发布时间（页面时区）': '00:00:00+08:00',
     };
     elements.reviewVideoTitle.textContent = `${date} 行情复盘`;
-    elements.reviewVideoTime.textContent = '北京时间 00:00 起 · 未来行情逐根揭示';
+    elements.reviewVideoTime.textContent = '北京时间 00:00 起 · 未来行情逐根揭示 · 切换周期保持同一时刻';
     elements.startReplay.textContent = '重新开始';
     updateReplayControls();
     await reloadScope();
@@ -749,13 +982,14 @@
       setStatus('回放已暂停。');
       return;
     }
-    if (state.replayVisibleCount >= state.candleData.length) {
-      setStatus('回放已经完成，可点击“重新开始”。');
+    if (state.replayVisibleCount >= state.candleData.length && !state.replayHasMore) {
+      setStatus('已到达最新可用的已收盘 K 线。');
       return;
     }
-    state.replayTimer = window.setInterval(() => stepReplay(false), 1000 / state.replaySpeed);
+    state.replayTimer = window.setInterval(() => void stepReplay(false), 1000 / state.replaySpeed);
     updateReplayControls();
     setStatus(`正在以 ${state.replaySpeed}× 速度回放…`);
+    if (state.replayVisibleCount >= state.candleData.length) void stepReplay(false);
   }
 
   function stopReplayPlayback() {
@@ -764,30 +998,97 @@
     updateReplayControls();
   }
 
-  function stepReplay(pauseFirst) {
+  async function stepReplay(pauseFirst) {
     if (!state.replayReady) return;
     if (pauseFirst) stopReplayPlayback();
+    if (state.loadingLater) return;
     if (state.replayVisibleCount >= state.candleData.length) {
-      stopReplayPlayback();
-      setStatus('回放完成，已到达当前范围的最后一根 K 线。');
-      updateReplayControls();
-      return;
+      if (state.replayHasMore) {
+        try {
+          await loadLaterReplayCandles();
+          if (state.mode !== 'replay') return;
+        } catch (error) {
+          stopReplayPlayback();
+          setStatus(error.message || '后续 K 线加载失败，可再次点击播放重试。', true);
+          return;
+        }
+      }
+      if (state.replayVisibleCount >= state.candleData.length) {
+        stopReplayPlayback();
+        setStatus('已到达最新可用的已收盘 K 线。');
+        updateReplayControls();
+        return;
+      }
     }
     const visibleRange = state.chart.timeScale().getVisibleLogicalRange();
     const candleLogicalIndex = state.replayVisibleCount;
     const candle = state.candleData[state.replayVisibleCount];
     state.replayVisibleCount += 1;
+    state.replayCursorTimestamp = (Number(candle.time) + INTERVAL_SECONDS[state.interval]) * 1000;
     // Hidden replay candles already exist as whitespace entries. Replacing just the
     // revealed entry avoids setData(), which resets the user's viewport on every step.
     state.series.update(candle, true);
+    updateCandleData(candle);
     refreshVolumeProfiles();
     followReplayCandle(visibleRange, candleLogicalIndex);
     updateReplayControls();
-    if (state.replayVisibleCount >= state.candleData.length) {
+    if (state.replayVisibleCount >= state.candleData.length && !state.replayHasMore) {
       stopReplayPlayback();
-      setStatus('回放完成，已到达当前范围的最后一根 K 线。');
+      setStatus('已到达最新可用的已收盘 K 线。');
     } else if (pauseFirst) {
       setStatus('已前进一根 K 线。');
+    }
+  }
+
+  async function loadLaterReplayCandles() {
+    if (state.loadingLater || !state.replayHasMore || !state.candleData.length) return 0;
+    state.loadingLater = true;
+    state.laterAbortController?.abort();
+    const abortController = new AbortController();
+    state.laterAbortController = abortController;
+    const reloadEpoch = state.reloadEpoch;
+    updateReplayControls();
+    const symbol = state.symbol;
+    const interval = state.interval;
+    const lastTimestamp = Number(state.candleData[state.candleData.length - 1].time) * 1000;
+    const visibleRange = state.chart.timeScale().getVisibleLogicalRange();
+    setStatus(`正在续载 ${INTERVAL_LABELS[interval]} K 线…`);
+    try {
+      const params = new URLSearchParams({
+        symbol,
+        interval,
+        after: String(lastTimestamp),
+        limit: '1000',
+      });
+      const payload = await fetch(`/api/chart/candles?${params}`, { signal: abortController.signal }).then(readJson);
+      if (reloadEpoch !== state.reloadEpoch || symbol !== state.symbol || interval !== state.interval) return 0;
+      if (symbol !== state.symbol || interval !== state.interval || state.mode !== 'replay') return 0;
+      const knownTimes = new Set(state.candleData.map((candle) => Number(candle.time)));
+      const later = (payload.candles || [])
+        .map(toChartCandle)
+        .filter((candle) => !knownTimes.has(Number(candle.time)))
+        .sort((left, right) => Number(left.time) - Number(right.time));
+      state.replayHasMore = payload.hasMore !== false;
+      if (!later.length) {
+        state.replayHasMore = false;
+        if (payload.warning) setStatus(payload.warning, true);
+        return 0;
+      }
+      state.candleData.push(...later);
+      renderCandleData();
+      if (visibleRange) state.chart.timeScale().setVisibleLogicalRange(visibleRange);
+      elements.chartCutoff.textContent = `起点：${formatTimestamp(state.anchor)} · 已续载至 ${formatTimestamp((Number(later[later.length - 1].time) + INTERVAL_SECONDS[interval]) * 1000)}`;
+      if (payload.warning) setStatus(payload.warning, true);
+      return later.length;
+    } catch (error) {
+      if (error?.name === 'AbortError' || reloadEpoch !== state.reloadEpoch) return 0;
+      throw error;
+    } finally {
+      if (reloadEpoch === state.reloadEpoch) {
+        state.laterAbortController = null;
+        state.loadingLater = false;
+        updateReplayControls();
+      }
     }
   }
 
@@ -822,20 +1123,18 @@
   function updateReplayControls() {
     if (!elements.toggleReplay) return;
     const remaining = Math.max(0, state.candleData.length - state.replayVisibleCount);
-    const played = Math.max(0, state.replayVisibleCount - state.replayStartIndex);
-    const total = Math.max(0, state.candleData.length - state.replayStartIndex);
-    elements.toggleReplay.disabled = !state.replayReady || remaining === 0;
-    elements.stepReplay.disabled = !state.replayReady || remaining === 0;
+    const canAdvance = remaining > 0 || state.replayHasMore;
+    elements.toggleReplay.disabled = !state.replayReady || !canAdvance;
+    elements.stepReplay.disabled = !state.replayReady || !canAdvance || state.loadingLater;
     elements.toggleReplay.textContent = state.replayTimer ? '❚❚ 暂停' : '▶ 播放';
     if (!state.replayReady) {
       elements.replayProgress.textContent = '请选择日期';
       return;
     }
-    const lastVisible = state.candleData[state.replayVisibleCount - 1];
-    const currentTime = lastVisible
-      ? formatTimestamp((Number(lastVisible.time) + INTERVAL_SECONDS[state.interval]) * 1000)
-      : formatTimestamp(state.anchor);
-    elements.replayProgress.textContent = `${currentTime} · ${played} / ${total} 根`;
+    const currentTime = formatTimestamp(state.replayCursorTimestamp || state.anchor);
+    const played = Math.max(0, Math.floor(((state.replayCursorTimestamp || state.anchor) - state.anchor) / (INTERVAL_SECONDS[state.interval] * 1000)));
+    const bufferLabel = state.loadingLater ? '正在续载…' : `已缓冲 ${remaining} 根`;
+    elements.replayProgress.textContent = `${currentTime} · 已播放约 ${played} 根 · ${bufferLabel}`;
   }
 
   async function saveFutureDays() {
@@ -1495,12 +1794,22 @@
   }
 
   function addVideoPublishedMarker() {
-    const price = state.candleData.find((candle) => Number(candle.time) >= Math.floor(state.anchor / 1000))?.close
-      || state.candleData[state.candleData.length - 1]?.close;
-    if (!price) return;
+    if (!Array.isArray(state.candleData) || state.candleData.length === 0) return;
+    const targetSeconds = Math.floor(state.anchor / 1000);
+    let closestCandle = state.candleData[0];
+    let minDiff = Math.abs(Number(closestCandle.time) - targetSeconds);
+    for (let i = 1; i < state.candleData.length; i++) {
+      const diff = Math.abs(Number(state.candleData[i].time) - targetSeconds);
+      if (diff < minDiff) {
+        minDiff = diff;
+        closestCandle = state.candleData[i];
+      }
+    }
+    const markerTime = Number(closestCandle.time);
+    const price = closestCandle.close;
     state.lineTools.createOrUpdateLineTool(
       'VerticalLine',
-      [{ timestamp: Math.floor(state.anchor / 1000), price }],
+      [{ timestamp: markerTime, price }],
       {
         editable: false,
         showTimeAxisLabels: false,

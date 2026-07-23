@@ -1,13 +1,84 @@
+:root,
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --bg-app: #0b0e14;
+  --bg-card: #151922;
+  --bg-card-hover: #1c2230;
+  --bg-card-glass: rgba(21, 25, 34, 0.82);
+  --border-color: rgba(255, 255, 255, 0.08);
+  --border-hover: rgba(255, 255, 255, 0.18);
+  --border-focus: #3b82f6;
+
+  --text-primary: #f1f5f9;
+  --text-secondary: #94a3b8;
+  --text-muted: #64748b;
+
+  --accent-blue: #3b82f6;
+  --accent-blue-dark: #2563eb;
+  --accent-blue-light: #60a5fa;
+  --accent-cyan: #06b6d4;
+  --accent-green: #10b981;
+  --accent-amber: #f59e0b;
+
+  --badge-unlearned-bg: rgba(51, 65, 85, 0.5);
+  --badge-unlearned-text: #cbd5e1;
+  --badge-learning-bg: rgba(245, 158, 11, 0.15);
+  --badge-learning-text: #fbbf24;
+  --badge-learned-bg: rgba(16, 185, 129, 0.15);
+  --badge-learned-text: #34d399;
+
+  --chart-bg: #0b0e14;
+  --chart-grid: rgba(255, 255, 255, 0.04);
+  --chart-text: #94a3b8;
+  --shadow-card: 0 8px 32px rgba(0, 0, 0, 0.4);
+  --shadow-glow: 0 0 16px rgba(59, 130, 246, 0.25);
+}
+
+:root[data-theme="light"] {
+  color-scheme: light;
+  --bg-app: #f8fafc;
+  --bg-card: #ffffff;
+  --bg-card-hover: #f1f5f9;
+  --bg-card-glass: rgba(255, 255, 255, 0.88);
+  --border-color: #e2e8f0;
+  --border-hover: #cbd5e1;
+  --border-focus: #2563eb;
+
+  --text-primary: #0f172a;
+  --text-secondary: #475569;
+  --text-muted: #94a3b8;
+
+  --accent-blue: #2563eb;
+  --accent-blue-dark: #1d4ed8;
+  --accent-blue-light: #3b82f6;
+  --accent-cyan: #0891b2;
+  --accent-green: #059669;
+  --accent-amber: #d97706;
+
+  --badge-unlearned-bg: #f1f5f9;
+  --badge-unlearned-text: #475569;
+  --badge-learning-bg: #fef3c7;
+  --badge-learning-text: #b45309;
+  --badge-learned-bg: #d1fae5;
+  --badge-learned-text: #047857;
+
+  --chart-bg: #ffffff;
+  --chart-grid: rgba(0, 0, 0, 0.04);
+  --chart-text: #475569;
+  --shadow-card: 0 4px 20px rgba(0, 0, 0, 0.06);
+  --shadow-glow: 0 0 14px rgba(37, 99, 235, 0.15);
+}
+
 .review-open {
-  border-color: #6e91d8;
-  color: #234aa8;
+  border-color: var(--accent-blue);
+  color: var(--accent-blue-dark);
   font-weight: 700;
 }
 
 body[data-review-standalone="true"] {
   margin: 0;
   overflow: hidden;
-  background: #ffffff;
+  background: var(--bg-app);
 }
 
 body[data-review-standalone="true"] .chart-dialog {
@@ -32,16 +103,18 @@ body[data-review-standalone="true"] .chart-dialog {
   max-width: none;
   max-height: none;
   padding: 0;
-  border: 1px solid #d9e1ec;
-  border-radius: 14px;
-  background: #ffffff;
-  color: #172033;
-  box-shadow: 0 26px 80px rgba(42, 63, 95, .18);
+  border: 1px solid var(--border-color);
+  border-radius: 16px;
+  background: var(--bg-card);
+  color: var(--text-primary);
+  box-shadow: var(--shadow-card);
+  overflow: hidden;
+  transition: background-color 0.2s ease, border-color 0.2s ease;
 }
 
 .chart-dialog::backdrop {
-  background: rgba(71, 85, 105, .28);
-  backdrop-filter: blur(4px);
+  background: rgba(11, 14, 20, 0.65);
+  backdrop-filter: blur(8px);
 }
 
 .chart-shell {
@@ -49,6 +122,7 @@ body[data-review-standalone="true"] .chart-dialog {
   min-height: 0;
   display: grid;
   grid-template-rows: auto minmax(0, 1fr) auto;
+  background: var(--bg-app);
 }
 
 .chart-header {
@@ -57,9 +131,9 @@ body[data-review-standalone="true"] .chart-dialog {
   align-items: center;
   justify-content: space-between;
   gap: 18px;
-  padding: 12px 14px;
-  border-bottom: 1px solid #d9e1ec;
-  background: #ffffff;
+  padding: 12px 18px;
+  border-bottom: 1px solid var(--border-color);
+  background: var(--bg-card);
 }
 
 .chart-heading {
@@ -76,11 +150,13 @@ body[data-review-standalone="true"] .chart-dialog {
 
 .chart-heading strong {
   font-size: 16px;
+  font-weight: 700;
+  color: var(--text-primary);
 }
 
 .chart-heading span {
   margin-top: 4px;
-  color: #64748b;
+  color: var(--text-secondary);
   font-size: 12px;
 }
 
@@ -88,18 +164,20 @@ body[data-review-standalone="true"] .chart-dialog {
   display: flex;
   align-items: center;
   justify-content: flex-end;
-  gap: 7px;
+  gap: 8px;
   flex-wrap: wrap;
 }
 
 .replay-controls {
   display: flex;
   align-items: center;
-  gap: 6px;
-  padding: 4px 6px;
-  border: 1px solid #bfdbfe;
-  border-radius: 8px;
-  background: #eff6ff;
+  gap: 8px;
+  padding: 5px 10px;
+  border: 1px solid var(--border-color);
+  border-radius: 12px;
+  background: var(--bg-card-glass);
+  backdrop-filter: blur(8px);
+  box-shadow: var(--shadow-card);
 }
 
 .replay-controls[hidden] {
@@ -110,28 +188,97 @@ body[data-review-standalone="true"] .chart-dialog {
   display: flex;
   align-items: center;
   gap: 5px;
-  color: #475569;
+  color: var(--text-secondary);
   font-size: 12px;
   white-space: nowrap;
 }
 
+.replay-date-picker {
+  gap: 7px !important;
+}
+
+.replay-date-caption {
+  color: var(--text-muted);
+  font-weight: 600;
+  letter-spacing: 0.02em;
+}
+
+.replay-date-field {
+  display: flex;
+  min-height: 32px;
+  align-items: center;
+  gap: 7px;
+  padding: 0 10px;
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  background: var(--bg-card);
+  box-shadow: inset 0 1px 2px rgba(0, 0, 0, 0.1);
+  transition: border-color 0.16s ease, box-shadow 0.16s ease;
+}
+
+.replay-date-field:focus-within {
+  border-color: var(--accent-blue);
+  box-shadow: var(--shadow-glow);
+}
+
+.replay-date-field svg {
+  width: 16px;
+  height: 16px;
+  fill: none;
+  stroke: var(--accent-blue);
+  stroke-width: 1.7;
+  stroke-linecap: round;
+}
+
 #replay-date {
-  width: 138px;
+  width: 126px;
+  min-height: 28px;
+  padding: 0;
+  border: 0;
+  outline: 0;
+  background: transparent;
+  color: var(--text-primary);
+  font: 700 13px/1 system-ui, sans-serif;
+  font-variant-numeric: tabular-nums;
+  cursor: pointer;
+}
+
+#replay-date::-webkit-calendar-picker-indicator {
+  width: 16px;
+  height: 16px;
+  margin: 0;
+  opacity: 0.7;
+  cursor: pointer;
+  filter: var(--calendar-filter, none);
+}
+
+.chart-controls .replay-start {
+  border-color: var(--accent-blue);
+  background: var(--accent-blue);
+  color: #ffffff;
+  font-weight: 700;
+  box-shadow: 0 2px 10px rgba(59, 130, 246, 0.3);
+}
+
+.chart-controls .replay-start:hover {
+  background: var(--accent-blue-dark);
+  border-color: var(--accent-blue-dark);
 }
 
 #replay-speed {
   min-height: 32px;
-  border: 1px solid #c5d0e0;
-  border-radius: 6px;
-  background: #fff;
-  color: #243b61;
-  padding: 5px 7px;
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  background: var(--bg-card);
+  color: var(--text-primary);
+  padding: 4px 8px;
 }
 
 #replay-progress {
-  min-width: 170px;
-  color: #315fce;
+  min-width: 160px;
+  color: var(--accent-cyan);
   font-size: 12px;
+  font-weight: 600;
   font-variant-numeric: tabular-nums;
   white-space: nowrap;
 }
@@ -141,44 +288,54 @@ body[data-review-standalone="true"] .chart-dialog {
 .chart-controls input,
 .drawing-tools button {
   min-height: 32px;
-  border: 1px solid #c5d0e0;
-  border-radius: 6px;
-  background: #ffffff;
-  color: #243b61;
-  padding: 5px 9px;
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  background: var(--bg-card);
+  color: var(--text-primary);
+  padding: 4px 10px;
+  font-size: 13px;
+  transition: all 0.16s ease;
 }
 
 .chart-controls button:hover,
-.drawing-tools button:hover:not(:disabled),
+.drawing-tools button:hover:not(:disabled) {
+  border-color: var(--border-hover);
+  background: var(--bg-card-hover);
+}
+
 .drawing-tools button.active,
 .chart-controls button.active,
 .interval-buttons button.active {
-  background: #2563eb;
-  border-color: #3b82f6;
-  color: #fff;
+  background: var(--accent-blue);
+  border-color: var(--accent-blue);
+  color: #ffffff;
+  box-shadow: var(--shadow-glow);
 }
 
 .interval-buttons {
   display: flex;
-  gap: 4px;
+  gap: 3px;
   padding: 3px;
-  border: 1px solid #c5d0e0;
-  border-radius: 7px;
-  background: #f4f7fb;
+  border: 1px solid var(--border-color);
+  border-radius: 9px;
+  background: var(--bg-app);
 }
 
 .interval-buttons button {
-  min-width: 42px;
+  min-width: 38px;
   border-color: transparent;
-  padding-inline: 8px;
+  padding-inline: 7px;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-secondary);
 }
 
 .future-days-control,
 .offline-mode-control {
   display: flex;
   align-items: center;
-  gap: 5px;
-  color: #64748b;
+  gap: 6px;
+  color: var(--text-secondary);
   font-size: 12px;
 }
 
@@ -188,28 +345,67 @@ body[data-review-standalone="true"] .chart-dialog {
 }
 
 .future-days-control input {
-  width: 62px;
+  width: 58px;
+  background: var(--bg-card);
+  color: var(--text-primary);
+  border: 1px solid var(--border-color);
+  border-radius: 6px;
 }
 
 .offline-mode-control input {
   min-height: auto;
-  width: 16px;
-  height: 16px;
+  width: 15px;
+  height: 15px;
   margin: 0;
   padding: 0;
-  accent-color: #2563eb;
+  accent-color: var(--accent-blue);
 }
 
 .chart-stage {
   position: relative;
   min-height: 0;
   overflow: hidden;
-  background: #ffffff;
+  background: var(--chart-bg);
 }
 
 #review-chart {
   position: absolute;
   inset: 0;
+}
+
+.chart-candle-data {
+  position: absolute;
+  z-index: 3;
+  top: 12px;
+  left: 16px;
+  display: flex;
+  max-width: calc(100% - 32px);
+  min-height: 32px;
+  align-items: center;
+  gap: 10px;
+  padding: 5px 12px;
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  background: var(--bg-card-glass);
+  color: var(--text-primary);
+  font: 600 13px/1.4 system-ui, sans-serif;
+  font-variant-numeric: tabular-nums;
+  pointer-events: none;
+  backdrop-filter: blur(8px);
+  box-shadow: var(--shadow-card);
+}
+
+.chart-candle-data span {
+  white-space: nowrap;
+}
+
+.chart-candle-data strong {
+  font-weight: 700;
+  color: var(--text-primary);
+}
+
+.future-days-control[hidden] {
+  display: none;
 }
 
 .drawing-input-layer {
@@ -227,19 +423,19 @@ body[data-review-standalone="true"] .chart-dialog {
 .drawing-tools {
   position: absolute;
   z-index: 5;
-  top: 10px;
-  left: 10px;
+  top: 54px;
+  left: 12px;
   display: flex;
-  max-width: calc(100% - 20px);
+  max-width: calc(100% - 24px);
   align-items: center;
-  gap: 0;
-  padding: 4px;
+  gap: 2px;
+  padding: 4px 6px;
   overflow-x: auto;
-  border: 1px solid #c5d0e0;
-  border-radius: 8px;
-  background: rgba(255, 255, 255, .96);
-  box-shadow: 0 4px 14px rgba(42, 63, 95, .12);
-  backdrop-filter: blur(6px);
+  border: 1px solid var(--border-color);
+  border-radius: 10px;
+  background: var(--bg-card-glass);
+  box-shadow: var(--shadow-card);
+  backdrop-filter: blur(10px);
   scrollbar-width: none;
 }
 
@@ -254,33 +450,49 @@ body[data-review-standalone="true"] .chart-dialog {
 }
 
 .drawing-tool-group:first-child {
-  padding-left: 4px;
+  padding-left: 2px;
 }
 
 .drawing-tool-group:last-child {
-  padding-right: 0;
+  padding-right: 2px;
 }
 
 .drawing-tool-group + .drawing-tool-group {
-  border-left: 1px solid #e2e8f0;
+  border-left: 1px solid var(--border-color);
 }
 
 .drawing-tools button {
   display: grid;
   place-items: center;
-  width: 36px;
-  min-width: 36px;
-  height: 34px;
-  min-height: 34px;
+  width: 34px;
+  min-width: 34px;
+  height: 32px;
+  min-height: 32px;
   padding: 0;
-  font-size: 18px;
-  line-height: 1;
+  border-radius: 6px;
+  border: 1px solid transparent;
+  background: transparent;
+  color: var(--text-secondary);
   cursor: pointer;
+  transition: all 0.16s ease;
+}
+
+.drawing-tools button:hover:not(:disabled) {
+  background: var(--bg-card-hover);
+  color: var(--text-primary);
+  border-color: var(--border-color);
+}
+
+.drawing-tools button.active {
+  background: var(--accent-blue);
+  color: #ffffff;
+  border-color: var(--accent-blue);
+  box-shadow: var(--shadow-glow);
 }
 
 .drawing-tools button svg {
-  width: 25px;
-  height: 25px;
+  width: 22px;
+  height: 22px;
   overflow: visible;
   fill: none;
   stroke: currentColor;
@@ -290,12 +502,12 @@ body[data-review-standalone="true"] .chart-dialog {
 }
 
 .drawing-tools button svg circle {
-  fill: #fff;
+  fill: var(--bg-card);
 }
 
 .drawing-tools button.active svg circle,
 .drawing-tools button:hover svg circle {
-  fill: #2563eb;
+  fill: var(--accent-blue);
 }
 
 .drawing-tools button svg text {
@@ -306,9 +518,9 @@ body[data-review-standalone="true"] .chart-dialog {
 }
 
 .drawing-tools .drawing-tools-handle {
-  width: 28px;
-  min-width: 28px;
-  color: #64748b;
+  width: 24px;
+  min-width: 24px;
+  color: var(--text-muted);
   cursor: grab;
   touch-action: none;
   user-select: none;
@@ -320,11 +532,11 @@ body[data-review-standalone="true"] .chart-dialog {
 }
 
 .drawing-tools.dragging {
-  box-shadow: 0 8px 24px rgba(42, 63, 95, .22);
+  box-shadow: var(--shadow-card);
 }
 
 .drawing-tools button:disabled {
-  opacity: .42;
+  opacity: 0.38;
   cursor: not-allowed;
 }
 
@@ -334,8 +546,9 @@ body[data-review-standalone="true"] .chart-dialog {
   inset: 0;
   display: grid;
   place-items: center;
-  background: rgba(255, 255, 255, .86);
-  color: #465a78;
+  background: var(--bg-card-glass);
+  color: var(--text-secondary);
+  backdrop-filter: blur(4px);
 }
 
 .chart-loading[hidden] {
@@ -347,16 +560,38 @@ body[data-review-standalone="true"] .chart-dialog {
   align-items: center;
   justify-content: space-between;
   gap: 12px;
-  min-height: 38px;
-  padding: 8px 14px;
-  border-top: 1px solid #d9e1ec;
-  background: #ffffff;
-  color: #64748b;
+  min-height: 36px;
+  padding: 8px 18px;
+  border-top: 1px solid var(--border-color);
+  background: var(--bg-card);
+  color: var(--text-secondary);
   font-size: 12px;
 }
 
 #chart-status.error {
-  color: #fb7185;
+  color: #ef4444;
+}
+
+/* Theme Toggle Button Style */
+.theme-toggle-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 7px 13px;
+  border: 1px solid var(--border-color);
+  border-radius: 999px;
+  background: var(--bg-card);
+  color: var(--text-primary);
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.theme-toggle-btn:hover {
+  border-color: var(--accent-blue);
+  background: var(--bg-card-hover);
+  box-shadow: var(--shadow-glow);
 }
 
 @media (max-width: 760px) {
@@ -382,6 +617,6 @@ body[data-review-standalone="true"] .chart-dialog {
   }
 
   .drawing-tools {
-    max-width: calc(100% - 20px);
+    max-width: calc(100% - 24px);
   }
 }
