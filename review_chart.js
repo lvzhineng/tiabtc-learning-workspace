@@ -46,6 +46,8 @@
     futureDays: 3,
     offlineMode: true,
     logarithmicScale: false,
+    allSymbols: [],
+    paperTrades: [],
     chart: null,
     series: null,
     lineTools: null,
@@ -277,6 +279,274 @@
   function applyChartTheme() {
     if (!state.chart) return;
     state.chart.applyOptions(getChartThemeOptions());
+  }
+
+
+  async function loadSymbolsList() {
+    try {
+      const res = await fetch('/api/symbols').then(readJson);
+      state.allSymbols = res.symbols || [];
+      renderSymbolSelectorOptions();
+    } catch (_) {}
+  }
+
+  function renderSymbolSelectorOptions() {
+    if (!elements.chartSymbol || !Array.isArray(state.allSymbols) || state.allSymbols.length === 0) return;
+    const currentVal = state.symbol;
+    const presets = state.allSymbols.filter((item) => !item.custom);
+    const customs = state.allSymbols.filter((item) => item.custom);
+
+    let html = '<optgroup label="热门标的">';
+    presets.forEach((item) => {
+      html += `<option value="${item.symbol}" ${item.symbol === currentVal ? 'selected' : ''}>${item.name}</option>`;
+    });
+    html += '</optgroup>';
+
+    if (customs.length > 0) {
+      html += '<optgroup label="我的自定义">';
+      customs.forEach((item) => {
+        html += `<option value="${item.symbol}" ${item.symbol === currentVal ? 'selected' : ''}>${item.name}</option>`;
+      });
+      html += '</optgroup>';
+    }
+
+    html += '<optgroup label="更多操作"><option value="__add__">＋ 添加新合约…</option></optgroup>';
+    elements.chartSymbol.innerHTML = html;
+  }
+
+  function openCustomSymbolDialog() {
+    if (!elements.customSymbolDialog) return;
+    elements.customSymbolInput.value = '';
+    elements.customSymbolMsg.textContent = '';
+    elements.customSymbolMsg.classList.remove('error');
+    elements.customSymbolDialog.showModal();
+    elements.customSymbolInput.focus();
+  }
+
+  async function handleAddCustomSymbol() {
+    const symbol = (elements.customSymbolInput.value || '').trim().toUpperCase();
+    if (!symbol || !/^[A-Z0-9]{3,15}USDT$/.test(symbol)) {
+      elements.customSymbolMsg.textContent = '合约代码格式无效，请输入如 SOLUSDT 的代码。';
+      elements.customSymbolMsg.classList.add('error');
+      return;
+    }
+    elements.customSymbolMsg.textContent = '正在验证交易所合约有效性…';
+    elements.customSymbolMsg.classList.remove('error');
+    try {
+      const res = await fetch('/api/symbols', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ symbol }),
+      }).then(readJson);
+      elements.customSymbolDialog.close();
+      await loadSymbolsList();
+      state.symbol = res.symbol;
+      renderSymbolSelectorOptions();
+      void reloadScope();
+    } catch (err) {
+      elements.customSymbolMsg.textContent = err.message || '添加合约失败，请检查名称。';
+      elements.customSymbolMsg.classList.add('error');
+    }
+  }
+
+  function getSelectedPositionToolInfo() {
+    const selected = state.enhancedDrawings?.getSelectedDrawing();
+    if (!selected || (selected.type !== 'long-position' && selected.type !== 'short-position')) return null;
+    const points = selected.points || [];
+    if (points.length < 3) return null;
+    const entry = Number(points[0].price);
+    const tp = Number(points[1].price);
+    const sl = Number(points[2].price);
+    if (!entry || !tp || !sl) return null;
+    const isLong = selected.type === 'long-position';
+    const risk = Math.abs(entry - sl);
+    const reward = Math.abs(tp - entry);
+    const rr = risk > 0 ? Number((reward / risk).toFixed(2)) : 1.0;
+    return {
+      type: isLong ? 'LONG' : 'SHORT',
+      entryPrice: entry,
+      tpPrice: tp,
+      slPrice: sl,
+      rrRatio: rr,
+    };
+  }
+
+  function updatePaperTradeButton() {
+    const posInfo = getSelectedPositionToolInfo();
+    const tradeBtn = document.getElementById('record-paper-trade-btn');
+    if (posInfo) {
+      if (!tradeBtn) {
+        const btn = document.createElement('button');
+        btn.id = 'record-paper-trade-btn';
+        btn.type = 'button';
+        btn.className = 'trade-record-btn';
+        btn.textContent = '🎯 模拟开仓';
+        btn.title = `以当前仓位参数录单 (${posInfo.type === 'LONG' ? '做多' : '做空'} R:R=${posInfo.rrRatio})`;
+        btn.onclick = createPaperTradeFromPositionTool;
+        elements.drawingTools.appendChild(btn);
+      }
+    } else if (tradeBtn) {
+      tradeBtn.remove();
+    }
+  }
+
+  async function createPaperTradeFromPositionTool() {
+    const info = getSelectedPositionToolInfo();
+    if (!info) {
+      setStatus('请先在图表上选中做多或做空仓位标注框。', true);
+      return;
+    }
+    const tradePayload = {
+      id: `trade_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
+      videoId: state.videoId || '__global__',
+      symbol: state.symbol,
+      interval: state.interval,
+      direction: info.type,
+      entryPrice: info.entryPrice,
+      tpPrice: info.tpPrice,
+      slPrice: info.slPrice,
+      rrRatio: info.rrRatio,
+      status: 'OPEN',
+      pnlR: 0,
+      createdAt: new Date().toISOString(),
+    };
+    try {
+      await fetch('/api/paper-trades', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(tradePayload),
+      }).then(readJson);
+      setStatus(`🎯 模拟交易录单成功！${info.type === 'LONG' ? '做多' : '做空'} ${state.symbol} (R:R = ${info.rrRatio})`);
+      void checkPaperTradesSettlement();
+      void refreshJournalDrawer();
+    } catch (err) {
+      setStatus(err.message || '模拟交易录单失败', true);
+    }
+  }
+
+  async function checkPaperTradesSettlement() {
+    if (!Array.isArray(state.candleData) || state.candleData.length === 0) return;
+    try {
+      const res = await fetch(`/api/paper-trades?symbol=${state.symbol}`).then(readJson);
+      const trades = res.trades || [];
+      state.paperTrades = trades;
+
+      const openTrades = trades.filter((t) => t.status === 'OPEN');
+      if (openTrades.length === 0) return;
+
+      const visibleCandles = state.mode === 'replay'
+        ? state.candleData.slice(0, state.replayVisibleCount)
+        : state.candleData;
+
+      let settledCount = 0;
+
+      for (const trade of openTrades) {
+        for (const candle of visibleCandles) {
+          const high = Number(candle.high);
+          const low = Number(candle.low);
+          let newStatus = null;
+          let pnlR = 0;
+
+          if (trade.direction === 'LONG') {
+            if (high >= trade.tp_price) {
+              newStatus = 'WIN';
+              pnlR = trade.rr_ratio;
+            } else if (low <= trade.sl_price) {
+              newStatus = 'LOSS';
+              pnlR = -1.0;
+            }
+          } else if (trade.direction === 'SHORT') {
+            if (low <= trade.tp_price) {
+              newStatus = 'WIN';
+              pnlR = trade.rr_ratio;
+            } else if (high >= trade.sl_price) {
+              newStatus = 'LOSS';
+              pnlR = -1.0;
+            }
+          }
+
+          if (newStatus) {
+            trade.status = newStatus;
+            trade.pnlR = pnlR;
+            trade.closedAt = new Date().toISOString();
+            settledCount++;
+            await fetch('/api/paper-trades', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                id: trade.id,
+                videoId: trade.video_id,
+                symbol: trade.symbol,
+                interval: trade.interval,
+                direction: trade.direction,
+                entryPrice: trade.entry_price,
+                tpPrice: trade.tp_price,
+                slPrice: trade.sl_price,
+                rrRatio: trade.rr_ratio,
+                status: newStatus,
+                pnlR: pnlR,
+                closedAt: trade.closedAt,
+              }),
+            });
+            setStatus(`${newStatus === 'WIN' ? '🎉 止盈结算！' : '🔻 止损结算！'} ${trade.symbol} ${trade.direction === 'LONG' ? '做多' : '做空'} (${pnlR > 0 ? '+' : ''}${pnlR}R)`);
+            break;
+          }
+        }
+      }
+
+      if (settledCount > 0) void refreshJournalDrawer();
+    } catch (_) {}
+  }
+
+  async function refreshJournalDrawer() {
+    if (!elements.journalDrawer) return;
+    try {
+      const res = await fetch('/api/paper-trades').then(readJson);
+      const trades = res.trades || [];
+      state.paperTrades = trades;
+
+      const total = trades.length;
+      const closed = trades.filter((t) => t.status !== 'OPEN');
+      const wins = closed.filter((t) => t.status === 'WIN').length;
+      const winRate = closed.length > 0 ? Math.round((wins / closed.length) * 100) : 0;
+      const totalR = closed.reduce((acc, t) => acc + (Number(t.pnl_r) || 0), 0);
+      const winTrades = closed.filter((t) => t.status === 'WIN');
+      const avgRR = winTrades.length > 0
+        ? (winTrades.reduce((acc, t) => acc + Number(t.rr_ratio || 0), 0) / winTrades.length).toFixed(2)
+        : '0.00';
+
+      $('#journal-total-trades').textContent = total;
+      $('#journal-win-rate').textContent = `${winRate}%`;
+      $('#journal-total-r').textContent = `${totalR >= 0 ? '+' : ''}${totalR.toFixed(2)} R`;
+      $('#journal-avg-rr').textContent = avgRR;
+
+      const tbody = $('#journal-table-body');
+      if (trades.length === 0) {
+        tbody.innerHTML = '<tr><td colspan="9" class="empty">暂无模拟交易记录。在图表拉出做多/做空工具即可录单。</td></tr>';
+        return;
+      }
+
+      tbody.innerHTML = trades.map((t) => {
+        const timeStr = t.created_at ? new Date(t.created_at).toLocaleDateString() : '--';
+        const isLong = t.direction === 'LONG';
+        const tagDir = isLong ? '<span class="tag-long">做多</span>' : '<span class="tag-short">做空</span>';
+        let tagStatus = '<span class="tag-open">持仓中</span>';
+        if (t.status === 'WIN') tagStatus = `<span class="tag-win">止盈 +${t.pnl_r}R</span>`;
+        if (t.status === 'LOSS') tagStatus = `<span class="tag-loss">止损 -1.0R</span>`;
+
+        return `<tr>
+          <td>${timeStr}</td>
+          <td><strong>${t.symbol}</strong></td>
+          <td>${tagDir}</td>
+          <td>${t.entry_price}</td>
+          <td>${t.tp_price}</td>
+          <td>${t.sl_price}</td>
+          <td>${t.rr_ratio}</td>
+          <td>${tagStatus}</td>
+          <td><button type="button" class="danger-btn" onclick="window.TiaReviewChart.deleteTrade('${t.id}')">删除</button></td>
+        </tr>`;
+      }).join('');
+    } catch (_) {}
   }
 
   function ensureChart() {
@@ -1822,6 +2092,7 @@
   }
 
   function updateDrawingButtons() {
+    updatePaperTradeButton();
     elements.undoDrawing.disabled = state.restoringHistory || state.undoStack.length === 0;
     elements.redoDrawing.disabled = state.restoringHistory || state.redoStack.length === 0;
     elements.lockDrawing.disabled = !state.selectedId;

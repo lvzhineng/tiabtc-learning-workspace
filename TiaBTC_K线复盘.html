@@ -37,6 +37,7 @@
           <button id="price-scale-mode" type="button" aria-pressed="false" title="切换对数价格坐标">Log</button>
           <label class="future-days-control">发布后 <input id="future-days" type="number" min="0" max="30" step="1" value="3"> 天</label>
           <label class="offline-mode-control"><input id="offline-mode" type="checkbox" checked> 仅本地</label>
+          <button id="open-journal-btn" type="button" class="journal-btn">📊 战绩面板</button>
           <button id="close-review" type="button">关闭</button>
         </div>
       </header>
@@ -92,7 +93,7 @@
   <script src="/vendor/line-tools/rectangle.min.js"></script>
   <script src="/vendor/line-tools/parallel-channel.min.js"></script>
   <script src="/vendor/lightweight-charts-drawing.umd.js"></script>
-  <script src="/review_chart.js?v=20260723-3"></script>
+  <script src="/review_chart.js?v=20260723-5"></script>
   <script>
     const params = new URLSearchParams(window.location.search);
     const video = {
@@ -110,5 +111,73 @@
       document.querySelector('#chart-status').classList.add('error');
     }
   </script>
+
+  <!-- Custom Symbol Modal -->
+  <dialog id="custom-symbol-dialog" class="chart-dialog-modal">
+    <div class="modal-card">
+      <h3>＋ 添加自定义 USDT 永续合约</h3>
+      <p class="modal-tip">输入合约代码后，系统将自动校验 Bybit 交易所有效性并拉取 K 线。</p>
+      <div class="modal-field">
+        <input id="custom-symbol-input" type="text" placeholder="例如: SOLUSDT, SUIUSDT, ORDIUSDT..." autocomplete="off">
+      </div>
+      <div id="custom-symbol-msg" class="modal-msg"></div>
+      <div class="modal-actions">
+        <button id="confirm-add-symbol" type="button" class="primary">验证并添加</button>
+        <button id="cancel-add-symbol" type="button">取消</button>
+      </div>
+    </div>
+  </dialog>
+
+  <!-- Performance Journal Drawer -->
+  <aside id="journal-drawer" class="journal-drawer" hidden>
+    <div class="drawer-header">
+      <h3>📊 复盘模拟打单战绩账本</h3>
+      <button id="close-journal-btn" type="button" class="drawer-close">✕</button>
+    </div>
+    <div class="drawer-body">
+      <div class="journal-stats-grid">
+        <div class="journal-stat-card">
+          <span class="stat-label">总交易笔数</span>
+          <strong id="journal-total-trades">0</strong>
+        </div>
+        <div class="journal-stat-card">
+          <span class="stat-label">胜率 (Win Rate)</span>
+          <strong id="journal-win-rate">0%</strong>
+        </div>
+        <div class="journal-stat-card">
+          <span class="stat-label">累计 R 期望收益</span>
+          <strong id="journal-total-r">+0.00 R</strong>
+        </div>
+        <div class="journal-stat-card">
+          <span class="stat-label">平均盈亏比 (Avg R:R)</span>
+          <strong id="journal-avg-rr">0.00</strong>
+        </div>
+      </div>
+      <div class="journal-actions">
+        <button id="clear-journal-btn" type="button" class="danger-btn">清空所有模拟记录</button>
+      </div>
+      <div class="journal-table-wrap">
+        <table class="journal-table">
+          <thead>
+            <tr>
+              <th>时间</th>
+              <th>合约</th>
+              <th>方向</th>
+              <th>入场价</th>
+              <th>止盈价</th>
+              <th>止损价</th>
+              <th>R:R</th>
+              <th>状态/结果</th>
+              <th>操作</th>
+            </tr>
+          </thead>
+          <tbody id="journal-table-body">
+            <tr><td colspan="9" class="empty">暂无模拟交易记录。在图表拉出做多/做空工具即可录单。</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </aside>
+
 </body>
 </html>

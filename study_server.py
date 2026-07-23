@@ -1,5 +1,6 @@
 import json
 import math
+import re
 import os
 import shutil
 import sqlite3
@@ -127,6 +128,26 @@ def initialize_database():
                 created_at TEXT NOT NULL,
                 updated_at TEXT NOT NULL
             );
+            CREATE TABLE IF NOT EXISTS custom_symbols (
+                symbol TEXT PRIMARY KEY,
+                name TEXT NOT NULL,
+                added_at TEXT NOT NULL
+            );
+            CREATE TABLE IF NOT EXISTS paper_trades (
+                id TEXT PRIMARY KEY,
+                video_id TEXT NOT NULL,
+                symbol TEXT NOT NULL,
+                interval TEXT NOT NULL,
+                direction TEXT NOT NULL,
+                entry_price REAL NOT NULL,
+                tp_price REAL NOT NULL,
+                sl_price REAL NOT NULL,
+                rr_ratio REAL NOT NULL,
+                status TEXT NOT NULL,
+                pnl_r REAL DEFAULT 0,
+                created_at TEXT NOT NULL,
+                closed_at TEXT
+            );
             INSERT OR IGNORE INTO app_settings (key, value) VALUES ('future_days', '3');
             INSERT OR IGNORE INTO app_settings (key, value) VALUES ('offline_mode', 'true');
             """
@@ -207,8 +228,8 @@ def set_offline_mode(value):
 
 
 def validate_market_scope(symbol, interval):
-    if symbol not in VALID_SYMBOLS:
-        raise ValueError("仅支持 BTCUSDT 和 ETHUSDT")
+    if not isinstance(symbol, str) or not re.match(r"^[A-Z0-9]{3,15}USDT$", symbol):
+        raise ValueError("合约标的格式无效，必须为 USDT 永续合约（如 SOLUSDT）")
     if interval not in VALID_INTERVALS:
         raise ValueError("不支持该 K 线周期")
 
@@ -589,6 +610,109 @@ def list_drawings(video_id, symbol, interval):
     return [json.loads(row["tool_json"]) for row in rows]
 
 
+
+def get_all_symbols():
+    preset = [
+        {"symbol": "BTCUSDT", "name": "BTCUSDT 永续", "custom": False},
+        {"symbol": "ETHUSDT", "name": "ETHUSDT 永续", "custom": False},
+        {"symbol": "SOLUSDT", "name": "SOLUSDT 永续", "custom": False},
+        {"symbol": "BNBUSDT", "name": "BNBUSDT 永续", "custom": False},
+        {"symbol": "DOGEUSDT", "name": "DOGEUSDT 永续", "custom": False},
+        {"symbol": "XRPUSDT", "name": "XRPUSDT 永续", "custom": False},
+    ]
+    with DATABASE_LOCK, database() as connection:
+        rows = connection.execute("SELECT symbol, name FROM custom_symbols ORDER BY added_at ASC").fetchall()
+    customs = [{"symbol": row["symbol"], "name": row["name"], "custom": True} for row in rows]
+    preset_symbols = {item["symbol"] for item in preset}
+    for c in customs:
+        if c["symbol"] not in preset_symbols:
+            preset.append(c)
+    return preset
+
+
+def add_custom_symbol(symbol_str):
+    symbol = str(symbol_str or "").strip().upper()
+    if not re.match(r"^[A-Z0-9]{3,15}USDT$", symbol):
+        raise ValueError("合约代码格式无效，需为 USDT 永续合约")
+    now_ts = int(time.time() * 1000)
+    start_ts = now_ts - 86_400_000 * 2
+    try:
+        fetch_bybit_candles(symbol, "60", start_ts, now_ts)
+    except Exception as err:
+        raise ValueError(f"校验该合约失败：{err}")
+
+    now = datetime.now().astimezone().isoformat()
+    name = f"{symbol} 永续"
+    with DATABASE_LOCK, database() as connection:
+        connection.execute(
+            "INSERT INTO custom_symbols (symbol, name, added_at) VALUES (?, ?, ?) "
+            "ON CONFLICT(symbol) DO UPDATE SET name = excluded.name",
+            (symbol, name, now),
+        )
+    return {"symbol": symbol, "name": name}
+
+
+def get_paper_trades(symbol=None):
+    with DATABASE_LOCK, database() as connection:
+        if symbol:
+            rows = connection.execute(
+                "SELECT * FROM paper_trades WHERE symbol = ? ORDER BY created_at DESC",
+                (symbol,),
+            ).fetchall()
+        else:
+            rows = connection.execute(
+                "SELECT * FROM paper_trades ORDER BY created_at DESC"
+            ).fetchall()
+    return [dict(row) for row in rows]
+
+
+def save_paper_trade(payload):
+    if not isinstance(payload, dict):
+        raise ValueError("模拟订单数据格式无效")
+    trade_id = str(payload.get("id", "")).strip() or f"trade_{int(time.time()*1000)}"
+    video_id = str(payload.get("videoId", "__global__")).strip()
+    symbol = str(payload.get("symbol", "")).strip().upper()
+    interval = str(payload.get("interval", "60")).strip()
+    direction = str(payload.get("direction", "LONG")).strip().upper()
+    entry_price = float(payload.get("entryPrice", 0))
+    tp_price = float(payload.get("tpPrice", 0))
+    sl_price = float(payload.get("slPrice", 0))
+    rr_ratio = float(payload.get("rrRatio", 0))
+    status = str(payload.get("status", "OPEN")).strip().upper()
+    pnl_r = float(payload.get("pnlR", 0))
+    now = datetime.now().astimezone().isoformat()
+    created_at = payload.get("createdAt") or now
+    closed_at = payload.get("closedAt")
+
+    validate_market_scope(symbol, interval)
+    if entry_price <= 0 or tp_price <= 0 or sl_price <= 0:
+        raise ValueError("开仓价、止盈价和止损价必须大于 0")
+
+    with DATABASE_LOCK, database() as connection:
+        connection.execute(
+            """INSERT INTO paper_trades
+               (id, video_id, symbol, interval, direction, entry_price, tp_price, sl_price, rr_ratio, status, pnl_r, created_at, closed_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+               ON CONFLICT(id) DO UPDATE SET
+                 status = excluded.status, pnl_r = excluded.pnl_r, closed_at = excluded.closed_at""",
+            (trade_id, video_id, symbol, interval, direction, entry_price, tp_price, sl_price, rr_ratio, status, pnl_r, created_at, closed_at),
+        )
+    return {
+        "id": trade_id, "videoId": video_id, "symbol": symbol, "interval": interval,
+        "direction": direction, "entryPrice": entry_price, "tpPrice": tp_price,
+        "slPrice": sl_price, "rrRatio": rr_ratio, "status": status, "pnlR": pnl_r,
+        "createdAt": created_at, "closedAt": closed_at,
+    }
+
+
+def delete_paper_trades(trade_id=None):
+    with DATABASE_LOCK, database() as connection:
+        if trade_id:
+            connection.execute("DELETE FROM paper_trades WHERE id = ?", (trade_id,))
+        else:
+            connection.execute("DELETE FROM paper_trades")
+    return True
+
 def delete_drawings(query):
     drawing_id = query.get("id", [""])[0]
     video_id = query.get("videoId", [""])[0]
@@ -618,8 +742,33 @@ class StudyHandler(SimpleHTTPRequestHandler):
         parsed = urlparse(self.path)
         if parsed.path == "/":
             self.path = "/TiaBTC_学习视频清单.html"
+        if parsed.path == "/api/symbols":
+            self.send_json(HTTPStatus.OK, {"symbols": get_all_symbols()})
+            return
+
+        if parsed.path == "/api/paper-trades":
+            symbol = query.get("symbol", [""])[0]
+            self.send_json(HTTPStatus.OK, {"trades": get_paper_trades(symbol)})
+            return
         if parsed.path == "/api/state":
             return self.send_json(HTTPStatus.OK, load_state())
+        if parsed.path == "/api/symbols":
+            payload = self.read_json()
+            try:
+                res = add_custom_symbol(payload.get("symbol"))
+                self.send_json(HTTPStatus.CREATED, res)
+            except ValueError as error:
+                self.send_json(HTTPStatus.BAD_REQUEST, {"error": str(error)})
+            return
+
+        if parsed.path == "/api/paper-trades":
+            payload = self.read_json()
+            try:
+                res = save_paper_trade(payload)
+                self.send_json(HTTPStatus.OK, res)
+            except ValueError as error:
+                self.send_json(HTTPStatus.BAD_REQUEST, {"error": str(error)})
+            return
         if parsed.path == "/api/chart/config":
             return self.send_json(
                 HTTPStatus.OK,
