@@ -79,6 +79,7 @@
     replayOrigin: '',
     replayReady: false,
     replayStartIndex: 0,
+    replayStartTimestamp: 0,
     replayVisibleCount: 0,
     replayCursorTimestamp: 0,
     replayHasMore: false,
@@ -125,17 +126,19 @@
         openCustomSymbolDialog();
         return;
       }
+      const preservedCursorTimestamp = state.replayCursorTimestamp;
       state.symbol = elements.chartSymbol.value;
       resetDrawingInteraction();
-      void reloadActiveScope();
+      void reloadActiveScope(preservedCursorTimestamp);
     });
     elements.chartInterval.querySelectorAll('[data-chart-interval]').forEach((button) => {
       button.addEventListener('click', () => {
         if (state.interval === button.dataset.chartInterval) return;
+        const preservedCursorTimestamp = state.replayCursorTimestamp;
         state.interval = button.dataset.chartInterval;
         updateIntervalButtons();
         resetDrawingInteraction();
-        void reloadActiveScope();
+        void reloadActiveScope(preservedCursorTimestamp);
       });
     });
     elements.offlineMode.addEventListener('change', saveOfflineMode);
@@ -991,7 +994,11 @@
         const cursorSeconds = Math.floor((state.replayCursorTimestamp || state.anchor) / 1000);
         const firstFutureIndex = state.candleData.findIndex((candle) => Number(candle.time) + INTERVAL_SECONDS[state.interval] > cursorSeconds);
         state.replayVisibleCount = firstFutureIndex < 0 ? state.candleData.length : firstFutureIndex;
-        state.replayStartIndex = state.replayVisibleCount;
+        const replayStartSeconds = Math.floor((state.replayStartTimestamp || state.anchor) / 1000);
+        const firstReplayIndex = state.candleData.findIndex(
+          (candle) => Number(candle.time) + INTERVAL_SECONDS[state.interval] > replayStartSeconds,
+        );
+        state.replayStartIndex = firstReplayIndex < 0 ? state.candleData.length : firstReplayIndex;
         state.replayReady = state.replayVisibleCount > 0;
         state.replayHasMore = candlePayload.hasMore !== false;
       } else {
@@ -1317,16 +1324,18 @@
     return times;
   }
 
-  async function reloadActiveScope() {
+  async function reloadActiveScope(preservedCursorTimestamp = state.replayCursorTimestamp) {
     stopReplayPlayback();
     if (state.mode === 'replay') {
-      if (state.replayOrigin === 'video' && state.video) {
-        await reloadScope();
-        focusReplayHotkeys();
+      if (!state.video) {
+        resetReplaySelection();
         return;
       }
-      if (state.replayDate) await beginReplay(state.replayDate, state.replayCursorTimestamp);
-      else resetReplaySelection();
+      if (Number.isFinite(preservedCursorTimestamp) && preservedCursorTimestamp > 0) {
+        state.replayCursorTimestamp = preservedCursorTimestamp;
+      }
+      await reloadScope();
+      focusReplayHotkeys();
       return;
     }
     await reloadScope();
@@ -1340,6 +1349,7 @@
     state.replayOrigin = 'date';
     state.replayReady = false;
     state.replayStartIndex = 0;
+    state.replayStartTimestamp = 0;
     state.replayVisibleCount = 0;
     state.replayCursorTimestamp = 0;
     state.replayHasMore = false;
@@ -1384,6 +1394,7 @@
       setStatus('复盘日期无效。', true);
       return;
     }
+    state.replayStartTimestamp = state.anchor;
     state.replayCursorTimestamp = Number.isFinite(preservedCursorTimestamp) && preservedCursorTimestamp >= state.anchor
       ? preservedCursorTimestamp
       : state.anchor;
@@ -1413,6 +1424,7 @@
     state.replayReady = false;
     state.replayStartIndex = 0;
     state.replayVisibleCount = 0;
+    state.replayStartTimestamp = state.anchor;
     state.replayCursorTimestamp = Number.isFinite(preservedCursorTimestamp)
       && preservedCursorTimestamp >= state.anchor
       ? preservedCursorTimestamp
@@ -2399,6 +2411,7 @@
     if (clickedIndex < 0) return;
     state.replayVisibleCount = clickedIndex + 1;
     state.replayStartIndex = state.replayVisibleCount;
+    state.replayStartTimestamp = cutTimestamp;
     state.replayHasMore = hasMoreBeyondBuffer || state.replayVisibleCount < state.candleData.length;
     if (!state.video) {
       const dateStr = beijingDateString(new Date(cutTimestamp));
