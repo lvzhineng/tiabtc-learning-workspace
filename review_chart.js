@@ -43,13 +43,13 @@
     video: null,
     symbol: 'BTCUSDT',
     interval: '60',
-    futureDays: 3,
     offlineMode: true,
     logarithmicScale: false,
     allSymbols: [],
     paperTrades: [],
     chart: null,
     series: null,
+    volumeSeries: null,
     lineTools: null,
     enhancedDrawings: null,
     enhancedPreview: null,
@@ -76,6 +76,7 @@
     restoringHistory: false,
     persistenceQueue: Promise.resolve(),
     replayDate: '',
+    replayOrigin: '',
     replayReady: false,
     replayStartIndex: 0,
     replayVisibleCount: 0,
@@ -91,6 +92,7 @@
     reviewCutoffTimestamp: 0,
     reviewHasMoreLater: false,
     reviewRightLoadArmed: false,
+    settlingPaperTrades: false,
   };
 
   const elements = {};
@@ -100,19 +102,29 @@
     state.initialized = true;
     [
       'review-dialog', 'review-video-title', 'review-video-time', 'chart-symbol', 'chart-interval',
-      'price-scale-mode', 'future-days', 'offline-mode', 'close-review', 'review-chart', 'chart-loading',
+      'price-scale-mode', 'offline-mode', 'close-review', 'review-chart', 'chart-loading',
       'chart-status', 'chart-cutoff', 'undo-drawing', 'redo-drawing',
       'lock-drawing', 'delete-drawing', 'clear-drawings', 'drawing-tools-handle',
       'replay-controls', 'replay-date', 'start-replay', 'toggle-replay', 'step-replay',
       'replay-speed', 'replay-progress',
       'drawing-input-layer', 'chart-candle-data', 'candle-open', 'candle-high',
       'candle-low', 'candle-close', 'candle-change',
+      'open-journal-btn', 'journal-drawer', 'close-journal-btn', 'clear-journal-btn',
+      'journal-total-trades', 'journal-win-rate', 'journal-total-r', 'journal-avg-rr',
+      'journal-table-body', 'custom-symbol-dialog', 'custom-symbol-input',
+      'custom-symbol-msg', 'confirm-add-symbol', 'cancel-add-symbol',
     ].forEach((id) => { elements[toCamel(id)] = document.getElementById(id); });
     elements.drawingTools = document.querySelector('.drawing-tools');
     elements.chartStage = document.querySelector('.chart-stage');
+    elements.reviewDialog.tabIndex = -1;
 
     elements.closeReview.addEventListener('click', close);
     elements.chartSymbol.addEventListener('change', () => {
+      if (elements.chartSymbol.value === '__add__') {
+        renderSymbolSelectorOptions();
+        openCustomSymbolDialog();
+        return;
+      }
       state.symbol = elements.chartSymbol.value;
       resetDrawingInteraction();
       void reloadActiveScope();
@@ -126,7 +138,6 @@
         void reloadActiveScope();
       });
     });
-    elements.futureDays.addEventListener('change', saveFutureDays);
     elements.offlineMode.addEventListener('change', saveOfflineMode);
     elements.priceScaleMode.addEventListener('click', togglePriceScaleMode);
     const armReviewLaterLoad = () => {
@@ -148,11 +159,6 @@
     document.querySelector('[data-drawing-action="select"]').addEventListener('click', cancelActiveDrawing);
     initializeEnhancedDrawingInput();
     document.addEventListener('keydown', (event) => {
-      if (event.key === 'ArrowRight' && state.mode === 'replay' && state.replayReady && !isTextInput(event.target)) {
-        event.preventDefault();
-        void stepReplay(true);
-        return;
-      }
       if (event.key === 'Escape' && (state.activeDrawingId || state.activeToolType)) cancelActiveDrawing();
       if (event.key === 'Enter' && state.activeToolType === 'path' && state.enhancedPendingAnchors.length >= 2) {
         event.preventDefault();
@@ -177,6 +183,18 @@
     elements.deleteDrawing.addEventListener('click', deleteSelectedDrawing);
     elements.clearDrawings.addEventListener('click', clearDrawings);
     elements.reviewDialog.addEventListener('close', cancelActiveDrawing);
+    elements.openJournalBtn.addEventListener('click', openJournalDrawer);
+    elements.closeJournalBtn.addEventListener('click', closeJournalDrawer);
+    elements.clearJournalBtn.addEventListener('click', clearPaperTrades);
+    elements.confirmAddSymbol.addEventListener('click', handleAddCustomSymbol);
+    elements.cancelAddSymbol.addEventListener('click', () => elements.customSymbolDialog.close());
+    elements.customSymbolInput.addEventListener('keydown', (event) => {
+      if (event.key === 'Enter') void handleAddCustomSymbol();
+    });
+    elements.journalTableBody.addEventListener('click', (event) => {
+      const button = event.target.closest('[data-delete-trade-id]');
+      if (button) void deletePaperTrade(button.dataset.deleteTradeId);
+    });
     initializeDraggableToolbar();
     restorePriceScaleMode();
   }
@@ -184,27 +202,30 @@
   async function open(video) {
     init();
     stopReplayPlayback();
-    state.mode = 'review';
+    state.mode = 'replay';
+    state.replayOrigin = 'video';
     state.replayReady = false;
+    state.replayVisibleCount = 0;
+    state.replayCursorTimestamp = 0;
+    state.replayHasMore = true;
     state.reviewCutoffTimestamp = 0;
     state.reviewHasMoreLater = false;
     state.reviewRightLoadArmed = false;
-    elements.replayControls.hidden = true;
-    elements.futureDays.closest('.future-days-control').hidden = false;
-    state.video = video;
-    state.anchor = videoTimestamp(video);
-    elements.reviewVideoTitle.textContent = video['视频标题'];
-    elements.reviewVideoTime.textContent = `视频发布：${video['发布日期']} ${video['发布时间（页面时区）']}`;
+    state.replaySpeed = 1;
+    elements.replayControls.hidden = false;
+    elements.replayDate.max = beijingDateString(new Date());
+    elements.replaySpeed.value = '1';
     if (!elements.reviewDialog.open) elements.reviewDialog.showModal();
     ensureChart();
-    await loadChartConfig();
-    await reloadScope();
+    await Promise.all([loadChartConfig(), loadSymbolsList()]);
+    await beginVideoReplay(video);
   }
 
   async function openReplay() {
     init();
     stopReplayPlayback();
     state.mode = 'replay';
+    state.replayOrigin = 'date';
     state.video = null;
     state.anchor = 0;
     state.replayDate = '';
@@ -216,15 +237,14 @@
     state.reviewRightLoadArmed = false;
     state.replaySpeed = 1;
     elements.replayControls.hidden = false;
-    elements.futureDays.closest('.future-days-control').hidden = true;
     elements.replayDate.max = beijingDateString(new Date());
     elements.replayDate.value = elements.replayDate.max;
     elements.replaySpeed.value = '1';
-    elements.reviewVideoTitle.textContent = 'BTC / ETH 行情复盘';
+    elements.reviewVideoTitle.textContent = '多币种行情复盘';
     elements.reviewVideoTime.textContent = '选择日期后，从北京时间 00:00 开始逐根回放 · 无固定结束时间';
     if (!elements.reviewDialog.open) elements.reviewDialog.showModal();
     ensureChart();
-    await loadChartConfig();
+    await Promise.all([loadChartConfig(), loadSymbolsList()]);
     resetReplaySelection();
   }
 
@@ -232,12 +252,10 @@
     try {
       const response = await fetch('/api/chart/config');
       const config = await readJson(response);
-      state.futureDays = Number(config.futureDays ?? 3);
       state.offlineMode = config.offlineMode !== false;
-      elements.futureDays.value = state.futureDays;
       elements.offlineMode.checked = state.offlineMode;
     } catch (error) {
-      setStatus('读取图表配置失败，暂用默认 3 天。', true);
+      setStatus('读取图表配置失败，暂用仅本地模式。', true);
     }
   }
 
@@ -352,16 +370,17 @@
   function getSelectedPositionToolInfo() {
     const selected = state.enhancedDrawings?.getSelectedDrawing();
     if (!selected || (selected.type !== 'long-position' && selected.type !== 'short-position')) return null;
-    const points = selected.points || [];
-    if (points.length < 3) return null;
-    const entry = Number(points[0].price);
-    const tp = Number(points[1].price);
-    const sl = Number(points[2].price);
-    if (!entry || !tp || !sl) return null;
+    const anchors = selected.anchors || [];
+    if (anchors.length < 3) return null;
+    const entry = Number(anchors[0].price);
+    const sl = Number(anchors[1].price);
+    const tp = Number(anchors[2].price);
     const isLong = selected.type === 'long-position';
+    if (![entry, tp, sl].every((price) => Number.isFinite(price) && price > 0)) return null;
+    if (isLong ? !(tp > entry && entry > sl) : !(tp < entry && entry < sl)) return null;
     const risk = Math.abs(entry - sl);
     const reward = Math.abs(tp - entry);
-    const rr = risk > 0 ? Number((reward / risk).toFixed(2)) : 1.0;
+    const rr = Number((reward / risk).toFixed(2));
     return {
       type: isLong ? 'LONG' : 'SHORT',
       entryPrice: entry,
@@ -396,9 +415,13 @@
       setStatus('请先在图表上选中做多或做空仓位标注框。', true);
       return;
     }
+    const currentCandle = latestVisibleCandle();
+    const simulatedOpenedAt = currentCandle
+      ? (Number(currentCandle.time) + INTERVAL_SECONDS[state.interval]) * 1000
+      : Date.now();
     const tradePayload = {
       id: `trade_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
-      videoId: state.videoId || '__global__',
+      videoId: state.video?.['视频ID'] || '__global__',
       symbol: state.symbol,
       interval: state.interval,
       direction: info.type,
@@ -408,7 +431,7 @@
       rrRatio: info.rrRatio,
       status: 'OPEN',
       pnlR: 0,
-      createdAt: new Date().toISOString(),
+      createdAt: new Date(simulatedOpenedAt).toISOString(),
     };
     try {
       await fetch('/api/paper-trades', {
@@ -425,7 +448,8 @@
   }
 
   async function checkPaperTradesSettlement() {
-    if (!Array.isArray(state.candleData) || state.candleData.length === 0) return;
+    if (state.settlingPaperTrades || !Array.isArray(state.candleData) || state.candleData.length === 0) return;
+    state.settlingPaperTrades = true;
     try {
       const res = await fetch(`/api/paper-trades?symbol=${state.symbol}`).then(readJson);
       const trades = res.trades || [];
@@ -441,34 +465,40 @@
       let settledCount = 0;
 
       for (const trade of openTrades) {
-        for (const candle of visibleCandles) {
+        const openedAtSeconds = Date.parse(trade.created_at) / 1000;
+        const settlementCandles = visibleCandles.filter((candle) => (
+          !Number.isFinite(openedAtSeconds) || Number(candle.time) >= openedAtSeconds
+        ));
+        for (const candle of settlementCandles) {
           const high = Number(candle.high);
           const low = Number(candle.low);
           let newStatus = null;
           let pnlR = 0;
 
           if (trade.direction === 'LONG') {
-            if (high >= trade.tp_price) {
-              newStatus = 'WIN';
-              pnlR = trade.rr_ratio;
-            } else if (low <= trade.sl_price) {
+            if (low <= trade.sl_price) {
               newStatus = 'LOSS';
               pnlR = -1.0;
+            } else if (high >= trade.tp_price) {
+              newStatus = 'WIN';
+              pnlR = trade.rr_ratio;
             }
           } else if (trade.direction === 'SHORT') {
-            if (low <= trade.tp_price) {
-              newStatus = 'WIN';
-              pnlR = trade.rr_ratio;
-            } else if (high >= trade.sl_price) {
+            if (high >= trade.sl_price) {
               newStatus = 'LOSS';
               pnlR = -1.0;
+            } else if (low <= trade.tp_price) {
+              newStatus = 'WIN';
+              pnlR = trade.rr_ratio;
             }
           }
 
           if (newStatus) {
             trade.status = newStatus;
             trade.pnlR = pnlR;
-            trade.closedAt = new Date().toISOString();
+            trade.closedAt = new Date(
+              (Number(candle.time) + INTERVAL_SECONDS[trade.interval]) * 1000,
+            ).toISOString();
             settledCount++;
             await fetch('/api/paper-trades', {
               method: 'POST',
@@ -495,7 +525,41 @@
       }
 
       if (settledCount > 0) void refreshJournalDrawer();
-    } catch (_) {}
+    } catch (error) {
+      console.warn('模拟交易结算检查失败：', error);
+    } finally {
+      state.settlingPaperTrades = false;
+    }
+  }
+
+  function openJournalDrawer() {
+    elements.journalDrawer.hidden = false;
+    void refreshJournalDrawer();
+  }
+
+  function closeJournalDrawer() {
+    elements.journalDrawer.hidden = true;
+  }
+
+  async function deletePaperTrade(tradeId) {
+    if (!tradeId || !window.confirm('确认删除这条模拟交易记录？')) return;
+    try {
+      const params = new URLSearchParams({ id: tradeId });
+      await fetch(`/api/paper-trades?${params}`, { method: 'DELETE' }).then(readJson);
+      await refreshJournalDrawer();
+    } catch (error) {
+      setStatus(error.message || '删除模拟交易记录失败。', true);
+    }
+  }
+
+  async function clearPaperTrades() {
+    if (!window.confirm('确认清空所有模拟交易记录？此操作不可撤销。')) return;
+    try {
+      await fetch('/api/paper-trades', { method: 'DELETE' }).then(readJson);
+      await refreshJournalDrawer();
+    } catch (error) {
+      setStatus(error.message || '清空模拟交易记录失败。', true);
+    }
   }
 
   async function refreshJournalDrawer() {
@@ -515,12 +579,12 @@
         ? (winTrades.reduce((acc, t) => acc + Number(t.rr_ratio || 0), 0) / winTrades.length).toFixed(2)
         : '0.00';
 
-      $('#journal-total-trades').textContent = total;
-      $('#journal-win-rate').textContent = `${winRate}%`;
-      $('#journal-total-r').textContent = `${totalR >= 0 ? '+' : ''}${totalR.toFixed(2)} R`;
-      $('#journal-avg-rr').textContent = avgRR;
+      elements.journalTotalTrades.textContent = total;
+      elements.journalWinRate.textContent = `${winRate}%`;
+      elements.journalTotalR.textContent = `${totalR >= 0 ? '+' : ''}${totalR.toFixed(2)} R`;
+      elements.journalAvgRr.textContent = avgRR;
 
-      const tbody = $('#journal-table-body');
+      const tbody = elements.journalTableBody;
       if (trades.length === 0) {
         tbody.innerHTML = '<tr><td colspan="9" class="empty">暂无模拟交易记录。在图表拉出做多/做空工具即可录单。</td></tr>';
         return;
@@ -535,18 +599,20 @@
         if (t.status === 'LOSS') tagStatus = `<span class="tag-loss">止损 -1.0R</span>`;
 
         return `<tr>
-          <td>${timeStr}</td>
-          <td><strong>${t.symbol}</strong></td>
+          <td>${escapeHtml(timeStr)}</td>
+          <td><strong>${escapeHtml(t.symbol)}</strong></td>
           <td>${tagDir}</td>
-          <td>${t.entry_price}</td>
-          <td>${t.tp_price}</td>
-          <td>${t.sl_price}</td>
-          <td>${t.rr_ratio}</td>
+          <td>${escapeHtml(t.entry_price)}</td>
+          <td>${escapeHtml(t.tp_price)}</td>
+          <td>${escapeHtml(t.sl_price)}</td>
+          <td>${escapeHtml(t.rr_ratio)}</td>
           <td>${tagStatus}</td>
-          <td><button type="button" class="danger-btn" onclick="window.TiaReviewChart.deleteTrade('${t.id}')">删除</button></td>
+          <td><button type="button" class="danger-btn" data-delete-trade-id="${escapeHtml(t.id)}">删除</button></td>
         </tr>`;
       }).join('');
-    } catch (_) {}
+    } catch (error) {
+      setStatus(error.message || '读取模拟交易记录失败。', true);
+    }
   }
 
   function ensureChart() {
@@ -568,7 +634,7 @@
       rightPriceScale: themeOpts.rightPriceScale,
       timeScale: themeOpts.timeScale,
       crosshair: { mode: window.LightweightCharts.CrosshairMode.Normal },
-      localization: { locale: 'zh-CN' },
+      localization: { locale: 'zh-CN', timeFormatter: formatChartTime },
     });
     const options = {
       upColor: '#26a69a', downColor: '#ef5350', borderVisible: false,
@@ -577,6 +643,7 @@
     state.series = typeof state.chart.addSeries === 'function'
       ? state.chart.addSeries(window.LightweightCharts.CandlestickSeries, options)
       : state.chart.addCandlestickSeries(options);
+    initializeVolumeSeries();
     initializeLineTools();
     initializeEnhancedDrawingManager();
     state.chart.timeScale().subscribeVisibleLogicalRangeChange((range) => {
@@ -586,6 +653,17 @@
     state.chart.subscribeCrosshairMove((param) => {
       const candle = param.seriesData?.get(state.series);
       updateCandleData(candle || latestVisibleCandle());
+    });
+    // 双击 K 线触发定位切入
+    elements.reviewChart.addEventListener('dblclick', (event) => {
+      if (state.activeToolType || state.activeDrawingId) return;
+      const rect = elements.reviewChart.getBoundingClientRect();
+      const x = event.clientX - rect.left;
+      const time = state.chart.timeScale().coordinateToTime(x);
+      if (time === null || time === undefined) return;
+      const timeNum = Number(time);
+      const candle = state.candleData.find((c) => Number(c.time) === timeNum);
+      if (candle && Number.isFinite(candle.open)) cutInAtCandle(candle);
     });
     state.resizeObserver = new ResizeObserver(() => {
       resizeChart();
@@ -601,6 +679,47 @@
     if (!state.chart) return;
     state.chart.applyOptions({ width: elements.reviewChart.clientWidth, height: elements.reviewChart.clientHeight });
     constrainToolbarPosition();
+  }
+
+  function initializeVolumeSeries() {
+    const options = {
+      priceFormat: { type: 'volume' },
+      priceLineVisible: false,
+      lastValueVisible: false,
+    };
+    if (typeof state.chart.addSeries === 'function' && window.LightweightCharts.HistogramSeries) {
+      state.volumeSeries = state.chart.addSeries(
+        window.LightweightCharts.HistogramSeries,
+        options,
+        1,
+      );
+      const panes = state.chart.panes?.() || [];
+      panes[0]?.setStretchFactor?.(4);
+      panes[1]?.setStretchFactor?.(1);
+      applyVolumeScaleMode();
+      return;
+    }
+    if (typeof state.chart.addHistogramSeries === 'function') {
+      state.volumeSeries = state.chart.addHistogramSeries({
+        ...options,
+        priceScaleId: '',
+      });
+      state.volumeSeries.priceScale().applyOptions({
+        mode: window.LightweightCharts.PriceScaleMode.Normal,
+        autoScale: true,
+        scaleMargins: { top: 0.8, bottom: 0 },
+      });
+    }
+  }
+
+  function applyVolumeScaleMode() {
+    if (!state.volumeSeries) return;
+    const separatePane = (state.chart.panes?.().length || 0) > 1;
+    state.volumeSeries.priceScale().applyOptions({
+      mode: window.LightweightCharts.PriceScaleMode.Normal,
+      autoScale: true,
+      scaleMargins: separatePane ? { top: 0.1, bottom: 0 } : { top: 0.8, bottom: 0 },
+    });
   }
 
   function togglePriceScaleMode() {
@@ -623,7 +742,6 @@
   }
 
   function applyPriceScaleMode() {
-    const mode = state.logarithmicScale ? 'Log' : '线性';
     elements.priceScaleMode.classList.toggle('active', state.logarithmicScale);
     elements.priceScaleMode.setAttribute('aria-pressed', String(state.logarithmicScale));
     elements.priceScaleMode.title = state.logarithmicScale ? '切换为线性价格坐标' : '切换为对数价格坐标';
@@ -633,7 +751,7 @@
           ? window.LightweightCharts.PriceScaleMode.Logarithmic
           : window.LightweightCharts.PriceScaleMode.Normal,
       });
-      setStatus(`价格坐标已切换为${mode}模式。`);
+      applyVolumeScaleMode();
     }
   }
 
@@ -835,7 +953,6 @@
         params.set('limit', '1000');
       } else {
         params.set('anchor', String(state.anchor));
-        params.set('futureDays', String(state.futureDays));
       }
       const [candleResult, drawingResult] = await Promise.allSettled([
         fetch(`/api/chart/candles?${params}`, { signal: abortController.signal }).then(readJson),
@@ -878,12 +995,14 @@
       setInitialVisibleRange();
       const cacheLabel = candlePayload.source === 'bybit' ? 'Bybit 已写入 SQLite' : '已从 SQLite 读取';
       if (state.mode === 'replay') {
-        elements.chartCutoff.textContent = `起点：${formatTimestamp(state.anchor)} · 后续 K 线按需加载至最新可用行情`;
+        elements.chartCutoff.textContent = state.replayOrigin === 'video'
+          ? `初始截止：视频发布时间 ${formatTimestamp(state.anchor)} · 按 → 逐根揭示`
+          : `起点：${formatTimestamp(state.anchor)} · 后续 K 线按需加载至最新可用行情`;
         const hiddenCount = Math.max(0, state.candleData.length - state.replayStartIndex);
         setStatus(candlePayload.warning ? `${cacheLabel}；${candlePayload.warning}` : `准备完成 · 已隐藏后续 ${hiddenCount} 根 K 线 · 播放到边界会自动续载`, Boolean(candlePayload.warning));
         updateReplayControls();
       } else {
-        elements.chartCutoff.textContent = `严格截止：${formatTimestamp(candlePayload.requestedCutoff)}（发布后 ${state.futureDays} 天）`;
+        elements.chartCutoff.textContent = `严格截止：视频发布时间 ${formatTimestamp(state.anchor)}`;
         const laterLabel = state.reviewHasMoreLater ? ' · 向右拖动按需加载后续数据' : '';
         setStatus(candlePayload.warning ? `${cacheLabel}；${candlePayload.warning}` : `${cacheLabel} · ${candles.length} 根 K 线 · 向左拖动自动加载更早数据${laterLabel}`, Boolean(candlePayload.warning));
       }
@@ -891,6 +1010,7 @@
     } catch (error) {
       if (reloadEpoch !== state.reloadEpoch || error?.name === 'AbortError') return;
       state.series.setData([]);
+      state.volumeSeries?.setData([]);
       state.candleData = [];
       updateCandleData(null);
       state.replayReady = false;
@@ -1014,14 +1134,14 @@
       state.reviewRightLoadArmed = state.reviewHasMoreLater;
       if (!later.length) {
         state.reviewHasMoreLater = false;
-        setStatus(payload.warning || '已加载至严格截止时间。', Boolean(payload.warning));
+        setStatus(payload.warning || '已加载至最新可用行情。', Boolean(payload.warning));
         return;
       }
       state.candleData.push(...later);
       renderCandleData();
       if (visibleRange) state.chart.timeScale().setVisibleLogicalRange(visibleRange);
       const cacheLabel = payload.source === 'bybit' ? '后续数据已写入 SQLite' : '后续数据已从 SQLite 读取';
-      const suffix = state.reviewHasMoreLater ? ' · 继续向右拖动可加载更多' : ' · 已到严格截止时间';
+      const suffix = state.reviewHasMoreLater ? ' · 继续向右拖动可加载更多' : ' · 已到最新可用行情';
       setStatus(payload.warning ? `${cacheLabel}；${payload.warning}` : `${cacheLabel} · 当前共 ${state.candleData.length} 根${suffix}`, Boolean(payload.warning));
     } catch (error) {
       if (error?.name === 'AbortError' || reloadEpoch !== state.reloadEpoch) return;
@@ -1042,6 +1162,16 @@
       low: candle.low,
       close: candle.close,
       volume: Number(candle.volume) || 0,
+    };
+  }
+
+  function toVolumePoint(candle) {
+    return {
+      time: candle.time,
+      value: Number(candle.volume) || 0,
+      color: Number(candle.close) >= Number(candle.open)
+        ? 'rgba(38, 166, 154, 0.62)'
+        : 'rgba(239, 83, 80, 0.62)',
     };
   }
 
@@ -1067,6 +1197,7 @@
       addWhitespace(lastKnown + INTERVAL_SECONDS[state.interval] * index);
     }
     state.series.setData([...chartEntries.values()].sort((left, right) => Number(left.time) - Number(right.time)));
+    state.volumeSeries?.setData(candles.map(toVolumePoint));
     updateCandleData(latestVisibleCandle());
     refreshVolumeProfiles();
   }
@@ -1175,6 +1306,11 @@
   async function reloadActiveScope() {
     stopReplayPlayback();
     if (state.mode === 'replay') {
+      if (state.replayOrigin === 'video' && state.video) {
+        await reloadScope();
+        focusReplayHotkeys();
+        return;
+      }
       if (state.replayDate) await beginReplay(state.replayDate, state.replayCursorTimestamp);
       else resetReplaySelection();
       return;
@@ -1187,6 +1323,7 @@
     invalidatePendingDrawingSaves();
     stopReplayPlayback();
     state.replayDate = '';
+    state.replayOrigin = 'date';
     state.replayReady = false;
     state.replayStartIndex = 0;
     state.replayVisibleCount = 0;
@@ -1197,6 +1334,7 @@
     state.video = null;
     state.anchor = 0;
     if (state.series) state.series.setData([]);
+    state.volumeSeries?.setData([]);
     updateCandleData(null);
     if (state.lineTools) state.lineTools.removeAllLineTools();
     state.enhancedDrawings?.clearAll();
@@ -1208,6 +1346,10 @@
   }
 
   async function startReplayFromSelection() {
+    if (state.replayOrigin === 'video' && state.video) {
+      await beginVideoReplay(state.video);
+      return;
+    }
     const date = elements.replayDate.value;
     if (!date) {
       setStatus('请先选择复盘日期。', true);
@@ -1218,6 +1360,7 @@
 
   async function beginReplay(date, preservedCursorTimestamp = 0) {
     stopReplayPlayback();
+    state.replayOrigin = 'date';
     state.replayDate = date;
     state.replayReady = false;
     state.replayStartIndex = 0;
@@ -1243,6 +1386,32 @@
     elements.startReplay.textContent = '重新开始';
     updateReplayControls();
     await reloadScope();
+    focusReplayHotkeys();
+  }
+
+  async function beginVideoReplay(video, preservedCursorTimestamp = 0) {
+    stopReplayPlayback();
+    state.mode = 'replay';
+    state.replayOrigin = 'video';
+    state.video = video;
+    state.anchor = videoTimestamp(video);
+    state.replayDate = beijingDateString(new Date(state.anchor));
+    state.replayReady = false;
+    state.replayStartIndex = 0;
+    state.replayVisibleCount = 0;
+    state.replayCursorTimestamp = Number.isFinite(preservedCursorTimestamp)
+      && preservedCursorTimestamp >= state.anchor
+      ? preservedCursorTimestamp
+      : state.anchor;
+    state.replayHasMore = true;
+    state.loadingLater = false;
+    elements.replayDate.value = state.replayDate;
+    elements.reviewVideoTitle.textContent = video['视频标题'];
+    elements.reviewVideoTime.textContent = `视频发布：${formatTimestamp(state.anchor)} · 按 → 逐根揭示后续行情`;
+    elements.startReplay.textContent = '重新开始';
+    updateReplayControls();
+    await reloadScope();
+    focusReplayHotkeys();
   }
 
   function toggleReplayPlayback() {
@@ -1298,8 +1467,10 @@
     // Hidden replay candles already exist as whitespace entries. Replacing just the
     // revealed entry avoids setData(), which resets the user's viewport on every step.
     state.series.update(candle, true);
+    state.volumeSeries?.update(toVolumePoint(candle), true);
     updateCandleData(candle);
     refreshVolumeProfiles();
+    void checkPaperTradesSettlement();
     followReplayCandle(visibleRange, candleLogicalIndex);
     updateReplayControls();
     if (state.replayVisibleCount >= state.candleData.length && !state.replayHasMore) {
@@ -1402,30 +1573,11 @@
       return;
     }
     const currentTime = formatTimestamp(state.replayCursorTimestamp || state.anchor);
-    const played = Math.max(0, Math.floor(((state.replayCursorTimestamp || state.anchor) - state.anchor) / (INTERVAL_SECONDS[state.interval] * 1000)));
+    const played = state.replayOrigin === 'video'
+      ? Math.max(0, state.replayVisibleCount - state.replayStartIndex)
+      : Math.max(0, Math.floor(((state.replayCursorTimestamp || state.anchor) - state.anchor) / (INTERVAL_SECONDS[state.interval] * 1000)));
     const bufferLabel = state.loadingLater ? '正在续载…' : `已缓冲 ${remaining} 根`;
     elements.replayProgress.textContent = `${currentTime} · 已播放约 ${played} 根 · ${bufferLabel}`;
-  }
-
-  async function saveFutureDays() {
-    const next = Number(elements.futureDays.value);
-    if (!Number.isInteger(next) || next < 0 || next > 30) {
-      elements.futureDays.value = state.futureDays;
-      setStatus('未来天数必须是 0–30 的整数。', true);
-      return;
-    }
-    try {
-      const payload = await fetch('/api/chart/config', {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ futureDays: next }),
-      }).then(readJson);
-      state.futureDays = payload.futureDays;
-      await reloadActiveScope();
-    } catch (error) {
-      elements.futureDays.value = state.futureDays;
-      setStatus(error.message || '配置保存失败', true);
-    }
   }
 
   function initializeEnhancedDrawingInput() {
@@ -2157,10 +2309,34 @@
   }
 
   function formatTimestamp(timestamp) {
-    return new Intl.DateTimeFormat('zh-CN', {
+    const date = new Date(timestamp);
+    const parts = new Intl.DateTimeFormat('zh-CN', {
       timeZone: 'Asia/Shanghai', year: 'numeric', month: '2-digit', day: '2-digit',
-      hour: '2-digit', minute: '2-digit', hour12: false,
-    }).format(new Date(timestamp));
+      hour: '2-digit', minute: '2-digit', hourCycle: 'h23',
+    }).formatToParts(date).reduce((result, part) => {
+      result[part.type] = part.value;
+      return result;
+    }, {});
+    const weekday = new Intl.DateTimeFormat('zh-CN', {
+      timeZone: 'Asia/Shanghai',
+      weekday: 'short',
+    }).format(date).replace(/^周/, '星期');
+    return `${parts.year}年${parts.month}月${parts.day}日 ${parts.hour}:${parts.minute} ${weekday}`;
+  }
+
+  function formatChartTime(time) {
+    if (typeof time === 'number') return formatTimestamp(time * 1000);
+    if (time && typeof time === 'object') {
+      const year = Number(time.year);
+      const month = Number(time.month);
+      const day = Number(time.day);
+      if (Number.isInteger(year) && Number.isInteger(month) && Number.isInteger(day)) {
+        return formatTimestamp(Date.parse(
+          `${year}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}T00:00:00+08:00`,
+        ));
+      }
+    }
+    return '';
   }
 
   function beijingDateString(date) {
@@ -2174,10 +2350,152 @@
     return value.replace(/-([a-z])/g, (_, character) => character.toUpperCase());
   }
 
+  function escapeHtml(value) {
+    return String(value ?? '')
+      .replaceAll('&', '&amp;')
+      .replaceAll('<', '&lt;')
+      .replaceAll('>', '&gt;')
+      .replaceAll('"', '&quot;')
+      .replaceAll("'", '&#39;');
+  }
+
   function isTextInput(target) {
     return target instanceof HTMLElement
       && (target.isContentEditable || ['INPUT', 'TEXTAREA', 'SELECT'].includes(target.tagName));
   }
 
-  window.TiaReviewChart = { init, open, openReplay, close };
+  function focusReplayHotkeys() {
+    if (state.mode !== 'replay' || !state.replayReady || !elements.reviewDialog?.open) return;
+    elements.reviewDialog.focus({ preventScroll: true });
+  }
+
+  // --- K 线选择定位：双击 K 线，切入该时间点，隐藏未来行情 ---
+  function cutInAtCandle(clickedCandle) {
+    if (!clickedCandle || !Number.isFinite(Number(clickedCandle.time))) return;
+    const clickedTimestamp = Number(clickedCandle.time) * 1000;
+    const cutTimestamp = clickedTimestamp + INTERVAL_SECONDS[state.interval] * 1000;
+    stopReplayPlayback();
+    state.mode = 'replay';
+    state.replayReady = true;
+    state.replayCursorTimestamp = cutTimestamp;
+    const clickedIndex = state.candleData.findIndex((c) => Number(c.time) === Number(clickedCandle.time));
+    if (clickedIndex < 0) return;
+    state.replayVisibleCount = clickedIndex + 1;
+    state.replayStartIndex = state.replayVisibleCount;
+    state.replayHasMore = state.replayVisibleCount < state.candleData.length;
+    if (!state.video) {
+      const dateStr = beijingDateString(new Date(cutTimestamp));
+      state.replayDate = dateStr;
+      state.anchor = Date.parse(`${dateStr}T00:00:00+08:00`);
+      state.video = {
+        '视频ID': `cutin-${dateStr}`,
+        '视频标题': `${dateStr} 行情复盘`,
+        '发布日期': dateStr,
+        '发布时间（页面时区）': '00:00:00+08:00',
+      };
+    } else {
+      state.replayDate = state.video['发布日期'] || '';
+    }
+    renderCandleData();
+    const timeScale = state.chart.timeScale();
+    const clickedLogicalIndex = timeScale.timeToIndex(clickedCandle.time, true);
+    if (Number.isFinite(clickedLogicalIndex)) {
+      const visibleRange = timeScale.getVisibleLogicalRange();
+      if (visibleRange) {
+        const span = visibleRange.to - visibleRange.from;
+        timeScale.setVisibleLogicalRange({
+          from: clickedLogicalIndex - span + VISIBLE_RIGHT_PADDING_BARS,
+          to: clickedLogicalIndex + VISIBLE_RIGHT_PADDING_BARS,
+        });
+      }
+    }
+    elements.replayControls.hidden = false;
+    elements.reviewVideoTitle.textContent = `K线定位复盘 · 已切入 ${formatTimestamp(clickedTimestamp)}`;
+    elements.reviewVideoTime.textContent = '已隐藏未来行情 · 按→键逐根揭示 · 按←键回退';
+    elements.startReplay.textContent = '重新开始';
+    updateReplayControls();
+    focusReplayHotkeys();
+    setStatus(`已定位至 ${formatTimestamp(clickedTimestamp)}，后续 ${state.candleData.length - state.replayVisibleCount} 根 K 线已隐藏。`);
+  }
+
+  // --- 回放回退一根 K 线 ---
+  function stepReplayBackward() {
+    if (!state.replayReady || state.replayVisibleCount <= 1) return;
+    stopReplayPlayback();
+    state.replayVisibleCount -= 1;
+    const hiddenCandle = state.candleData[state.replayVisibleCount];
+    const lastVisible = state.candleData[state.replayVisibleCount - 1];
+    state.replayCursorTimestamp = state.replayVisibleCount === state.replayStartIndex
+      ? state.anchor
+      : lastVisible
+        ? (Number(lastVisible.time) + INTERVAL_SECONDS[state.interval]) * 1000
+        : state.anchor;
+    // Replace only the removed candle with whitespace so the viewport does not
+    // jump back to the default range on every rewind step.
+    if (hiddenCandle) state.series.update({ time: hiddenCandle.time }, true);
+    if (hiddenCandle) state.volumeSeries?.update({ time: hiddenCandle.time }, true);
+    updateCandleData(latestVisibleCandle());
+    refreshVolumeProfiles();
+    updateReplayControls();
+  }
+
+  // --- 全局长按左右键播放与倒播控制 ---
+  let globalHoldDelayTimer = null;
+  let globalHoldRepeatTimer = null;
+  let globalHoldDirection = null;
+  let globalHoldRepeated = false;
+
+  function stepGlobalHold(direction) {
+    if (state.mode !== 'replay' || !state.replayReady) return;
+    if (direction === 'forward') {
+      void stepReplay(false);
+    } else {
+      stepReplayBackward();
+    }
+  }
+
+  function startGlobalHold(direction) {
+    if (globalHoldDirection === direction) return;
+    stopGlobalHold();
+    globalHoldDirection = direction;
+    globalHoldRepeated = false;
+    globalHoldDelayTimer = window.setTimeout(() => {
+      if (globalHoldDirection !== direction) return;
+      globalHoldRepeated = true;
+      stepGlobalHold(direction);
+      globalHoldRepeatTimer = window.setInterval(() => stepGlobalHold(direction), 100);
+    }, 200);
+  }
+
+  function stopGlobalHold(stepOnShortPress = false) {
+    const direction = globalHoldDirection;
+    const shouldStep = stepOnShortPress && direction && !globalHoldRepeated;
+    if (globalHoldDelayTimer) window.clearTimeout(globalHoldDelayTimer);
+    if (globalHoldRepeatTimer) window.clearInterval(globalHoldRepeatTimer);
+    globalHoldDelayTimer = null;
+    globalHoldRepeatTimer = null;
+    globalHoldDirection = null;
+    globalHoldRepeated = false;
+    if (shouldStep) stepGlobalHold(direction);
+  }
+
+  window.addEventListener('keydown', (e) => {
+    if (isTextInput(e.target)) return;
+    if (e.key === 'ArrowRight' && state.mode === 'replay' && state.replayReady) {
+      e.preventDefault();
+      startGlobalHold('forward');
+    } else if (e.key === 'ArrowLeft' && state.mode === 'replay' && state.replayReady) {
+      e.preventDefault();
+      startGlobalHold('rewind');
+    }
+  });
+
+  window.addEventListener('keyup', (e) => {
+    const direction = e.key === 'ArrowRight' ? 'forward' : e.key === 'ArrowLeft' ? 'rewind' : null;
+    if (direction && globalHoldDirection === direction) stopGlobalHold(true);
+  });
+
+  window.addEventListener('blur', stopGlobalHold);
+
+  window.TiaReviewChart = { init, open, openReplay, close, cutInAtCandle };
 }());

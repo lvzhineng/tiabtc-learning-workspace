@@ -12,7 +12,6 @@ import study_server
 
 ROOT = Path(__file__).resolve().parent
 DEFAULT_CSV = ROOT / "TiaBTC_公开视频清单_20260711.csv"
-MAX_FUTURE_DAYS = 30
 
 
 def parse_args():
@@ -84,10 +83,7 @@ def main():
 
     anchors = load_video_timestamps(args.csv.resolve())
     earliest_anchor = min(anchors)
-    latest_cutoff = min(
-        max(anchors) + MAX_FUTURE_DAYS * 86_400_000,
-        int(time.time() * 1000),
-    )
+    latest_cutoff = max(anchors)
     study_server.initialize_database()
 
     plan = []
@@ -99,7 +95,7 @@ def main():
             plan.append((symbol, interval, start, latest_cutoff, chunks))
 
     print(f"视频数：{len(anchors)}")
-    print(f"覆盖至：{format_time(latest_cutoff)}（包含发布后最多 {MAX_FUTURE_DAYS} 天）")
+    print(f"覆盖至：{format_time(latest_cutoff)}（最新视频发布时间）")
     for symbol, interval, start, end, chunks in plan:
         print(f"  {symbol:7} {interval:>3}: {format_time(start)} → {format_time(end)}，{len(chunks)} 批")
     if args.dry_run:

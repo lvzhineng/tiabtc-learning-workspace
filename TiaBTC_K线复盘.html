@@ -4,7 +4,8 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>TiaBTC K线复盘</title>
-  <link rel="stylesheet" href="/review_chart.css?v=20260723-1">
+  <link rel="icon" href="data:,">
+  <link rel="stylesheet" href="/review_chart.css?v=20260723-2">
   <script>
     const savedTheme = localStorage.getItem('tiabtc-theme') || 'dark';
     document.documentElement.setAttribute('data-theme', savedTheme);
@@ -35,7 +36,6 @@
             <button type="button" data-chart-interval="5">5min</button><button type="button" data-chart-interval="15">15min</button><button type="button" data-chart-interval="60" class="active">1h</button><button type="button" data-chart-interval="240">4h</button><button type="button" data-chart-interval="D">1d</button><button type="button" data-chart-interval="W">1w</button>
           </div>
           <button id="price-scale-mode" type="button" aria-pressed="false" title="切换对数价格坐标">Log</button>
-          <label class="future-days-control">发布后 <input id="future-days" type="number" min="0" max="30" step="1" value="3"> 天</label>
           <label class="offline-mode-control"><input id="offline-mode" type="checkbox" checked> 仅本地</label>
           <button id="open-journal-btn" type="button" class="journal-btn">📊 战绩面板</button>
           <button id="close-review" type="button">关闭</button>
@@ -86,32 +86,6 @@
       <footer class="chart-footer"><span id="chart-status">正在准备复盘…</span><span id="chart-cutoff"></span></footer>
     </section>
   </dialog>
-  <script src="/vendor/lightweight-charts.standalone.production.js"></script>
-  <script src="/vendor/line-tools/core.min.js"></script>
-  <script src="/vendor/line-tools/lines.min.js"></script>
-  <script src="/vendor/line-tools/fib-retracement.min.js"></script>
-  <script src="/vendor/line-tools/rectangle.min.js"></script>
-  <script src="/vendor/line-tools/parallel-channel.min.js"></script>
-  <script src="/vendor/lightweight-charts-drawing.umd.js"></script>
-  <script src="/review_chart.js?v=20260723-5"></script>
-  <script>
-    const params = new URLSearchParams(window.location.search);
-    const video = {
-      '视频ID': params.get('videoId') || '',
-      '视频标题': params.get('title') || '视频 K 线复盘',
-      '发布日期': params.get('date') || '',
-      '发布时间（页面时区）': params.get('time') || ''
-    };
-    if (params.get('mode') === 'replay') {
-      window.TiaReviewChart.openReplay();
-    } else if (video['视频ID'] && video['发布日期']) {
-      window.TiaReviewChart.open(video);
-    } else {
-      document.querySelector('#chart-status').textContent = '缺少视频日期参数，请从学习列表打开复盘。';
-      document.querySelector('#chart-status').classList.add('error');
-    }
-  </script>
-
   <!-- Custom Symbol Modal -->
   <dialog id="custom-symbol-dialog" class="chart-dialog-modal">
     <div class="modal-card">
@@ -179,5 +153,30 @@
     </div>
   </aside>
 
+  <script src="/vendor/lightweight-charts.standalone.production.js"></script>
+  <script src="/vendor/line-tools/core.min.js"></script>
+  <script src="/vendor/line-tools/lines.min.js"></script>
+  <script src="/vendor/line-tools/fib-retracement.min.js"></script>
+  <script src="/vendor/line-tools/rectangle.min.js"></script>
+  <script src="/vendor/line-tools/parallel-channel.min.js"></script>
+  <script src="/vendor/lightweight-charts-drawing.umd.js"></script>
+  <script src="/review_chart.js?v=20260726-13"></script>
+  <script>
+    const params = new URLSearchParams(window.location.search);
+    const video = {
+      '视频ID': params.get('videoId') || '',
+      '视频标题': params.get('title') || '视频 K 线复盘',
+      '发布日期': params.get('date') || '',
+      '发布时间（页面时区）': params.get('time') || ''
+    };
+    if (params.get('mode') === 'replay') {
+      window.TiaReviewChart.openReplay();
+    } else if (video['视频ID'] && video['发布日期']) {
+      window.TiaReviewChart.open(video);
+    } else {
+      document.querySelector('#chart-status').textContent = '缺少视频日期参数，请从学习列表打开复盘。';
+      document.querySelector('#chart-status').classList.add('error');
+    }
+  </script>
 </body>
 </html>

@@ -330,7 +330,6 @@ body[data-review-standalone="true"] .chart-dialog {
   color: var(--text-secondary);
 }
 
-.future-days-control,
 .offline-mode-control {
   display: flex;
   align-items: center;
@@ -342,14 +341,6 @@ body[data-review-standalone="true"] .chart-dialog {
 #price-scale-mode {
   min-width: 44px;
   font-weight: 700;
-}
-
-.future-days-control input {
-  width: 58px;
-  background: var(--bg-card);
-  color: var(--text-primary);
-  border: 1px solid var(--border-color);
-  border-radius: 6px;
 }
 
 .offline-mode-control input {
@@ -402,10 +393,6 @@ body[data-review-standalone="true"] .chart-dialog {
 .chart-candle-data strong {
   font-weight: 700;
   color: var(--text-primary);
-}
-
-.future-days-control[hidden] {
-  display: none;
 }
 
 .drawing-input-layer {

@@ -18,7 +18,8 @@ def main():
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>TiaBTC 顺序学习工作台</title>
-  <link rel="stylesheet" href="/review_chart.css?v=20260723-1">
+  <link rel="icon" href="data:,">
+  <link rel="stylesheet" href="/review_chart.css?v=20260723-2">
   <style>
     * {{ box-sizing: border-box; }}
     body {{ margin: 0; background: var(--bg-app); color: var(--text-primary); transition: background-color .2s ease, color .2s ease; font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "PingFang SC", "Microsoft YaHei", sans-serif; }}
@@ -310,4 +311,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-

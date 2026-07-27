@@ -4,6 +4,7 @@ import tempfile
 import unittest
 from contextlib import closing
 from pathlib import Path
+from unittest import mock
 
 import study_server
 
@@ -115,6 +116,22 @@ class DrawingStorageTests(unittest.TestCase):
                 study_server.load_candle_range("BTCUSDT", "60", 1000, 2000, offline=True)
         finally:
             study_server.fetch_bybit_candles = original_fetch
+
+    def test_video_chart_stops_exactly_at_publish_time(self):
+        anchor = 1_704_067_200_000
+        now = 1_800_000_000_000
+        with (
+            mock.patch.object(study_server.time, "time", return_value=now / 1000),
+            mock.patch.object(study_server, "load_candle_range", return_value=([], "sqlite", "")) as load_range,
+        ):
+            payload = study_server.load_chart_candles("BTCUSDT", "60", anchor)
+
+        self.assertEqual(payload["effectiveCutoff"], anchor)
+        self.assertEqual(payload["requestedCutoff"], anchor)
+        self.assertEqual(payload["loadedCutoff"], anchor)
+        self.assertFalse(payload["hasMoreLater"])
+        self.assertNotIn("futureDays", payload)
+        self.assertEqual(load_range.call_args.args[3], anchor)
 
     def test_rejects_unknown_system_and_wrong_point_count(self):
         invalid_drawings = [

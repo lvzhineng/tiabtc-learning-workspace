@@ -24,7 +24,7 @@ SEED_DATABASE_FILE = ROOT / "data" / "tiabtc-review-seed.sqlite"
 HOST = "127.0.0.1"
 PORT = 8765
 VALID_STATUSES = {"unlearned", "learning", "learned"}
-VALID_SYMBOLS = {"BTCUSDT", "ETHUSDT"}
+VALID_SYMBOLS = {"BTCUSDT", "ETHUSDT", "SOLUSDT", "BNBUSDT", "DOGEUSDT", "XRPUSDT"}
 VALID_INTERVALS = {"5", "15", "60", "240", "D", "W"}
 VALID_DRAWING_TYPES = {
     "TrendLine", "HorizontalLine", "HorizontalRay", "VerticalLine", "FibRetracement", "Ray",
@@ -185,30 +185,6 @@ def initialize_database():
         )
 
 
-def get_future_days():
-    with DATABASE_LOCK, database() as connection:
-        row = connection.execute("SELECT value FROM app_settings WHERE key = 'future_days'").fetchone()
-    try:
-        return min(30, max(0, int(row["value"]))) if row else 3
-    except (TypeError, ValueError):
-        return 3
-
-
-def set_future_days(value):
-    if isinstance(value, bool):
-        raise ValueError("未来天数必须是 0–30 的整数")
-    days = int(value)
-    if days < 0 or days > 30:
-        raise ValueError("未来天数必须是 0–30 的整数")
-    with DATABASE_LOCK, database() as connection:
-        connection.execute(
-            "INSERT INTO app_settings (key, value) VALUES ('future_days', ?) "
-            "ON CONFLICT(key) DO UPDATE SET value = excluded.value",
-            (str(days),),
-        )
-    return days
-
-
 def get_offline_mode():
     with DATABASE_LOCK, database() as connection:
         row = connection.execute("SELECT value FROM app_settings WHERE key = 'offline_mode'").fetchone()
@@ -230,6 +206,14 @@ def set_offline_mode(value):
 def validate_market_scope(symbol, interval):
     if not isinstance(symbol, str) or not re.match(r"^[A-Z0-9]{3,15}USDT$", symbol):
         raise ValueError("合约标的格式无效，必须为 USDT 永续合约（如 SOLUSDT）")
+    if symbol not in VALID_SYMBOLS:
+        with DATABASE_LOCK, database() as connection:
+            custom_symbol = connection.execute(
+                "SELECT 1 FROM custom_symbols WHERE symbol = ?",
+                (symbol,),
+            ).fetchone()
+        if not custom_symbol:
+            raise ValueError("该合约尚未添加，请先通过自定义合约入口校验")
     if interval not in VALID_INTERVALS:
         raise ValueError("不支持该 K 线周期")
 
@@ -373,26 +357,21 @@ def load_candle_range(symbol, interval, start_timestamp, end_timestamp, offline=
     return candles, source, warning
 
 
-def load_chart_candles(symbol, interval, anchor_timestamp, future_days):
+def load_chart_candles(symbol, interval, anchor_timestamp):
     validate_market_scope(symbol, interval)
     if anchor_timestamp < 1_500_000_000_000 or anchor_timestamp > int(time.time() * 1000) + 31 * 86_400_000:
         raise ValueError("视频时间无效")
-    requested_cutoff = anchor_timestamp + future_days * 86_400_000
-    effective_cutoff = min(requested_cutoff, int(time.time() * 1000))
+    effective_cutoff = anchor_timestamp
     start_timestamp = anchor_timestamp - INTERVAL_MILLISECONDS[interval] * 500
-    loaded_cutoff = min(
-        effective_cutoff,
-        anchor_timestamp + INTERVAL_MILLISECONDS[interval] * INITIAL_FUTURE_BARS,
-    )
+    loaded_cutoff = effective_cutoff
     candles, source, warning = load_candle_range(symbol, interval, start_timestamp, loaded_cutoff)
     return {
         "candles": candles,
         "anchor": anchor_timestamp,
-        "requestedCutoff": requested_cutoff,
+        "requestedCutoff": effective_cutoff,
         "effectiveCutoff": effective_cutoff,
         "loadedCutoff": loaded_cutoff,
         "hasMoreLater": loaded_cutoff < effective_cutoff,
-        "futureDays": future_days,
         "source": source,
         "warning": warning,
     }
@@ -637,9 +616,11 @@ def add_custom_symbol(symbol_str):
     now_ts = int(time.time() * 1000)
     start_ts = now_ts - 86_400_000 * 2
     try:
-        fetch_bybit_candles(symbol, "60", start_ts, now_ts)
+        candles = fetch_bybit_candles(symbol, "60", start_ts, now_ts)
     except Exception as err:
         raise ValueError(f"校验该合约失败：{err}")
+    if not candles:
+        raise ValueError("交易所未返回该合约的 K 线，请检查合约代码")
 
     now = datetime.now().astimezone().isoformat()
     name = f"{symbol} 永续"
@@ -653,6 +634,8 @@ def add_custom_symbol(symbol_str):
 
 
 def get_paper_trades(symbol=None):
+    if symbol:
+        validate_market_scope(symbol, "60")
     with DATABASE_LOCK, database() as connection:
         if symbol:
             rows = connection.execute(
@@ -677,16 +660,41 @@ def save_paper_trade(payload):
     entry_price = float(payload.get("entryPrice", 0))
     tp_price = float(payload.get("tpPrice", 0))
     sl_price = float(payload.get("slPrice", 0))
-    rr_ratio = float(payload.get("rrRatio", 0))
     status = str(payload.get("status", "OPEN")).strip().upper()
-    pnl_r = float(payload.get("pnlR", 0))
     now = datetime.now().astimezone().isoformat()
-    created_at = payload.get("createdAt") or now
+    created_at = str(payload.get("createdAt") or now)
     closed_at = payload.get("closedAt")
 
     validate_market_scope(symbol, interval)
-    if entry_price <= 0 or tp_price <= 0 or sl_price <= 0:
+    if not re.match(r"^[A-Za-z0-9_-]{1,100}$", trade_id):
+        raise ValueError("模拟订单 ID 无效")
+    if not video_id or "/" in video_id or len(video_id) > 100:
+        raise ValueError("视频 ID 无效")
+    if direction not in {"LONG", "SHORT"}:
+        raise ValueError("交易方向必须为 LONG 或 SHORT")
+    if status not in {"OPEN", "WIN", "LOSS"}:
+        raise ValueError("交易状态无效")
+    if not all(math.isfinite(value) and value > 0 for value in (entry_price, tp_price, sl_price)):
         raise ValueError("开仓价、止盈价和止损价必须大于 0")
+    if direction == "LONG" and not (tp_price > entry_price > sl_price):
+        raise ValueError("做多订单必须满足：止盈价 > 开仓价 > 止损价")
+    if direction == "SHORT" and not (tp_price < entry_price < sl_price):
+        raise ValueError("做空订单必须满足：止盈价 < 开仓价 < 止损价")
+    rr_ratio = round(abs(tp_price - entry_price) / abs(entry_price - sl_price), 2)
+    if not math.isfinite(rr_ratio) or rr_ratio <= 0 or rr_ratio > 100:
+        raise ValueError("盈亏比必须在 0–100 之间")
+    pnl_r = 0 if status == "OPEN" else rr_ratio if status == "WIN" else -1.0
+    try:
+        datetime.fromisoformat(created_at.replace("Z", "+00:00"))
+        if closed_at:
+            closed_at = str(closed_at)
+            datetime.fromisoformat(closed_at.replace("Z", "+00:00"))
+    except ValueError as error:
+        raise ValueError("模拟订单时间格式无效") from error
+    if status == "OPEN":
+        closed_at = None
+    elif not closed_at:
+        closed_at = now
 
     with DATABASE_LOCK, database() as connection:
         connection.execute(
@@ -706,6 +714,8 @@ def save_paper_trade(payload):
 
 
 def delete_paper_trades(trade_id=None):
+    if trade_id and not re.match(r"^[A-Za-z0-9_-]{1,100}$", trade_id):
+        raise ValueError("模拟订单 ID 无效")
     with DATABASE_LOCK, database() as connection:
         if trade_id:
             connection.execute("DELETE FROM paper_trades WHERE id = ?", (trade_id,))
@@ -740,6 +750,7 @@ class StudyHandler(SimpleHTTPRequestHandler):
 
     def do_GET(self):
         parsed = urlparse(self.path)
+        query = parse_qs(parsed.query)
         if parsed.path == "/":
             self.path = "/TiaBTC_学习视频清单.html"
         if parsed.path == "/api/symbols":
@@ -747,32 +758,17 @@ class StudyHandler(SimpleHTTPRequestHandler):
             return
 
         if parsed.path == "/api/paper-trades":
-            symbol = query.get("symbol", [""])[0]
-            self.send_json(HTTPStatus.OK, {"trades": get_paper_trades(symbol)})
-            return
+            try:
+                symbol = query.get("symbol", [""])[0]
+                return self.send_json(HTTPStatus.OK, {"trades": get_paper_trades(symbol)})
+            except ValueError as error:
+                return self.send_json(HTTPStatus.BAD_REQUEST, {"error": str(error)})
         if parsed.path == "/api/state":
             return self.send_json(HTTPStatus.OK, load_state())
-        if parsed.path == "/api/symbols":
-            payload = self.read_json()
-            try:
-                res = add_custom_symbol(payload.get("symbol"))
-                self.send_json(HTTPStatus.CREATED, res)
-            except ValueError as error:
-                self.send_json(HTTPStatus.BAD_REQUEST, {"error": str(error)})
-            return
-
-        if parsed.path == "/api/paper-trades":
-            payload = self.read_json()
-            try:
-                res = save_paper_trade(payload)
-                self.send_json(HTTPStatus.OK, res)
-            except ValueError as error:
-                self.send_json(HTTPStatus.BAD_REQUEST, {"error": str(error)})
-            return
         if parsed.path == "/api/chart/config":
             return self.send_json(
                 HTTPStatus.OK,
-                {"futureDays": get_future_days(), "offlineMode": get_offline_mode()},
+                {"offlineMode": get_offline_mode()},
             )
         if parsed.path == "/api/chart/candles":
             try:
@@ -808,10 +804,7 @@ class StudyHandler(SimpleHTTPRequestHandler):
                         load_replay_candles(symbol, interval, int(replay_cursor), limit),
                     )
                 anchor = int(query.get("anchor", ["0"])[0])
-                days = int(query.get("futureDays", [str(get_future_days())])[0])
-                if days < 0 or days > 30:
-                    raise ValueError("未来天数必须是 0–30 的整数")
-                return self.send_json(HTTPStatus.OK, load_chart_candles(symbol, interval, anchor, days))
+                return self.send_json(HTTPStatus.OK, load_chart_candles(symbol, interval, anchor))
             except (ValueError, RuntimeError) as error:
                 return self.send_json(HTTPStatus.BAD_GATEWAY, {"error": str(error)})
         if parsed.path == "/api/chart/drawings":
@@ -831,9 +824,13 @@ class StudyHandler(SimpleHTTPRequestHandler):
         parsed = urlparse(self.path)
         try:
             payload = self.read_json_body()
+            if parsed.path == "/api/symbols":
+                return self.send_json(HTTPStatus.CREATED, add_custom_symbol(payload.get("symbol")))
+            if parsed.path == "/api/paper-trades":
+                return self.send_json(HTTPStatus.OK, save_paper_trade(payload))
             if parsed.path == "/api/chart/drawings":
                 return self.send_json(HTTPStatus.OK, save_drawing(payload))
-        except (ValueError, json.JSONDecodeError) as error:
+        except (ValueError, TypeError, OverflowError, AttributeError, json.JSONDecodeError) as error:
             return self.send_json(HTTPStatus.BAD_REQUEST, {"error": str(error)})
         return self.send_error(HTTPStatus.NOT_FOUND)
 
@@ -848,15 +845,13 @@ class StudyHandler(SimpleHTTPRequestHandler):
         if path == "/api/chart/config":
             try:
                 payload = self.read_json_body()
-                if "futureDays" in payload:
-                    set_future_days(payload["futureDays"])
                 if "offlineMode" in payload:
                     set_offline_mode(payload["offlineMode"])
-                if "futureDays" not in payload and "offlineMode" not in payload:
+                if "offlineMode" not in payload:
                     raise ValueError("没有可保存的图表配置")
                 return self.send_json(
                     HTTPStatus.OK,
-                    {"futureDays": get_future_days(), "offlineMode": get_offline_mode()},
+                    {"offlineMode": get_offline_mode()},
                 )
             except (ValueError, json.JSONDecodeError, AttributeError) as error:
                 return self.send_json(HTTPStatus.BAD_REQUEST, {"error": str(error)})
@@ -882,10 +877,14 @@ class StudyHandler(SimpleHTTPRequestHandler):
 
     def do_DELETE(self):
         parsed = urlparse(self.path)
-        if parsed.path != "/api/chart/drawings":
-            return self.send_error(HTTPStatus.NOT_FOUND)
         try:
-            delete_drawings(parse_qs(parsed.query))
+            query = parse_qs(parsed.query)
+            if parsed.path == "/api/paper-trades":
+                delete_paper_trades(query.get("id", [None])[0])
+                return self.send_json(HTTPStatus.OK, {"ok": True})
+            if parsed.path != "/api/chart/drawings":
+                return self.send_error(HTTPStatus.NOT_FOUND)
+            delete_drawings(query)
             return self.send_json(HTTPStatus.OK, {"ok": True})
         except ValueError as error:
             return self.send_json(HTTPStatus.BAD_REQUEST, {"error": str(error)})
