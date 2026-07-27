@@ -450,8 +450,18 @@
   async function checkPaperTradesSettlement() {
     if (state.settlingPaperTrades || !Array.isArray(state.candleData) || state.candleData.length === 0) return;
     state.settlingPaperTrades = true;
+    const settlementSymbol = state.symbol;
+    const settlementInterval = state.interval;
+    const settlementReloadEpoch = state.reloadEpoch;
+    const settlementContextIsCurrent = () => (
+      settlementSymbol === state.symbol
+      && settlementInterval === state.interval
+      && settlementReloadEpoch === state.reloadEpoch
+    );
     try {
-      const res = await fetch(`/api/paper-trades?symbol=${state.symbol}`).then(readJson);
+      const params = new URLSearchParams({ symbol: settlementSymbol });
+      const res = await fetch(`/api/paper-trades?${params}`).then(readJson);
+      if (!settlementContextIsCurrent()) return;
       const trades = res.trades || [];
       state.paperTrades = trades;
 
@@ -494,12 +504,10 @@
           }
 
           if (newStatus) {
-            trade.status = newStatus;
-            trade.pnlR = pnlR;
-            trade.closedAt = new Date(
+            if (!settlementContextIsCurrent()) return;
+            const closedAt = new Date(
               (Number(candle.time) + INTERVAL_SECONDS[trade.interval]) * 1000,
             ).toISOString();
-            settledCount++;
             await fetch('/api/paper-trades', {
               method: 'POST',
               headers: { 'Content-Type': 'application/json' },
@@ -515,9 +523,15 @@
                 rrRatio: trade.rr_ratio,
                 status: newStatus,
                 pnlR: pnlR,
-                closedAt: trade.closedAt,
+                createdAt: trade.created_at,
+                closedAt,
               }),
-            });
+            }).then(readJson);
+            if (!settlementContextIsCurrent()) return;
+            trade.status = newStatus;
+            trade.pnlR = pnlR;
+            trade.closedAt = closedAt;
+            settledCount++;
             setStatus(`${newStatus === 'WIN' ? '🎉 止盈结算！' : '🔻 止损结算！'} ${trade.symbol} ${trade.direction === 'LONG' ? '做多' : '做空'} (${pnlR > 0 ? '+' : ''}${pnlR}R)`);
             break;
           }
@@ -2374,6 +2388,9 @@
     if (!clickedCandle || !Number.isFinite(Number(clickedCandle.time))) return;
     const clickedTimestamp = Number(clickedCandle.time) * 1000;
     const cutTimestamp = clickedTimestamp + INTERVAL_SECONDS[state.interval] * 1000;
+    const hasMoreBeyondBuffer = state.mode === 'replay'
+      ? state.replayHasMore
+      : state.reviewHasMoreLater;
     stopReplayPlayback();
     state.mode = 'replay';
     state.replayReady = true;
@@ -2382,7 +2399,7 @@
     if (clickedIndex < 0) return;
     state.replayVisibleCount = clickedIndex + 1;
     state.replayStartIndex = state.replayVisibleCount;
-    state.replayHasMore = state.replayVisibleCount < state.candleData.length;
+    state.replayHasMore = hasMoreBeyondBuffer || state.replayVisibleCount < state.candleData.length;
     if (!state.video) {
       const dateStr = beijingDateString(new Date(cutTimestamp));
       state.replayDate = dateStr;
