@@ -1250,6 +1250,7 @@
     if (!candle || !Number.isFinite(Number(candle.open))) {
       [elements.candleOpen, elements.candleHigh, elements.candleLow, elements.candleClose, elements.candleChange]
         .forEach((element) => { element.textContent = '--'; element.style.color = ''; });
+      elements.candleChange.className = '';
       return;
     }
     const open = Number(candle.open);
@@ -1269,7 +1270,8 @@
     elements.candleLow.textContent = formatPrice(low);
     elements.candleClose.textContent = formatPrice(close);
     elements.candleChange.textContent = `${change >= 0 ? '+' : ''}${formatPrice(change)} (${changePercent >= 0 ? '+' : ''}${changePercent.toFixed(2)}%)`;
-    [elements.candleOpen, elements.candleHigh, elements.candleLow, elements.candleClose, elements.candleChange]
+    elements.candleChange.className = change >= 0 ? 'up' : 'down';
+    [elements.candleOpen, elements.candleHigh, elements.candleLow, elements.candleClose]
       .forEach((element) => { element.style.color = color; });
   }
 
