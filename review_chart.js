@@ -947,12 +947,6 @@
     const requestedMode = state.mode;
     invalidatePendingDrawingSaves();
     cancelActiveDrawing();
-    state.lineTools.removeAllLineTools();
-    state.enhancedDrawings?.clearAll();
-    state.drawingIds.clear();
-    state.selectedId = '';
-    state.selectedLocked = false;
-    resetDrawingHistory([]);
     updateDrawingButtons();
     state.loadingEarlier = false;
     state.noMoreEarlier = false;
@@ -982,13 +976,21 @@
       if (drawingResult.status === 'rejected') throw drawingResult.reason;
       const drawingPayload = drawingResult.value;
       const drawings = (drawingPayload.drawings || []).filter((drawing) => USER_TOOL_TYPES.has(drawing.toolType));
-      state.drawingIds = new Set(drawings.map((drawing) => drawing.id));
-      resetDrawingHistory(drawings);
-      drawingsLoaded = true;
-      updateDrawingButtons();
       if (candleResult.status === 'rejected') throw candleResult.reason;
       const candlePayload = candleResult.value;
       const candles = candlePayload.candles || [];
+      const previousDrawingSnapshot = currentDrawingSnapshot();
+      state.drawingIds = new Set(drawings.map((drawing) => drawing.id));
+      resetDrawingHistory(drawings);
+      const drawingsChanged = previousDrawingSnapshot !== state.historySnapshot;
+      if (drawingsChanged) {
+        state.lineTools.removeAllLineTools();
+        state.enhancedDrawings?.clearAll();
+        state.selectedId = '';
+        state.selectedLocked = false;
+      }
+      drawingsLoaded = true;
+      updateDrawingButtons();
       state.candleData = candles.map(toChartCandle);
       if (state.mode === 'replay') {
         const cursorSeconds = Math.floor((state.replayCursorTimestamp || state.anchor) / 1000);
@@ -1008,10 +1010,10 @@
       const legacyDrawings = drawings.filter((drawing) => LEGACY_TOOL_TYPES.has(drawing.toolType)).map(normalizeDrawingStyle);
       const enhancedDrawings = drawings.filter((drawing) => ENHANCED_TOOL_TYPES.has(drawing.toolType));
       renderCandleData(drawingAnchorTimesFromPayload(drawings));
-      if (legacyDrawings.length && !state.lineTools.importLineTools(JSON.stringify(legacyDrawings))) {
+      if (drawingsChanged && legacyDrawings.length && !state.lineTools.importLineTools(JSON.stringify(legacyDrawings))) {
         throw new Error('已保存的画图数据无法导入。');
       }
-      enhancedDrawings.forEach(importEnhancedDrawing);
+      if (drawingsChanged) enhancedDrawings.forEach(importEnhancedDrawing);
       addVideoPublishedMarker();
       setInitialVisibleRange();
       const cacheLabel = candlePayload.source === 'bybit' ? 'Bybit 已写入 SQLite' : '已从 SQLite 读取';

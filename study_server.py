@@ -57,6 +57,7 @@ DATABASE_LOCK = threading.RLock()
 MARKET_FETCH_LOCKS_GUARD = threading.Lock()
 MARKET_FETCH_LOCKS = {}
 MARKET_FETCH_FAILURES = {}
+MARKET_REFRESHING = set()
 
 
 def load_state():
@@ -326,11 +327,47 @@ def market_fetch_lock(symbol, interval):
         return MARKET_FETCH_LOCKS.setdefault(key, threading.Lock())
 
 
+def schedule_candle_refresh(symbol, interval, start_timestamp, end_timestamp):
+    fetch_key = (symbol, interval)
+    with MARKET_FETCH_LOCKS_GUARD:
+        if fetch_key in MARKET_REFRESHING:
+            return
+        MARKET_REFRESHING.add(fetch_key)
+
+    def refresh():
+        try:
+            with market_fetch_lock(symbol, interval):
+                if cached_range_contains(symbol, interval, start_timestamp, end_timestamp):
+                    return
+                failed_at, failed_message = MARKET_FETCH_FAILURES.get(fetch_key, (0, ""))
+                if failed_message and time.monotonic() - failed_at < FETCH_FAILURE_COOLDOWN_SECONDS:
+                    return
+                try:
+                    fetched = fetch_bybit_candles(symbol, interval, start_timestamp, end_timestamp)
+                    save_candles(symbol, interval, start_timestamp, end_timestamp, fetched)
+                    MARKET_FETCH_FAILURES.pop(fetch_key, None)
+                except RuntimeError as error:
+                    MARKET_FETCH_FAILURES[fetch_key] = (time.monotonic(), str(error))
+        finally:
+            with MARKET_FETCH_LOCKS_GUARD:
+                MARKET_REFRESHING.discard(fetch_key)
+
+    threading.Thread(
+        target=refresh,
+        name=f"market-refresh-{symbol}-{interval}",
+        daemon=True,
+    ).start()
+
+
 def load_candle_range(symbol, interval, start_timestamp, end_timestamp, offline=None):
     source = "sqlite"
     warning = ""
     offline = get_offline_mode() if offline is None else offline
     covered = cached_range_contains(symbol, interval, start_timestamp, end_timestamp)
+    candles = list_candles(symbol, interval, start_timestamp, end_timestamp)
+    if not covered and not offline and candles:
+        schedule_candle_refresh(symbol, interval, start_timestamp, end_timestamp)
+        return candles, source, warning
     if not covered and not offline:
         fetch_key = (symbol, interval)
         with market_fetch_lock(symbol, interval):
@@ -349,12 +386,23 @@ def load_candle_range(symbol, interval, start_timestamp, end_timestamp, offline=
                     except RuntimeError as error:
                         warning = str(error)
                         MARKET_FETCH_FAILURES[fetch_key] = (time.monotonic(), warning)
-    candles = list_candles(symbol, interval, start_timestamp, end_timestamp)
+        candles = list_candles(symbol, interval, start_timestamp, end_timestamp)
     if offline and not covered:
         warning = "仅本地模式：该时间范围的缓存不完整"
     if not candles and warning:
         raise RuntimeError(warning)
     return candles, source, warning
+
+
+def latest_closed_candle_timestamp(interval, now_timestamp=None):
+    now_timestamp = int(time.time() * 1000) if now_timestamp is None else now_timestamp
+    interval_milliseconds = INTERVAL_MILLISECONDS[interval]
+    alignment_offset = 4 * 86_400_000 if interval == "W" else 0
+    current_open = (
+        (now_timestamp - alignment_offset) // interval_milliseconds * interval_milliseconds
+        + alignment_offset
+    )
+    return current_open - interval_milliseconds
 
 
 def load_chart_candles(symbol, interval, anchor_timestamp):
@@ -402,8 +450,9 @@ def load_replay_candles(symbol, interval, cursor_timestamp, limit):
     if limit < 100 or limit > 1000:
         raise ValueError("单次加载数量必须是 100–1000")
     interval_milliseconds = INTERVAL_MILLISECONDS[interval]
+    latest_closed_timestamp = latest_closed_candle_timestamp(interval, now_timestamp)
     start_timestamp = cursor_timestamp - interval_milliseconds * 500
-    end_timestamp = min(now_timestamp, cursor_timestamp + interval_milliseconds * limit)
+    end_timestamp = min(latest_closed_timestamp, cursor_timestamp + interval_milliseconds * limit)
     candles, source, warning = load_candle_range(symbol, interval, start_timestamp, end_timestamp)
     candles = [
         candle for candle in candles
@@ -415,7 +464,7 @@ def load_replay_candles(symbol, interval, cursor_timestamp, limit):
         "effectiveCutoff": end_timestamp,
         "source": source,
         "warning": warning,
-        "hasMore": end_timestamp < now_timestamp,
+        "hasMore": end_timestamp < latest_closed_timestamp,
     }
 
 
@@ -427,7 +476,7 @@ def load_later_candles(symbol, interval, after_timestamp, limit, cutoff_timestam
     if limit < 100 or limit > 1000:
         raise ValueError("单次加载数量必须是 100–1000")
     interval_milliseconds = INTERVAL_MILLISECONDS[interval]
-    target_end = now_timestamp
+    target_end = latest_closed_candle_timestamp(interval, now_timestamp)
     if cutoff_timestamp is not None:
         if cutoff_timestamp < 1_230_768_000_000 or cutoff_timestamp > now_timestamp + 31 * 86_400_000:
             raise ValueError("K 线截止时间无效")
