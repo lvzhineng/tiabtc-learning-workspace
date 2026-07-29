@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>TiaBTC K线复盘工作台</title>
   <link rel="icon" href="data:,">
-  <link rel="stylesheet" href="/review_chart.css?v=20260727-5">
+  <link rel="stylesheet" href="/review_chart.css?v=20260729-2">
   <script>
     const savedTheme = localStorage.getItem('tiabtc-theme') || 'dark';
     document.documentElement.setAttribute('data-theme', savedTheme);
@@ -59,9 +59,9 @@
           </div>
           <button id="price-scale-mode" type="button" aria-pressed="false" title="切换对数价格坐标">Log</button>
           <button id="theme-toggle" type="button" aria-label="切换明暗主题">🌙 暗黑</button>
+          <button id="magnet-mode" class="magnet-mode-control active" type="button"
+            aria-pressed="true" title="关闭画线价格吸附">🧲 吸附</button>
           <label class="offline-mode-control"><input id="offline-mode" type="checkbox" checked> 仅本地</label>
-          <button id="open-journal-btn" type="button" class="journal-btn">📊 战绩账本</button>
-          <button id="close-review" type="button">关闭</button>
         </div>
       </header>
 
@@ -156,57 +156,6 @@
     </div>
   </dialog>
 
-  <!-- 复盘模拟打单战绩账本 Drawer -->
-  <aside id="journal-drawer" class="journal-drawer" hidden>
-    <div class="drawer-header">
-      <h3>📊 复盘模拟打单战绩账本</h3>
-      <button id="close-journal-btn" type="button" class="drawer-close">✕</button>
-    </div>
-    <div class="drawer-body">
-      <div class="journal-stats-grid">
-        <div class="journal-stat-card">
-          <span class="stat-label">总交易笔数</span>
-          <strong id="journal-total-trades">0</strong>
-        </div>
-        <div class="journal-stat-card">
-          <span class="stat-label">胜率 (Win Rate)</span>
-          <strong id="journal-win-rate">0%</strong>
-        </div>
-        <div class="journal-stat-card">
-          <span class="stat-label">累计 R 期望收益</span>
-          <strong id="journal-total-r">+0.00 R</strong>
-        </div>
-        <div class="journal-stat-card">
-          <span class="stat-label">平均盈亏比 (Avg R:R)</span>
-          <strong id="journal-avg-rr">0.00</strong>
-        </div>
-      </div>
-      <div class="journal-actions">
-        <button id="clear-journal-btn" type="button" class="danger-btn">🗑️ 清空所有模拟记录</button>
-      </div>
-      <div class="journal-table-wrap">
-        <table class="journal-table">
-          <thead>
-            <tr>
-              <th>时间</th>
-              <th>合约</th>
-              <th>方向</th>
-              <th>入场价</th>
-              <th>止盈价</th>
-              <th>止损价</th>
-              <th>R:R</th>
-              <th>状态/结果</th>
-              <th>操作</th>
-            </tr>
-          </thead>
-          <tbody id="journal-table-body">
-            <tr><td colspan="9" class="empty">暂无模拟交易记录。在图表拉出做多/做空工具即可录单。</td></tr>
-          </tbody>
-        </table>
-      </div>
-    </div>
-  </aside>
-
   <script src="/vendor/lightweight-charts.standalone.production.js"></script>
   <script src="/vendor/line-tools/core.min.js"></script>
   <script src="/vendor/line-tools/lines.min.js"></script>
@@ -214,7 +163,7 @@
   <script src="/vendor/line-tools/rectangle.min.js"></script>
   <script src="/vendor/line-tools/parallel-channel.min.js"></script>
   <script src="/vendor/lightweight-charts-drawing.umd.js"></script>
-  <script src="/review_chart.js?v=20260727-4"></script>
+  <script src="/review_chart.js?v=20260729-2"></script>
   <script>
     // Theme Manager
     const initialTheme = localStorage.getItem('tiabtc-theme') || 'dark';

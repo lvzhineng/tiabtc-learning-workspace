@@ -35,6 +35,8 @@
   const SYSTEM_MARKER_ID = '__system__:video-published';
   const TOOLBAR_POSITION_KEY = 'tia-review-drawing-toolbar-position-v1';
   const PRICE_SCALE_MODE_KEY = 'tia-review-price-scale-mode-v1';
+  const MAGNET_MODE_KEY = 'tia-review-magnet-mode-v1';
+  const MAGNET_THRESHOLD_PIXELS = 10;
   const FUTURE_WHITESPACE_BARS = 500;
   const VISIBLE_RIGHT_PADDING_BARS = 4;
   const state = {
@@ -44,9 +46,9 @@
     symbol: 'BTCUSDT',
     interval: '60',
     offlineMode: true,
+    magnetEnabled: true,
     logarithmicScale: false,
     allSymbols: [],
-    paperTrades: [],
     chart: null,
     series: null,
     volumeSeries: null,
@@ -93,7 +95,6 @@
     reviewCutoffTimestamp: 0,
     reviewHasMoreLater: false,
     reviewRightLoadArmed: false,
-    settlingPaperTrades: false,
   };
 
   const elements = {};
@@ -103,23 +104,20 @@
     state.initialized = true;
     [
       'review-dialog', 'review-video-title', 'review-video-time', 'chart-symbol', 'chart-interval',
-      'price-scale-mode', 'offline-mode', 'close-review', 'review-chart', 'chart-loading',
+      'price-scale-mode', 'magnet-mode', 'offline-mode', 'review-chart', 'chart-loading',
       'chart-status', 'chart-cutoff', 'undo-drawing', 'redo-drawing',
       'lock-drawing', 'delete-drawing', 'clear-drawings', 'drawing-tools-handle',
       'replay-controls', 'replay-date', 'start-replay', 'toggle-replay', 'step-replay',
       'replay-speed', 'replay-progress',
       'drawing-input-layer', 'chart-candle-data', 'candle-open', 'candle-high',
       'candle-low', 'candle-close', 'candle-change',
-      'open-journal-btn', 'journal-drawer', 'close-journal-btn', 'clear-journal-btn',
-      'journal-total-trades', 'journal-win-rate', 'journal-total-r', 'journal-avg-rr',
-      'journal-table-body', 'custom-symbol-dialog', 'custom-symbol-input',
+      'custom-symbol-dialog', 'custom-symbol-input',
       'custom-symbol-msg', 'confirm-add-symbol', 'cancel-add-symbol',
     ].forEach((id) => { elements[toCamel(id)] = document.getElementById(id); });
     elements.drawingTools = document.querySelector('.drawing-tools');
     elements.chartStage = document.querySelector('.chart-stage');
     elements.reviewDialog.tabIndex = -1;
 
-    elements.closeReview.addEventListener('click', close);
     elements.chartSymbol.addEventListener('change', () => {
       if (elements.chartSymbol.value === '__add__') {
         renderSymbolSelectorOptions();
@@ -142,6 +140,7 @@
       });
     });
     elements.offlineMode.addEventListener('change', saveOfflineMode);
+    elements.magnetMode.addEventListener('click', toggleMagnetMode);
     elements.priceScaleMode.addEventListener('click', togglePriceScaleMode);
     const armReviewLaterLoad = () => {
       if (state.mode === 'review') state.reviewRightLoadArmed = true;
@@ -186,20 +185,14 @@
     elements.deleteDrawing.addEventListener('click', deleteSelectedDrawing);
     elements.clearDrawings.addEventListener('click', clearDrawings);
     elements.reviewDialog.addEventListener('close', cancelActiveDrawing);
-    elements.openJournalBtn.addEventListener('click', openJournalDrawer);
-    elements.closeJournalBtn.addEventListener('click', closeJournalDrawer);
-    elements.clearJournalBtn.addEventListener('click', clearPaperTrades);
     elements.confirmAddSymbol.addEventListener('click', handleAddCustomSymbol);
     elements.cancelAddSymbol.addEventListener('click', () => elements.customSymbolDialog.close());
     elements.customSymbolInput.addEventListener('keydown', (event) => {
       if (event.key === 'Enter') void handleAddCustomSymbol();
     });
-    elements.journalTableBody.addEventListener('click', (event) => {
-      const button = event.target.closest('[data-delete-trade-id]');
-      if (button) void deletePaperTrade(button.dataset.deleteTradeId);
-    });
     initializeDraggableToolbar();
     restorePriceScaleMode();
+    restoreMagnetMode();
   }
 
   async function open(video) {
@@ -772,6 +765,50 @@
     }
   }
 
+  function toggleMagnetMode() {
+    state.magnetEnabled = !state.magnetEnabled;
+    try {
+      localStorage.setItem(MAGNET_MODE_KEY, String(state.magnetEnabled));
+    } catch (_) {
+      // Private browsing
+    }
+    applyMagnetMode();
+    setStatus(state.magnetEnabled ? '画线吸附已开启。' : '画线吸附已关闭。');
+  }
+
+  function restoreMagnetMode() {
+    try {
+      state.magnetEnabled = localStorage.getItem(MAGNET_MODE_KEY) !== 'false';
+    } catch (_) {
+      state.magnetEnabled = true;
+    }
+    applyMagnetMode();
+  }
+
+  function applyMagnetMode() {
+    elements.magnetMode.classList.toggle('active', state.magnetEnabled);
+    elements.magnetMode.setAttribute('aria-pressed', String(state.magnetEnabled));
+    elements.magnetMode.textContent = state.magnetEnabled ? '🧲 吸附' : '🧲 自由';
+    elements.magnetMode.title = state.magnetEnabled ? '关闭画线价格吸附' : '开启画线价格吸附';
+    if (!state.lineTools) return;
+    state.lineTools.setMagnetThreshold(state.magnetEnabled ? MAGNET_THRESHOLD_PIXELS : 0);
+    let legacyDrawings = [];
+    try {
+      legacyDrawings = JSON.parse(state.lineTools.exportLineTools() || '[]');
+    } catch (_) {
+      return;
+    }
+    legacyDrawings
+      .filter((drawing) => drawing.id !== SYSTEM_MARKER_ID && LEGACY_TOOL_TYPES.has(drawing.toolType))
+      .forEach((drawing) => {
+        if (Number(drawing.options?.magnetThreshold) === 0) return;
+        state.lineTools.applyLineToolOptions({
+          ...drawing,
+          options: { ...drawing.options, magnetThreshold: 0 },
+        });
+      });
+  }
+
   function initializeDraggableToolbar() {
     let drag = null;
     const handle = elements.drawingToolsHandle;
@@ -888,7 +925,7 @@
     fib.registerFibRetracementPlugin(state.lineTools);
     state.lineTools.registerLineTool('Rectangle', rectangle.LineToolRectangle);
     channel.registerParallelChannelPlugin(state.lineTools);
-    state.lineTools.setMagnetThreshold(10);
+    state.lineTools.setMagnetThreshold(state.magnetEnabled ? MAGNET_THRESHOLD_PIXELS : 0);
     state.lineTools.subscribeLineToolsAfterEdit(handleLineToolAfterEdit);
     state.lineTools.subscribeLineToolsSingleClick(handleLineToolSelection);
   }
@@ -1014,6 +1051,7 @@
         throw new Error('已保存的画图数据无法导入。');
       }
       if (drawingsChanged) enhancedDrawings.forEach(importEnhancedDrawing);
+      applyMagnetMode();
       addVideoPublishedMarker();
       setInitialVisibleRange();
       const cacheLabel = candlePayload.source === 'bybit' ? 'Bybit 已写入 SQLite' : '已从 SQLite 读取';
@@ -1500,7 +1538,6 @@
     state.volumeSeries?.update(toVolumePoint(candle), true);
     updateCandleData(candle);
     refreshVolumeProfiles();
-    void checkPaperTradesSettlement();
     followReplayCandle(visibleRange, candleLogicalIndex);
     updateReplayControls();
     if (state.replayVisibleCount >= state.candleData.length && !state.replayHasMore) {
@@ -1680,7 +1717,29 @@
     const y = event.clientY - rect.top;
     const time = state.chart?.timeScale().coordinateToTime(x);
     const price = state.series?.coordinateToPrice(y);
-    return time === null || time === undefined || price === null || price === undefined ? null : { time, price };
+    if (time === null || time === undefined || price === null || price === undefined) return null;
+    return {
+      time,
+      price: snapEnhancedDrawingPrice(time, y, price),
+    };
+  }
+
+  function snapEnhancedDrawingPrice(time, y, fallbackPrice) {
+    if (!state.magnetEnabled || state.activeToolType === 'brush') return fallbackPrice;
+    const candle = state.candleData.find((item) => Number(item.time) === Number(time));
+    if (!candle) return fallbackPrice;
+    let snappedPrice = fallbackPrice;
+    let closestDistance = Number.POSITIVE_INFINITY;
+    [candle.open, candle.high, candle.low, candle.close].forEach((candidate) => {
+      const coordinate = state.series?.priceToCoordinate(Number(candidate));
+      if (coordinate === null || coordinate === undefined) return;
+      const distance = Math.abs(y - coordinate);
+      if (distance < closestDistance) {
+        closestDistance = distance;
+        snappedPrice = Number(candidate);
+      }
+    });
+    return closestDistance <= MAGNET_THRESHOLD_PIXELS ? snappedPrice : fallbackPrice;
   }
 
   function anchorToPixel(anchor) {
@@ -1947,16 +2006,17 @@
 
   function drawingOptions(toolType) {
     const line = { color: '#2563eb', width: 2 };
+    const magnetThreshold = 0;
     if (toolType === 'FibRetracement') {
-      return { line: { width: 2 }, levels: fibonacciLevels(), magnetThreshold: 10 };
+      return { line: { width: 2 }, levels: fibonacciLevels(), magnetThreshold };
     }
     if (toolType === 'Rectangle') {
-      return { line, background: { color: 'rgba(37, 99, 235, 0.10)' }, magnetThreshold: 10 };
+      return { line, background: { color: 'rgba(37, 99, 235, 0.10)' }, magnetThreshold };
     }
     if (toolType === 'ParallelChannel') {
-      return { line, background: { color: 'rgba(37, 99, 235, 0.08)' }, magnetThreshold: 10 };
+      return { line, background: { color: 'rgba(37, 99, 235, 0.08)' }, magnetThreshold };
     }
-    return { line, magnetThreshold: 10 };
+    return { line, magnetThreshold };
   }
 
   function fibonacciLevels() {
@@ -1969,11 +2029,18 @@
   }
 
   function normalizeDrawingStyle(drawing) {
-    if (drawing.toolType !== 'FibRetracement') return drawing;
-    return {
+    const normalized = {
       ...drawing,
       options: {
         ...drawing.options,
+        magnetThreshold: 0,
+      },
+    };
+    if (drawing.toolType !== 'FibRetracement') return normalized;
+    return {
+      ...normalized,
+      options: {
+        ...normalized.options,
         line: { ...drawing.options?.line, width: 2 },
         levels: fibonacciLevels(),
       },
@@ -2274,7 +2341,6 @@
   }
 
   function updateDrawingButtons() {
-    updatePaperTradeButton();
     elements.undoDrawing.disabled = state.restoringHistory || state.undoStack.length === 0;
     elements.redoDrawing.disabled = state.restoringHistory || state.redoStack.length === 0;
     elements.lockDrawing.disabled = !state.selectedId;

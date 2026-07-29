@@ -144,8 +144,11 @@ body[data-review-standalone="true"] .chart-dialog {
   display: flex;
   align-items: center;
   justify-content: space-between;
+  flex-wrap: nowrap;
   gap: 18px;
   padding: 10px 20px;
+  overflow-x: auto;
+  overflow-y: hidden;
   border-bottom: 1px solid var(--border-color);
   background: var(--bg-card-glass);
   backdrop-filter: blur(14px);
@@ -153,7 +156,8 @@ body[data-review-standalone="true"] .chart-dialog {
 }
 
 .chart-heading {
-  min-width: 220px;
+  min-width: 180px;
+  flex: 0 0 180px;
 }
 
 .chart-heading strong,
@@ -186,13 +190,18 @@ body[data-review-standalone="true"] .chart-dialog {
   align-items: center;
   justify-content: flex-end;
   gap: 10px;
-  flex-wrap: wrap;
+  flex: 0 0 auto;
+  flex-wrap: nowrap;
+  white-space: nowrap;
 }
 
 /* 历史复盘 HUD 播控面板 */
 .replay-controls {
   display: flex;
   align-items: center;
+  flex: 0 0 auto;
+  flex-wrap: nowrap;
+  white-space: nowrap;
   gap: 10px;
   padding: 6px 14px;
   border: 1px solid var(--border-hover);
@@ -420,6 +429,21 @@ body[data-review-standalone="true"] .chart-dialog {
   color: var(--text-secondary);
   font-size: 12px;
   font-weight: 600;
+  white-space: nowrap;
+  flex: 0 0 auto;
+}
+
+.magnet-mode-control {
+  min-width: 74px;
+  white-space: nowrap;
+  flex: 0 0 auto;
+  font-weight: 700;
+}
+
+.magnet-mode-control.active {
+  color: var(--accent-blue);
+  border-color: color-mix(in srgb, var(--accent-blue) 55%, transparent);
+  background: color-mix(in srgb, var(--accent-blue) 12%, transparent);
 }
 
 #price-scale-mode {
