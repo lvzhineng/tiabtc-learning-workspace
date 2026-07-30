@@ -1,9 +1,12 @@
 import { useEffect, useState } from 'react';
 import { fetchSymbols, fetchChartConfig } from '@/api/market-api';
-import { Activity, RefreshCw } from 'lucide-react';
+import { Activity, RefreshCw, BookOpen, BarChart2 } from 'lucide-react';
 import { ChartWorkspace } from '@/features/review-workspace/ChartWorkspace';
+import { LearningWorkspace } from '@/features/learning/LearningWorkspace';
+import type { VideoItem } from '@/features/learning/learning-types';
 
 export function AppShell() {
+  const [activeTab, setActiveTab] = useState<'learning' | 'review'>('learning');
   const [, setSymbols] = useState<string[]>([]);
   const [offlineMode] = useState<boolean>(false);
   const [loading, setLoading] = useState<boolean>(true);
@@ -29,13 +32,61 @@ export function AppShell() {
     checkConnection();
   }, []);
 
+  const handleOpenVideoReview = (_video: VideoItem) => {
+    setActiveTab('review');
+  };
+
   return (
     <div className="app-shell">
       <header className="app-header">
         <div className="app-title">
           <Activity size={20} color="var(--accent-blue)" />
-          <span>TiaBTC Review Workspace</span>
+          <span>TiaBTC Workspace</span>
+
+          {/* Top Navigation Tabs */}
+          <div style={{ display: 'flex', gap: '4px', marginLeft: '24px' }}>
+            <button
+              onClick={() => setActiveTab('learning')}
+              style={{
+                background: activeTab === 'learning' ? 'var(--accent-blue)' : 'var(--bg-dark-700)',
+                color: activeTab === 'learning' ? '#fff' : 'var(--text-secondary)',
+                border: 'none',
+                borderRadius: 'var(--radius-sm)',
+                padding: '4px 12px',
+                fontSize: '12px',
+                fontWeight: 600,
+                cursor: 'pointer',
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: '6px',
+              }}
+            >
+              <BookOpen size={14} />
+              <span>顺序学习</span>
+            </button>
+
+            <button
+              onClick={() => setActiveTab('review')}
+              style={{
+                background: activeTab === 'review' ? 'var(--accent-blue)' : 'var(--bg-dark-700)',
+                color: activeTab === 'review' ? '#fff' : 'var(--text-secondary)',
+                border: 'none',
+                borderRadius: 'var(--radius-sm)',
+                padding: '4px 12px',
+                fontSize: '12px',
+                fontWeight: 600,
+                cursor: 'pointer',
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: '6px',
+              }}
+            >
+              <BarChart2 size={14} />
+              <span>行情复盘</span>
+            </button>
+          </div>
         </div>
+
         <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
           <div className="app-status-badge">
             <span
@@ -71,7 +122,11 @@ export function AppShell() {
       </header>
 
       <main className="app-body">
-        <ChartWorkspace />
+        {activeTab === 'learning' ? (
+          <LearningWorkspace onOpenVideoReview={handleOpenVideoReview} />
+        ) : (
+          <ChartWorkspace />
+        )}
       </main>
     </div>
   );
