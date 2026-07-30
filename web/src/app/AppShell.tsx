@@ -4,6 +4,8 @@ import { Activity, RefreshCw, BookOpen, BarChart2 } from 'lucide-react';
 import { ChartWorkspace } from '@/features/review-workspace/ChartWorkspace';
 import { LearningWorkspace } from '@/features/learning/LearningWorkspace';
 import type { VideoItem } from '@/features/learning/learning-types';
+import type { VideoReviewContext } from '@/domain/review-context';
+import { parseVideoPublishedTimeMs } from '@/chart/chart-time';
 
 export function AppShell() {
   const [activeTab, setActiveTab] = useState<'learning' | 'review'>('learning');
@@ -11,6 +13,8 @@ export function AppShell() {
   const [offlineMode] = useState<boolean>(false);
   const [loading, setLoading] = useState<boolean>(true);
   const [error, setError] = useState<string | null>(null);
+
+  const [videoReviewContext, setVideoReviewContext] = useState<VideoReviewContext | null>(null);
 
   const checkConnection = async () => {
     setLoading(true);
@@ -32,7 +36,16 @@ export function AppShell() {
     checkConnection();
   }, []);
 
-  const handleOpenVideoReview = (_video: VideoItem) => {
+  const handleOpenVideoReview = (video: VideoItem) => {
+    const anchorTimeMs = parseVideoPublishedTimeMs(video.date, video.time);
+    const ctx: VideoReviewContext = {
+      mode: 'video',
+      videoId: video.videoId,
+      title: video.title,
+      symbol: 'BTCUSDT',
+      anchorTimeMs,
+    };
+    setVideoReviewContext(ctx);
     setActiveTab('review');
   };
 
@@ -125,7 +138,7 @@ export function AppShell() {
         {activeTab === 'learning' ? (
           <LearningWorkspace onOpenVideoReview={handleOpenVideoReview} />
         ) : (
-          <ChartWorkspace />
+          <ChartWorkspace initialVideoContext={videoReviewContext} />
         )}
       </main>
     </div>

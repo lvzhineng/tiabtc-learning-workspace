@@ -1,4 +1,4 @@
-import { useEffect, useState, useRef, useCallback } from 'react';
+import { useEffect, useState, useRef, useCallback, useMemo } from 'react';
 import type { ReviewTimeframe } from '@/domain/timeframe';
 import { TIMEFRAME_DISPLAY_MAP } from '@/domain/timeframe';
 import type { Candlestick } from '@/domain/candle';
@@ -29,18 +29,27 @@ import { FreeReplayPanel } from '@/features/replay/FreeReplayPanel';
 import type { ActiveToolType, DrawingToolState } from '@/features/drawings/drawing-types';
 import { deserializeDrawing, serializeDrawing } from '@/features/drawings/drawing-engine';
 import { DraggableDrawingToolbar } from '@/features/drawings/DraggableDrawingToolbar';
+import type { VideoReviewContext } from '@/domain/review-context';
+import { buildVideoPublishedMarker } from '@/chart/system-marker';
 import {
   AlertCircle,
   Plus,
   BarChart2,
   RefreshCw,
+  Video,
 } from 'lucide-react';
 
 const TIMEFRAMES: ReviewTimeframe[] = ['5', '15', '60', '240', 'D', 'W'];
 
-export function ChartWorkspace() {
+interface ChartWorkspaceProps {
+  initialVideoContext?: VideoReviewContext | null;
+}
+
+export function ChartWorkspace({ initialVideoContext }: ChartWorkspaceProps) {
   const [symbols, setSymbols] = useState<string[]>(['BTCUSDT']);
-  const [activeSymbol, setActiveSymbol] = useState<string>('BTCUSDT');
+  const [activeSymbol, setActiveSymbol] = useState<string>(
+    initialVideoContext?.symbol || 'BTCUSDT'
+  );
   const [activeTimeframe, setActiveTimeframe] = useState<ReviewTimeframe>('60');
   const [isLogScale, setIsLogScale] = useState<boolean>(false);
 
@@ -64,9 +73,36 @@ export function ChartWorkspace() {
   const [redoStack, setRedoStack] = useState<DrawingToolState[][]>([]);
 
   // Replay State Machine
-  const [replayState, setReplayState] = useState<ReplayState>({ status: 'idle' });
+  const [replayState, setReplayState] = useState<ReplayState>(() => {
+    if (initialVideoContext) {
+      return {
+        status: 'ready',
+        context: initialVideoContext,
+        startTimeMs: initialVideoContext.anchorTimeMs,
+        progressTimeMs: initialVideoContext.anchorTimeMs,
+        cursorTimeMs: initialVideoContext.anchorTimeMs,
+        speed: 1,
+      };
+    }
+    return { status: 'idle' };
+  });
 
   const activeReqControllerRef = useRef<AbortController | null>(null);
+
+  // Sync initialVideoContext if passed from parent
+  useEffect(() => {
+    if (initialVideoContext) {
+      setActiveSymbol(initialVideoContext.symbol || 'BTCUSDT');
+      setReplayState({
+        status: 'ready',
+        context: initialVideoContext,
+        startTimeMs: initialVideoContext.anchorTimeMs,
+        progressTimeMs: initialVideoContext.anchorTimeMs,
+        cursorTimeMs: initialVideoContext.anchorTimeMs,
+        speed: 1,
+      });
+    }
+  }, [initialVideoContext]);
 
   // Load symbol list on mount
   useEffect(() => {
@@ -360,6 +396,22 @@ export function ChartWorkspace() {
     }
   };
 
+  // Build System Markers for Video Review
+  const systemMarkers = useMemo(() => {
+    if (
+      replayState.status !== 'idle' &&
+      replayState.context.mode === 'video'
+    ) {
+      return [
+        buildVideoPublishedMarker(
+          replayState.context.anchorTimeMs,
+          replayState.context.title
+        ),
+      ];
+    }
+    return [];
+  }, [replayState]);
+
   // Determine Visible Candles for Chart Canvas
   const visibleCandles =
     replayState.status !== 'idle'
@@ -372,6 +424,11 @@ export function ChartWorkspace() {
 
   const selectedDrawing = drawings.find((d) => d.id === selectedDrawingId);
   const selectedLocked = Boolean(selectedDrawing?.locked);
+
+  const activeVideoTitle =
+    replayState.status !== 'idle' && replayState.context.mode === 'video'
+      ? replayState.context.title
+      : null;
 
   return (
     <div style={{ width: '100%', height: '100%', display: 'flex', flexDirection: 'column', background: 'var(--bg-dark-900)', position: 'relative' }}>
@@ -389,6 +446,26 @@ export function ChartWorkspace() {
         onDeleteSelected={handleDeleteSelectedDrawing}
         onClearAll={handleClearAllDrawings}
       />
+
+      {/* Video Review Context Header Banner if active */}
+      {activeVideoTitle && (
+        <div
+          style={{
+            background: 'var(--bg-dark-700)',
+            borderBottom: '1px solid var(--accent-blue)',
+            color: '#fff',
+            padding: '4px 16px',
+            fontSize: '12px',
+            display: 'flex',
+            alignItems: 'center',
+            gap: '8px',
+            fontWeight: 600,
+          }}
+        >
+          <Video size={14} color="var(--accent-blue)" />
+          <span>正在复盘视频: {activeVideoTitle}</span>
+        </div>
+      )}
 
       {/* Top Controls Bar */}
       <div
@@ -674,6 +751,7 @@ export function ChartWorkspace() {
           symbol={activeSymbol}
           interval={activeTimeframe}
           isLogScale={isLogScale}
+          systemMarkers={systemMarkers}
           onCrosshairMove={setHoveredCandle}
           onLoadEarlier={handleLoadEarlier}
           isLoadingEarlier={isLoadingEarlier}

@@ -7,6 +7,8 @@ import {
   type IChartApi,
   type ISeriesApi,
   type CandlestickData,
+  type SeriesMarker,
+  type UTCTimestamp,
 } from 'lightweight-charts';
 import type { Candlestick } from '@/domain/candle';
 import type { ReviewTimeframe } from '@/domain/timeframe';
@@ -18,6 +20,7 @@ interface ChartCanvasProps {
   symbol: string;
   interval: ReviewTimeframe;
   isLogScale?: boolean;
+  systemMarkers?: SeriesMarker<UTCTimestamp>[];
   onCrosshairMove?: (candle: Candlestick | null) => void;
   onLoadEarlier?: () => void;
   isLoadingEarlier?: boolean;
@@ -26,6 +29,7 @@ interface ChartCanvasProps {
 export function ChartCanvas({
   candles,
   isLogScale = false,
+  systemMarkers = [],
   onCrosshairMove,
   onLoadEarlier,
   isLoadingEarlier = false,
@@ -197,6 +201,13 @@ export function ChartCanvas({
 
     prevBarsCountRef.current = sortedData.length;
   }, [candles]);
+
+  // System Markers Update
+  useEffect(() => {
+    const series = seriesRef.current;
+    if (!series) return;
+    series.setMarkers(systemMarkers);
+  }, [systemMarkers]);
 
   return (
     <div

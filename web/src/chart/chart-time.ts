@@ -18,6 +18,29 @@ export function utcTimestampToTimestampMs(time: Time): number {
   return Date.parse(`${time.year}-${monthStr}-${dayStr}T00:00:00+08:00`);
 }
 
+export function parseVideoPublishedTimeMs(dateStr: string, timeStr?: string): number {
+  const cleanDate = dateStr.trim();
+  if (!cleanDate) return Date.now();
+
+  const cleanTime = timeStr ? timeStr.trim() : '';
+
+  if (cleanTime) {
+    // If timezone offset (e.g. -07:00, +08:00, Z) is included
+    if (/([zZ]|[+-]\d{2}:?\d{2})$/.test(cleanTime)) {
+      const parsed = Date.parse(`${cleanDate}T${cleanTime}`);
+      if (!Number.isNaN(parsed)) return parsed;
+    }
+
+    // If no timezone offset, assume Beijing Time (UTC+8)
+    const parsedBeijing = Date.parse(`${cleanDate}T${cleanTime}+08:00`);
+    if (!Number.isNaN(parsedBeijing)) return parsedBeijing;
+  }
+
+  // Fallback: Midnight Beijing Time
+  const defaultParsed = Date.parse(`${cleanDate}T00:00:00+08:00`);
+  return !Number.isNaN(defaultParsed) ? defaultParsed : Date.now();
+}
+
 export function formatChartTime(timestampMs: number, timeframe: ReviewTimeframe): string {
   const date = new Date(timestampMs);
   const parts = shanghaiParts(date);
