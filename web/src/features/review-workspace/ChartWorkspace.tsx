@@ -7,10 +7,19 @@ import {
   addCustomSymbol,
   fetchChartCandles,
   fetchEarlierCandles,
+  fetchLaterCandles,
 } from '@/api/market-api';
 import { ChartCanvas } from '@/chart/ChartCanvas';
 import { computeReadoutInfo, type ReadoutInfo } from '@/chart/candlestick-readout';
 import { formatChartTime } from '@/chart/chart-time';
+import type { ReplayState } from '@/features/replay/replay-state';
+import {
+  filterVisibleCandles,
+  getNextCursorTimeMs,
+  getPrevCursorTimeMs,
+  shouldPrefetchFuture,
+} from '@/features/replay/free-replay-logic';
+import { FreeReplayPanel } from '@/features/replay/FreeReplayPanel';
 import {
   AlertCircle,
   Plus,
@@ -37,9 +46,12 @@ export function ChartWorkspace() {
   const [newSymbolInput, setNewSymbolInput] = useState<string>('');
   const [showAddSymbol, setShowAddSymbol] = useState<boolean>(false);
 
+  // Replay State Machine
+  const [replayState, setReplayState] = useState<ReplayState>({ status: 'idle' });
+
   const activeReqControllerRef = useRef<AbortController | null>(null);
 
-  // Load symbol list
+  // Load symbol list on mount
   useEffect(() => {
     fetchSymbols()
       .then((list) => {
@@ -57,7 +69,6 @@ export function ChartWorkspace() {
 
   // Main Candle Loading Effect
   useEffect(() => {
-    // Abort existing in-flight request
     if (activeReqControllerRef.current) {
       activeReqControllerRef.current.abort();
     }
@@ -71,7 +82,10 @@ export function ChartWorkspace() {
     setCandles([]);
     setHoveredCandle(null);
 
-    fetchChartCandles(activeSymbol, activeTimeframe, 0, controller.signal)
+    // Initial anchor: if replay is active, use start time as initial anchor boundary
+    const initialAnchor = replayState.status !== 'idle' ? replayState.startTimeMs : 0;
+
+    fetchChartCandles(activeSymbol, activeTimeframe, initialAnchor, controller.signal)
       .then((data) => {
         if (controller.signal.aborted) return;
         setCandles(data);
@@ -119,6 +133,111 @@ export function ChartWorkspace() {
       });
   }, [activeSymbol, activeTimeframe, candles, isLoadingEarlier, loading]);
 
+  // Handle prefetching future candles for replay in background
+  const prefetchFutureCandles = useCallback(() => {
+    if (candles.length === 0) return;
+    const latestTs = Math.max(...candles.map((c) => c.timestampMs));
+    fetchLaterCandles(activeSymbol, activeTimeframe, latestTs, 1000)
+      .then((laterCandles) => {
+        if (laterCandles.length > 0) {
+          setCandles((prev) => {
+            const existingTs = new Set(prev.map((c) => c.timestampMs));
+            const fresh = laterCandles.filter((c) => !existingTs.has(c.timestampMs));
+            return [...prev, ...fresh];
+          });
+        }
+      })
+      .catch((err) => {
+        console.warn('预取未来数据失败:', err);
+      });
+  }, [activeSymbol, activeTimeframe, candles]);
+
+  // Replay Actions
+  const handleStartReplay = (symbol: string, startTimeMs: number) => {
+    setActiveSymbol(symbol);
+    setReplayState({
+      status: 'ready',
+      context: {
+        mode: 'free',
+        symbol,
+        anchorTimeMs: startTimeMs,
+      },
+      startTimeMs,
+      progressTimeMs: startTimeMs,
+      cursorTimeMs: startTimeMs,
+      speed: 1,
+    });
+  };
+
+  const handleStopReplay = () => {
+    setReplayState({ status: 'idle' });
+  };
+
+  const handleNextBar = useCallback(() => {
+    if (replayState.status === 'idle') return;
+    const nextCursorMs = getNextCursorTimeMs(candles, replayState.cursorTimeMs);
+    if (nextCursorMs === replayState.cursorTimeMs) {
+      // reached end of loaded buffer, attempt prefetch
+      prefetchFutureCandles();
+      return;
+    }
+
+    setReplayState((prev) => {
+      if (prev.status === 'idle') return prev;
+      return {
+        ...prev,
+        cursorTimeMs: nextCursorMs,
+        progressTimeMs: Math.max(prev.progressTimeMs, nextCursorMs),
+      };
+    });
+
+    if (shouldPrefetchFuture(candles, nextCursorMs)) {
+      prefetchFutureCandles();
+    }
+  }, [candles, replayState, prefetchFutureCandles]);
+
+  const handlePrevBar = useCallback(() => {
+    if (replayState.status === 'idle') return;
+    const prevCursorMs = getPrevCursorTimeMs(candles, replayState.cursorTimeMs, replayState.startTimeMs);
+    setReplayState((prev) => {
+      if (prev.status === 'idle') return prev;
+      return {
+        ...prev,
+        cursorTimeMs: prevCursorMs,
+      };
+    });
+  }, [candles, replayState]);
+
+  const handleTogglePlay = useCallback(() => {
+    setReplayState((prev) => {
+      if (prev.status === 'idle') return prev;
+      const nextStatus = prev.status === 'playing' ? 'paused' : 'playing';
+      return { ...prev, status: nextStatus };
+    });
+  }, []);
+
+  const handleSetSpeed = useCallback((speed: number) => {
+    setReplayState((prev) => {
+      if (prev.status === 'idle') return prev;
+      return { ...prev, speed };
+    });
+  }, []);
+
+  // Timer Effect for Playing Replay
+  useEffect(() => {
+    if (replayState.status !== 'playing') return;
+
+    const speed = replayState.speed;
+    const intervalMs = Math.max(100, Math.floor(1000 / speed));
+    const timer = setInterval(() => {
+      handleNextBar();
+    }, intervalMs);
+
+    return () => {
+      clearInterval(timer);
+    };
+  }, [replayState, handleNextBar]);
+
   const handleAddSymbol = async () => {
     if (!newSymbolInput.trim()) return;
     const clean = newSymbolInput.trim().toUpperCase();
@@ -133,8 +252,14 @@ export function ChartWorkspace() {
     }
   };
 
-  // Determine current active display candle (hovered or latest)
-  const displayCandle = hoveredCandle || (candles.length > 0 ? candles[candles.length - 1] : null);
+  // Determine Visible Candles for Chart Canvas
+  const visibleCandles =
+    replayState.status !== 'idle'
+      ? filterVisibleCandles(candles, replayState.cursorTimeMs)
+      : candles;
+
+  const displayCandle =
+    hoveredCandle || (visibleCandles.length > 0 ? visibleCandles[visibleCandles.length - 1] : null);
   const readoutInfo: ReadoutInfo | null = computeReadoutInfo(displayCandle);
 
   return (
@@ -152,7 +277,7 @@ export function ChartWorkspace() {
           gap: '12px',
         }}
       >
-        {/* Left: Symbol & Timeframe */}
+        {/* Left: Symbol, Timeframe & Free Replay Controls */}
         <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
           {/* Symbol Select */}
           <select
@@ -257,6 +382,21 @@ export function ChartWorkspace() {
               );
             })}
           </div>
+
+          <div style={{ width: '1px', height: '16px', background: 'var(--border-color)', margin: '0 4px' }} />
+
+          {/* Free Replay Panel Integration */}
+          <FreeReplayPanel
+            replayState={replayState}
+            activeSymbol={activeSymbol}
+            activeTimeframe={activeTimeframe}
+            onStartReplay={handleStartReplay}
+            onStopReplay={handleStopReplay}
+            onNextBar={handleNextBar}
+            onPrevBar={handlePrevBar}
+            onTogglePlay={handleTogglePlay}
+            onSetSpeed={handleSetSpeed}
+          />
         </div>
 
         {/* Right: Log Scale Toggle */}
@@ -399,7 +539,7 @@ export function ChartWorkspace() {
         )}
 
         <ChartCanvas
-          candles={candles}
+          candles={visibleCandles}
           symbol={activeSymbol}
           interval={activeTimeframe}
           isLogScale={isLogScale}
