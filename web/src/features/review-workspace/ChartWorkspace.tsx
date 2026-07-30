@@ -9,6 +9,12 @@ import {
   fetchEarlierCandles,
   fetchLaterCandles,
 } from '@/api/market-api';
+import {
+  fetchDrawings,
+  saveDrawing,
+  deleteDrawing,
+  clearAllDrawingsForSymbol,
+} from '@/api/drawing-api';
 import { ChartCanvas } from '@/chart/ChartCanvas';
 import { computeReadoutInfo, type ReadoutInfo } from '@/chart/candlestick-readout';
 import { formatChartTime } from '@/chart/chart-time';
@@ -20,6 +26,9 @@ import {
   shouldPrefetchFuture,
 } from '@/features/replay/free-replay-logic';
 import { FreeReplayPanel } from '@/features/replay/FreeReplayPanel';
+import type { ActiveToolType, DrawingToolState } from '@/features/drawings/drawing-types';
+import { deserializeDrawing, serializeDrawing } from '@/features/drawings/drawing-engine';
+import { DraggableDrawingToolbar } from '@/features/drawings/DraggableDrawingToolbar';
 import {
   AlertCircle,
   Plus,
@@ -45,6 +54,14 @@ export function ChartWorkspace() {
 
   const [newSymbolInput, setNewSymbolInput] = useState<string>('');
   const [showAddSymbol, setShowAddSymbol] = useState<boolean>(false);
+
+  // Drawing State
+  const [activeTool, setActiveTool] = useState<ActiveToolType>('select');
+  const [magnetEnabled, setMagnetEnabled] = useState<boolean>(false);
+  const [drawings, setDrawings] = useState<DrawingToolState[]>([]);
+  const [selectedDrawingId, setSelectedDrawingId] = useState<string | null>(null);
+  const [undoStack, setUndoStack] = useState<DrawingToolState[][]>([]);
+  const [redoStack, setRedoStack] = useState<DrawingToolState[][]>([]);
 
   // Replay State Machine
   const [replayState, setReplayState] = useState<ReplayState>({ status: 'idle' });
@@ -82,7 +99,6 @@ export function ChartWorkspace() {
     setCandles([]);
     setHoveredCandle(null);
 
-    // Initial anchor: if replay is active, use start time as initial anchor boundary
     const initialAnchor = replayState.status !== 'idle' ? replayState.startTimeMs : 0;
 
     fetchChartCandles(activeSymbol, activeTimeframe, initialAnchor, controller.signal)
@@ -107,6 +123,21 @@ export function ChartWorkspace() {
       controller.abort();
     };
   }, [activeSymbol, activeTimeframe]);
+
+  // Load Persisted Drawings from Server
+  useEffect(() => {
+    fetchDrawings('', activeSymbol)
+      .then((list) => {
+        const deserialized = list.map(deserializeDrawing);
+        setDrawings(deserialized);
+        setSelectedDrawingId(null);
+        setUndoStack([]);
+        setRedoStack([]);
+      })
+      .catch((err) => {
+        console.warn('拉取画图持久化记录失败:', err);
+      });
+  }, [activeSymbol]);
 
   // Handle auto-load earlier candles when scrolling left
   const handleLoadEarlier = useCallback(() => {
@@ -152,6 +183,84 @@ export function ChartWorkspace() {
       });
   }, [activeSymbol, activeTimeframe, candles]);
 
+  // Drawing Actions & Persistence Sync
+  const persistStateChange = (newDrawings: DrawingToolState[]) => {
+    setUndoStack((prev) => [...prev, drawings]);
+    setRedoStack([]);
+    setDrawings(newDrawings);
+  };
+
+  const handleSaveDrawingState = async (toolState: DrawingToolState) => {
+    try {
+      const persistedPayload = serializeDrawing(toolState);
+      const saved = await saveDrawing(persistedPayload);
+      const deserializedSaved = deserializeDrawing(saved);
+
+      const exists = drawings.some((d) => d.id === toolState.id);
+      const next = exists
+        ? drawings.map((d) => (d.id === toolState.id ? deserializedSaved : d))
+        : [...drawings, deserializedSaved];
+
+      persistStateChange(next);
+    } catch (err) {
+      alert(`保存画图记录失败: ${err instanceof Error ? err.message : '网络或数据库异常'}`);
+    }
+  };
+
+  const handleDeleteSelectedDrawing = async () => {
+    if (!selectedDrawingId) return;
+    const target = drawings.find((d) => d.id === selectedDrawingId);
+    if (!target) return;
+
+    try {
+      await deleteDrawing(selectedDrawingId, '', activeSymbol);
+      const next = drawings.filter((d) => d.id !== selectedDrawingId);
+      persistStateChange(next);
+      setSelectedDrawingId(null);
+    } catch (err) {
+      alert(`删除画图记录失败: ${err instanceof Error ? err.message : '网络异常'}`);
+    }
+  };
+
+  const handleClearAllDrawings = async () => {
+    if (drawings.length === 0) return;
+    const confirmClear = window.confirm(`确认要清空当前 Symbol (${activeSymbol}) 的所有画图记录吗？此操作无法撤销。`);
+    if (!confirmClear) return;
+
+    try {
+      await clearAllDrawingsForSymbol(activeSymbol);
+      persistStateChange([]);
+      setSelectedDrawingId(null);
+    } catch (err) {
+      alert(`清空画图失败: ${err instanceof Error ? err.message : '网络异常'}`);
+    }
+  };
+
+  const handleToggleLockSelected = async () => {
+    if (!selectedDrawingId) return;
+    const target = drawings.find((d) => d.id === selectedDrawingId);
+    if (!target) return;
+
+    const updated = { ...target, locked: !target.locked };
+    await handleSaveDrawingState(updated);
+  };
+
+  const handleUndo = () => {
+    if (undoStack.length === 0) return;
+    const prev = undoStack[undoStack.length - 1];
+    setRedoStack((r) => [...r, drawings]);
+    setUndoStack((u) => u.slice(0, -1));
+    setDrawings(prev);
+  };
+
+  const handleRedo = () => {
+    if (redoStack.length === 0) return;
+    const next = redoStack[redoStack.length - 1];
+    setUndoStack((u) => [...u, drawings]);
+    setRedoStack((r) => r.slice(0, -1));
+    setDrawings(next);
+  };
+
   // Replay Actions
   const handleStartReplay = (symbol: string, startTimeMs: number) => {
     setActiveSymbol(symbol);
@@ -177,7 +286,6 @@ export function ChartWorkspace() {
     if (replayState.status === 'idle') return;
     const nextCursorMs = getNextCursorTimeMs(candles, replayState.cursorTimeMs);
     if (nextCursorMs === replayState.cursorTimeMs) {
-      // reached end of loaded buffer, attempt prefetch
       prefetchFutureCandles();
       return;
     }
@@ -262,8 +370,26 @@ export function ChartWorkspace() {
     hoveredCandle || (visibleCandles.length > 0 ? visibleCandles[visibleCandles.length - 1] : null);
   const readoutInfo: ReadoutInfo | null = computeReadoutInfo(displayCandle);
 
+  const selectedDrawing = drawings.find((d) => d.id === selectedDrawingId);
+  const selectedLocked = Boolean(selectedDrawing?.locked);
+
   return (
-    <div style={{ width: '100%', height: '100%', display: 'flex', flexDirection: 'column', background: 'var(--bg-dark-900)' }}>
+    <div style={{ width: '100%', height: '100%', display: 'flex', flexDirection: 'column', background: 'var(--bg-dark-900)', position: 'relative' }}>
+      {/* Draggable Drawing Toolbar Overlay */}
+      <DraggableDrawingToolbar
+        activeTool={activeTool}
+        magnetEnabled={magnetEnabled}
+        selectedDrawingId={selectedDrawingId}
+        selectedLocked={selectedLocked}
+        onSelectTool={setActiveTool}
+        onToggleMagnet={() => setMagnetEnabled(!magnetEnabled)}
+        onUndo={handleUndo}
+        onRedo={handleRedo}
+        onToggleLock={handleToggleLockSelected}
+        onDeleteSelected={handleDeleteSelectedDrawing}
+        onClearAll={handleClearAllDrawings}
+      />
+
       {/* Top Controls Bar */}
       <div
         style={{
@@ -399,8 +525,13 @@ export function ChartWorkspace() {
           />
         </div>
 
-        {/* Right: Log Scale Toggle */}
+        {/* Right: Log Scale Toggle & Active Drawings Indicator */}
         <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+          {drawings.length > 0 && (
+            <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>
+              画图: {drawings.length} 条
+            </span>
+          )}
           <button
             onClick={() => setIsLogScale(!isLogScale)}
             style={{
