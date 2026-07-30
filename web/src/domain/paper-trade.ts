@@ -1,5 +1,7 @@
 import type { ReviewTimeframe } from './timeframe';
 
+export type PaperTradeStatus = 'OPEN' | 'CLOSED' | 'WIN' | 'LOSS';
+
 export type PaperTrade = {
   id: string;
   videoId: string;
@@ -10,7 +12,7 @@ export type PaperTrade = {
   takeProfitPrice: number;
   stopLossPrice: number;
   riskRewardRatio: number;
-  status: 'OPEN' | 'CLOSED';
+  status: PaperTradeStatus;
   pnlR: number;
   createdAt: string;
   closedAt: string | null;

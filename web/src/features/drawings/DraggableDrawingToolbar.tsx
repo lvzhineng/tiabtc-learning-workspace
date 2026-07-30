@@ -1,5 +1,6 @@
 import React, { useRef, useState } from 'react';
 import type { ActiveToolType } from './drawing-types';
+import type { PositionToolParams } from '@/features/paper-trading/paper-trade-types';
 import {
   Crosshair,
   Slash,
@@ -21,6 +22,7 @@ import {
   Trash2,
   Eraser,
   Move,
+  Target,
 } from 'lucide-react';
 import '@/styles/toolbar.css';
 
@@ -29,6 +31,7 @@ interface DraggableDrawingToolbarProps {
   magnetEnabled: boolean;
   selectedDrawingId: string | null;
   selectedLocked: boolean;
+  selectedPositionInfo?: PositionToolParams | null;
   onSelectTool: (tool: ActiveToolType) => void;
   onToggleMagnet: () => void;
   onUndo: () => void;
@@ -36,6 +39,8 @@ interface DraggableDrawingToolbarProps {
   onToggleLock: () => void;
   onDeleteSelected: () => void;
   onClearAll: () => void;
+  onOpenPaperTrading?: () => void;
+  onCreatePaperTradeFromPosition?: (params: PositionToolParams) => void;
 }
 
 const STORAGE_KEY = 'tiabtc-drawing-toolbar-pos-v2';
@@ -45,6 +50,7 @@ export function DraggableDrawingToolbar({
   magnetEnabled,
   selectedDrawingId,
   selectedLocked,
+  selectedPositionInfo,
   onSelectTool,
   onToggleMagnet,
   onUndo,
@@ -52,6 +58,8 @@ export function DraggableDrawingToolbar({
   onToggleLock,
   onDeleteSelected,
   onClearAll,
+  onOpenPaperTrading,
+  onCreatePaperTradeFromPosition,
 }: DraggableDrawingToolbarProps) {
   const [position, setPosition] = useState<{ left: number; top: number }>(() => {
     try {
@@ -264,6 +272,19 @@ export function DraggableDrawingToolbar({
 
         <span className="toolbar-divider" />
 
+        {/* 模拟交易入口按钮 */}
+        {onOpenPaperTrading && (
+          <button
+            type="button"
+            className="toolbar-btn"
+            onClick={onOpenPaperTrading}
+            title="打开模拟交易面板"
+            style={{ color: 'var(--accent-blue)' }}
+          >
+            <Target size={15} />
+          </button>
+        )}
+
         {/* 选中控制与删除 */}
         {selectedDrawingId && (
           <button
@@ -294,6 +315,29 @@ export function DraggableDrawingToolbar({
         >
           <Eraser size={15} />
         </button>
+
+        {/* 模拟开仓联动触发按钮 */}
+        {selectedPositionInfo && onCreatePaperTradeFromPosition && (
+          <button
+            type="button"
+            onClick={() => onCreatePaperTradeFromPosition(selectedPositionInfo)}
+            style={{
+              marginTop: '4px',
+              background: selectedPositionInfo.type === 'LONG' ? 'var(--accent-green)' : 'var(--accent-red)',
+              color: '#ffffff',
+              border: 'none',
+              borderRadius: 'var(--radius-sm)',
+              padding: '6px 4px',
+              fontSize: '11px',
+              fontWeight: 700,
+              cursor: 'pointer',
+              whiteSpace: 'nowrap',
+            }}
+            title={`开仓: ${selectedPositionInfo.type} R:R=${selectedPositionInfo.rrRatio}R`}
+          >
+            🎯 模拟开仓 ({selectedPositionInfo.type === 'LONG' ? '多' : '空'} {selectedPositionInfo.rrRatio}R)
+          </button>
+        )}
       </div>
     </div>
   );

@@ -1,0 +1,131 @@
+.paper-trading-drawer {
+  position: absolute;
+  top: 60px;
+  right: 16px;
+  width: 340px;
+  max-height: calc(100% - 80px);
+  z-index: 45;
+  background-color: var(--bg-dark-800);
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-main);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.paper-trading-header {
+  padding: 10px 14px;
+  background-color: var(--bg-dark-700);
+  border-bottom: 1px solid var(--border-color);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-weight: 700;
+  font-size: 13px;
+  color: var(--text-primary);
+}
+
+.paper-trading-stats-row {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 8px;
+  padding: 10px;
+  background-color: var(--bg-dark-900);
+  border-bottom: 1px solid var(--border-color);
+  text-align: center;
+}
+
+.paper-stat-box {
+  display: flex;
+  flex-direction: column;
+}
+
+.paper-stat-label {
+  font-size: 11px;
+  color: var(--text-muted);
+}
+
+.paper-stat-val {
+  font-size: 15px;
+  font-weight: 800;
+  font-family: var(--font-mono);
+  margin-top: 2px;
+}
+
+.paper-form {
+  padding: 12px;
+  border-bottom: 1px solid var(--border-color);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.paper-form-row {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
+.paper-form-input {
+  flex: 1;
+  background: var(--bg-dark-700);
+  color: var(--text-primary);
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-sm);
+  padding: 5px 8px;
+  font-size: 12px;
+  font-family: var(--font-mono);
+  outline: none;
+}
+
+.paper-trade-list {
+  flex: 1;
+  overflow-y: auto;
+  padding: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.paper-trade-card {
+  background: var(--bg-dark-700);
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-sm);
+  padding: 8px 10px;
+  font-size: 12px;
+}
+
+.paper-badge-long {
+  background: rgba(8, 153, 129, 0.2);
+  color: var(--accent-green);
+  padding: 2px 6px;
+  border-radius: 4px;
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.paper-badge-short {
+  background: rgba(242, 54, 69, 0.2);
+  color: var(--accent-red);
+  padding: 2px 6px;
+  border-radius: 4px;
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.paper-badge-win {
+  background: var(--accent-green);
+  color: #fff;
+  padding: 2px 6px;
+  border-radius: 4px;
+  font-weight: 700;
+}
+
+.paper-badge-loss {
+  background: var(--accent-red);
+  color: #fff;
+  padding: 2px 6px;
+  border-radius: 4px;
+  font-weight: 700;
+}

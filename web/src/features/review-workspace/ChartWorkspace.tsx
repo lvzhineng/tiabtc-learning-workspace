@@ -15,6 +15,11 @@ import {
   deleteDrawing,
   clearAllDrawingsForSymbol,
 } from '@/api/drawing-api';
+import {
+  fetchPaperTrades,
+  savePaperTrade,
+  deletePaperTrade,
+} from '@/api/paper-trade-api';
 import { ChartCanvas } from '@/chart/ChartCanvas';
 import { computeReadoutInfo, type ReadoutInfo } from '@/chart/candlestick-readout';
 import { formatChartTime } from '@/chart/chart-time';
@@ -31,12 +36,17 @@ import { deserializeDrawing, serializeDrawing } from '@/features/drawings/drawin
 import { DraggableDrawingToolbar } from '@/features/drawings/DraggableDrawingToolbar';
 import type { VideoReviewContext } from '@/domain/review-context';
 import { buildVideoPublishedMarker } from '@/chart/system-marker';
+import type { PositionToolParams } from '@/features/paper-trading/paper-trade-types';
+import type { PaperTrade } from '@/domain/paper-trade';
+import { checkTradeTrigger, calculateRR } from '@/features/paper-trading/paper-trade-logic';
+import { PaperTradingPanel } from '@/features/paper-trading/PaperTradingPanel';
 import {
   AlertCircle,
   Plus,
   BarChart2,
   RefreshCw,
   Video,
+  Target,
 } from 'lucide-react';
 
 const TIMEFRAMES: ReviewTimeframe[] = ['5', '15', '60', '240', 'D', 'W'];
@@ -71,6 +81,11 @@ export function ChartWorkspace({ initialVideoContext }: ChartWorkspaceProps) {
   const [selectedDrawingId, setSelectedDrawingId] = useState<string | null>(null);
   const [undoStack, setUndoStack] = useState<DrawingToolState[][]>([]);
   const [redoStack, setRedoStack] = useState<DrawingToolState[][]>([]);
+
+  // Paper Trading State
+  const [showPaperPanel, setShowPaperPanel] = useState<boolean>(false);
+  const [paperTrades, setPaperTrades] = useState<PaperTrade[]>([]);
+  const [pendingPositionParams, setPendingPositionParams] = useState<PositionToolParams | null>(null);
 
   // Replay State Machine
   const [replayState, setReplayState] = useState<ReplayState>(() => {
@@ -160,7 +175,7 @@ export function ChartWorkspace({ initialVideoContext }: ChartWorkspaceProps) {
     };
   }, [activeSymbol, activeTimeframe]);
 
-  // Load Persisted Drawings from Server
+  // Load Persisted Drawings & Paper Trades from Server
   useEffect(() => {
     fetchDrawings('', activeSymbol)
       .then((list) => {
@@ -173,7 +188,37 @@ export function ChartWorkspace({ initialVideoContext }: ChartWorkspaceProps) {
       .catch((err) => {
         console.warn('拉取画图持久化记录失败:', err);
       });
+
+    fetchPaperTrades('', activeSymbol)
+      .then((list) => {
+        setPaperTrades(list || []);
+      })
+      .catch((err) => {
+        console.warn('拉取模拟交易记录失败:', err);
+      });
   }, [activeSymbol]);
+
+  // Check Open Trades against new candles during Replay or Candle update
+  const checkOpenTradesTriggers = useCallback(
+    (latestCandle: Candlestick) => {
+      setPaperTrades((prevTrades) => {
+        let hasChanges = false;
+        const updatedList = prevTrades.map((t) => {
+          if (t.status === 'OPEN') {
+            const triggered = checkTradeTrigger(t, latestCandle);
+            if (triggered) {
+              hasChanges = true;
+              savePaperTrade(triggered).catch((err) => console.error('结单写库失败:', err));
+              return triggered;
+            }
+          }
+          return t;
+        });
+        return hasChanges ? updatedList : prevTrades;
+      });
+    },
+    []
+  );
 
   // Handle auto-load earlier candles when scrolling left
   const handleLoadEarlier = useCallback(() => {
@@ -297,6 +342,62 @@ export function ChartWorkspace({ initialVideoContext }: ChartWorkspaceProps) {
     setDrawings(next);
   };
 
+  // Paper Trade CRUD Actions
+  const handleCreatePaperTrade = async (tradeDraft: Omit<PaperTrade, 'id' | 'createdAt' | 'closedAt'>) => {
+    const payload: Omit<PaperTrade, 'createdAt' | 'closedAt'> = {
+      ...tradeDraft,
+      id: `trade_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`,
+      interval: activeTimeframe,
+    };
+
+    try {
+      const saved = await savePaperTrade(payload);
+      setPaperTrades((prev) => [saved, ...prev]);
+    } catch (err) {
+      alert(`挂单开仓失败: ${err instanceof Error ? err.message : '网络异常'}`);
+    }
+  };
+
+  const handleClosePaperTrade = async (
+    id: string,
+    closePrice: number,
+    forceStatus?: 'WIN' | 'LOSS'
+  ) => {
+    const target = paperTrades.find((t) => t.id === id);
+    if (!target) return;
+
+    const status = forceStatus || (closePrice >= target.entryPrice ? 'WIN' : 'LOSS');
+    const rr = calculateRR(target.direction, target.entryPrice, target.takeProfitPrice, target.stopLossPrice);
+
+    const updated: PaperTrade = {
+      ...target,
+      status,
+      closedAt: new Date().toISOString(),
+      pnlR: status === 'WIN' ? rr : -1.0,
+    };
+
+    try {
+      const saved = await savePaperTrade(updated);
+      setPaperTrades((prev) => prev.map((t) => (t.id === id ? saved : t)));
+    } catch (err) {
+      alert(`平仓写库失败: ${err instanceof Error ? err.message : '网络异常'}`);
+    }
+  };
+
+  const handleDeletePaperTrade = async (id: string) => {
+    try {
+      await deletePaperTrade(id, '', activeSymbol);
+      setPaperTrades((prev) => prev.filter((t) => t.id !== id));
+    } catch (err) {
+      alert(`删除交易记录失败: ${err instanceof Error ? err.message : '网络异常'}`);
+    }
+  };
+
+  const handleCreateTradeFromPosition = (params: PositionToolParams) => {
+    setPendingPositionParams(params);
+    setShowPaperPanel(true);
+  };
+
   // Replay Actions
   const handleStartReplay = (symbol: string, startTimeMs: number) => {
     setActiveSymbol(symbol);
@@ -326,6 +427,12 @@ export function ChartWorkspace({ initialVideoContext }: ChartWorkspaceProps) {
       return;
     }
 
+    // Check TP/SL trigger on new candle
+    const nextCandle = candles.find((c) => c.timestampMs === nextCursorMs);
+    if (nextCandle) {
+      checkOpenTradesTriggers(nextCandle);
+    }
+
     setReplayState((prev) => {
       if (prev.status === 'idle') return prev;
       return {
@@ -338,7 +445,7 @@ export function ChartWorkspace({ initialVideoContext }: ChartWorkspaceProps) {
     if (shouldPrefetchFuture(candles, nextCursorMs)) {
       prefetchFutureCandles();
     }
-  }, [candles, replayState, prefetchFutureCandles]);
+  }, [candles, replayState, prefetchFutureCandles, checkOpenTradesTriggers]);
 
   const handlePrevBar = useCallback(() => {
     if (replayState.status === 'idle') return;
@@ -425,6 +532,32 @@ export function ChartWorkspace({ initialVideoContext }: ChartWorkspaceProps) {
   const selectedDrawing = drawings.find((d) => d.id === selectedDrawingId);
   const selectedLocked = Boolean(selectedDrawing?.locked);
 
+  // Extract selected position parameters if user selected a long/short position drawing
+  const selectedPositionInfo: PositionToolParams | null = useMemo(() => {
+    if (!selectedDrawing) return null;
+    const type = selectedDrawing.toolType;
+    if (type !== 'long-position' && type !== 'short-position' && type !== 'LongPosition' && type !== 'ShortPosition') {
+      return null;
+    }
+    const pts = selectedDrawing.points;
+    if (pts.length < 2) return null;
+
+    const isLong = type === 'long-position' || type === 'LongPosition';
+    const entryPrice = pts[0].price;
+    const targetPrice = pts[1].price;
+    const stopPrice = pts.length >= 3 ? pts[2].price : pts[0].price * (isLong ? 0.98 : 1.02);
+
+    const rrRatio = calculateRR(isLong ? 'LONG' : 'SHORT', entryPrice, targetPrice, stopPrice);
+
+    return {
+      type: isLong ? 'LONG' : 'SHORT',
+      entryPrice,
+      tpPrice: targetPrice,
+      slPrice: stopPrice,
+      rrRatio,
+    };
+  }, [selectedDrawing]);
+
   const activeVideoTitle =
     replayState.status !== 'idle' && replayState.context.mode === 'video'
       ? replayState.context.title
@@ -438,6 +571,7 @@ export function ChartWorkspace({ initialVideoContext }: ChartWorkspaceProps) {
         magnetEnabled={magnetEnabled}
         selectedDrawingId={selectedDrawingId}
         selectedLocked={selectedLocked}
+        selectedPositionInfo={selectedPositionInfo}
         onSelectTool={setActiveTool}
         onToggleMagnet={() => setMagnetEnabled(!magnetEnabled)}
         onUndo={handleUndo}
@@ -445,7 +579,23 @@ export function ChartWorkspace({ initialVideoContext }: ChartWorkspaceProps) {
         onToggleLock={handleToggleLockSelected}
         onDeleteSelected={handleDeleteSelectedDrawing}
         onClearAll={handleClearAllDrawings}
+        onOpenPaperTrading={() => setShowPaperPanel(!showPaperPanel)}
+        onCreatePaperTradeFromPosition={handleCreateTradeFromPosition}
       />
+
+      {/* Paper Trading Side Panel */}
+      {showPaperPanel && (
+        <PaperTradingPanel
+          symbol={activeSymbol}
+          currentPrice={displayCandle?.close || 0}
+          trades={paperTrades}
+          pendingPositionParams={pendingPositionParams}
+          onClosePanel={() => setShowPaperPanel(false)}
+          onCreateTrade={handleCreatePaperTrade}
+          onCloseTrade={handleClosePaperTrade}
+          onDeleteTrade={handleDeletePaperTrade}
+        />
+      )}
 
       {/* Video Review Context Header Banner if active */}
       {activeVideoTitle && (
@@ -602,13 +752,28 @@ export function ChartWorkspace({ initialVideoContext }: ChartWorkspaceProps) {
           />
         </div>
 
-        {/* Right: Log Scale Toggle & Active Drawings Indicator */}
+        {/* Right: Paper Trading Drawer Toggle & Log Scale */}
         <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-          {drawings.length > 0 && (
-            <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>
-              画图: {drawings.length} 条
-            </span>
-          )}
+          <button
+            onClick={() => setShowPaperPanel(!showPaperPanel)}
+            style={{
+              background: showPaperPanel ? 'var(--accent-blue)' : 'var(--bg-dark-700)',
+              color: showPaperPanel ? '#fff' : 'var(--text-secondary)',
+              border: '1px solid var(--border-color)',
+              borderRadius: 'var(--radius-sm)',
+              padding: '3px 8px',
+              fontSize: '12px',
+              fontWeight: 500,
+              cursor: 'pointer',
+              display: 'flex',
+              alignItems: 'center',
+              gap: '4px',
+            }}
+          >
+            <Target size={13} />
+            <span>模拟交易 {paperTrades.length > 0 && `(${paperTrades.length})`}</span>
+          </button>
+
           <button
             onClick={() => setIsLogScale(!isLogScale)}
             style={{
