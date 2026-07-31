@@ -1,42 +1,123 @@
 import type { Candlestick } from '@/domain/candle';
+import type { ReviewTimeframe } from '@/domain/timeframe';
+import { timeframeMs } from '@/chart/chart-time';
 
-export function filterVisibleCandles(candles: Candlestick[], cursorTimeMs: number): Candlestick[] {
-  if (!candles || candles.length === 0) return [];
-  return candles.filter((c) => c.timestampMs <= cursorTimeMs);
+function completionTimeMs(
+  candle: Candlestick,
+  timeframe: ReviewTimeframe
+): number {
+  return candle.timestampMs + timeframeMs(timeframe);
 }
 
-export function getNextCursorTimeMs(candles: Candlestick[], currentCursorTimeMs: number): number {
+function firstCompletionAfter(
+  candles: Candlestick[],
+  targetTimeMs: number,
+  timeframe: ReviewTimeframe,
+  includeEqual: boolean
+): number {
+  let low = 0;
+  let high = candles.length;
+  while (low < high) {
+    const middle = Math.floor((low + high) / 2);
+    const completion = completionTimeMs(candles[middle], timeframe);
+    const belongsOnLeft = includeEqual
+      ? completion >= targetTimeMs
+      : completion > targetTimeMs;
+    if (belongsOnLeft) high = middle;
+    else low = middle + 1;
+  }
+  return low;
+}
+
+export function filterVisibleCandles(
+  candles: Candlestick[],
+  cursorTimeMs: number,
+  timeframe: ReviewTimeframe
+): Candlestick[] {
+  if (!candles || candles.length === 0) return [];
+  const visibleCount = firstCompletionAfter(
+    candles,
+    cursorTimeMs,
+    timeframe,
+    false
+  );
+  return visibleCount === candles.length
+    ? candles
+    : candles.slice(0, visibleCount);
+}
+
+export function getNextCursorTimeMs(
+  candles: Candlestick[],
+  currentCursorTimeMs: number,
+  timeframe: ReviewTimeframe
+): number {
   if (!candles || candles.length === 0) return currentCursorTimeMs;
-  const sorted = [...candles].sort((a, b) => a.timestampMs - b.timestampMs);
-  const next = sorted.find((c) => c.timestampMs > currentCursorTimeMs);
-  return next ? next.timestampMs : currentCursorTimeMs;
+  const nextIndex = firstCompletionAfter(
+    candles,
+    currentCursorTimeMs,
+    timeframe,
+    false
+  );
+  return nextIndex < candles.length
+    ? completionTimeMs(candles[nextIndex], timeframe)
+    : currentCursorTimeMs;
+}
+
+export function findCandleCompletingAt(
+  candles: Candlestick[],
+  completionTime: number,
+  timeframe: ReviewTimeframe
+): Candlestick | null {
+  const index = firstCompletionAfter(
+    candles,
+    completionTime,
+    timeframe,
+    true
+  );
+  const candle = candles[index];
+  return candle &&
+    completionTimeMs(candle, timeframe) === completionTime
+    ? candle
+    : null;
 }
 
 export function getPrevCursorTimeMs(
   candles: Candlestick[],
   currentCursorTimeMs: number,
-  startCursorTimeMs: number
+  startCursorTimeMs: number,
+  timeframe: ReviewTimeframe
 ): number {
   if (currentCursorTimeMs <= startCursorTimeMs) return startCursorTimeMs;
   if (!candles || candles.length === 0) return startCursorTimeMs;
-
-  const sorted = [...candles].sort((a, b) => b.timestampMs - a.timestampMs);
-  const prev = sorted.find((c) => c.timestampMs < currentCursorTimeMs);
-  if (!prev) return startCursorTimeMs;
-
-  return Math.max(prev.timestampMs, startCursorTimeMs);
+  const currentIndex = firstCompletionAfter(
+    candles,
+    currentCursorTimeMs,
+    timeframe,
+    true
+  );
+  const previousIndex = currentIndex - 1;
+  const previousTime =
+    previousIndex >= 0
+      ? completionTimeMs(candles[previousIndex], timeframe)
+      : startCursorTimeMs;
+  return Math.max(previousTime, startCursorTimeMs);
 }
 
 export function shouldPrefetchFuture(
   candles: Candlestick[],
   cursorTimeMs: number,
+  timeframe: ReviewTimeframe,
   thresholdBars = 30
 ): boolean {
   if (!candles || candles.length === 0) return true;
-  const sorted = [...candles].sort((a, b) => a.timestampMs - b.timestampMs);
-  const cursorIndex = sorted.findIndex((c) => c.timestampMs >= cursorTimeMs);
-  if (cursorIndex < 0) return true;
-  return sorted.length - cursorIndex - 1 <= thresholdBars;
+  const cursorIndex = firstCompletionAfter(
+    candles,
+    cursorTimeMs,
+    timeframe,
+    true
+  );
+  if (cursorIndex >= candles.length) return true;
+  return candles.length - cursorIndex - 1 <= thresholdBars;
 }
 
 export function formatDateTimeLocalInput(dateMs: number): string {

@@ -1,4 +1,6 @@
 :root {
+  color-scheme: dark;
+
   --bg-dark-900: #0f1218;
   --bg-dark-800: #171b26;
   --bg-dark-700: #1e222d;
@@ -25,4 +27,22 @@
   --radius-lg: 12px;
 
   --shadow-main: 0 4px 20px rgba(0, 0, 0, 0.4);
+}
+
+[data-theme='light'] {
+  color-scheme: light;
+
+  --bg-dark-900: #f8fafc;
+  --bg-dark-800: #ffffff;
+  --bg-dark-700: #f1f5f9;
+  --bg-dark-600: #e2e8f0;
+
+  --border-color: #d8dee9;
+  --border-active: #b8c2d1;
+
+  --text-primary: #0f172a;
+  --text-secondary: #475569;
+  --text-muted: #64748b;
+
+  --shadow-main: 0 4px 20px rgba(15, 23, 42, 0.12);
 }

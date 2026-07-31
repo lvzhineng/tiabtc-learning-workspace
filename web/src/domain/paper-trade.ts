@@ -1,6 +1,6 @@
 import type { ReviewTimeframe } from './timeframe';
 
-export type PaperTradeStatus = 'OPEN' | 'CLOSED' | 'WIN' | 'LOSS';
+export type PaperTradeStatus = 'OPEN' | 'WIN' | 'LOSS';
 
 export type PaperTrade = {
   id: string;

@@ -120,19 +120,19 @@ CREATE TABLE paper_trades (
 | 方法 | 路径 | 查询参数 / Body | 说明 & 响应类型 |
 |---|---|---|---|
 | `GET` | `/api/state` | 无 | 获取视频学习状态 `{"records": {videoId: stateObj}}` |
-| `PUT` | `/api/state/{videoId}` | Body: `{status, updatedAt, notes, bookmarked}` | 更新/删除指定视频学习状态 |
-| `GET` | `/api/symbols` | 无 | 获取全部 Symbol 列表 `{"symbols": ["BTCUSDT", ...]}` |
+| `PUT` | `/api/state/{videoId}` | Body: `{status, note, bookmarked}` | 更新/删除指定视频学习状态；服务端不持久化 `updatedAt` |
+| `GET` | `/api/symbols` | 无 | 获取 Symbol 对象列表 `{"symbols": [{"symbol":"BTCUSDT","name":"BTCUSDT 永续","custom":false}]}` |
 | `POST` | `/api/symbols` | Body: `{"symbol": "ETHUSDT"}` | 添加自定义 Symbol |
 | `GET` | `/api/chart/config` | 无 | 获取系统配置 `{"offlineMode": false}` |
 | `PUT` | `/api/chart/config` | Body: `{"offlineMode": true}` | 修改系统配置 `{"offlineMode": true}` |
-| `GET` | `/api/chart/candles` | `symbol`, `interval`, `anchor` | 加载以 Anchor 为边界的历史 K 线组 |
+| `GET` | `/api/chart/candles` | `symbol`, `interval`, `anchor` | 加载以 Anchor 为边界的历史 K 线组；`candles` 为 `{timestamp,open,high,low,close,volume}` 对象数组 |
 | `GET` | `/api/chart/candles` | `symbol`, `interval`, `before`, `limit` | 加载早于 `before` 的历史 K 线 |
 | `GET` | `/api/chart/candles` | `symbol`, `interval`, `after`, `limit`, `cutoff` | 加载晚于 `after` 且受限于 `cutoff` 的 K 线 |
 | `GET` | `/api/chart/candles` | `symbol`, `interval`, `replayCursor`, `limit` | 加载用于 Replay 的 K 线段 |
 | `GET` | `/api/chart/drawings` | `videoId`, `symbol`, `interval` | 获取画图记录 `{"drawings": [...]}` |
-| `POST` | `/api/chart/drawings` | Body: `{id, videoId, symbol, interval, toolType, tool}` | 保存单条画图 |
-| `PUT` | `/api/chart/drawings` | Body: `[{id, videoId, symbol, interval, toolType, tool}, ...]` | 批量替换/更新画图 |
-| `DELETE` | `/api/chart/drawings` | `id`, `videoId`, `symbol`, `clearAll` | 删除指定画图或清空 Symbol 画图 |
+| `POST` | `/api/chart/drawings` | Body: `{id, videoId, symbol, interval, toolType, points, options}` | 保存单条画图 |
+| `PUT` | `/api/chart/drawings` | Body: `{videoId, symbol, interval, drawings:[{id,toolType,points,options}]}` | 原子替换当前 Symbol 画图 |
+| `DELETE` | `/api/chart/drawings` | `id?`, `videoId`, `symbol`, `interval` | 有 `id` 时删除指定画图，否则清空 Symbol 画图 |
 | `GET` | `/api/paper-trades` | `symbol` | 获取模拟交易列表 `{"trades": [...]}` |
 | `POST` | `/api/paper-trades` | Body: `{id, videoId, symbol, interval, direction, ...}` | 创建模拟交易记录 |
 | `DELETE` | `/api/paper-trades` | `id` | 删除/清空模拟交易记录 |

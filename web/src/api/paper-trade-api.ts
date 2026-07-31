@@ -1,33 +1,48 @@
 import { requestJson } from './http';
-import type { PaperTrade, PaperTradeStatus } from '@/domain/paper-trade';
-import type { ReviewTimeframe } from '@/domain/timeframe';
+import type { PaperTrade } from '@/domain/paper-trade';
 
-type RawPaperTrade = {
+type PaperTradeResponse = {
+  id: string;
+  videoId: string;
+  symbol: string;
+  interval: PaperTrade['interval'];
+  direction: PaperTrade['direction'];
+  entryPrice: number;
+  tpPrice: number;
+  slPrice: number;
+  rrRatio: number;
+  status: PaperTrade['status'];
+  pnlR: number;
+  createdAt: string;
+  closedAt: string | null;
+};
+
+type StoredPaperTrade = {
   id: string;
   video_id: string;
   symbol: string;
-  interval: string;
-  direction: 'LONG' | 'SHORT';
+  interval: PaperTrade['interval'];
+  direction: PaperTrade['direction'];
   entry_price: number;
   tp_price: number;
   sl_price: number;
   rr_ratio: number;
-  status: PaperTradeStatus;
+  status: PaperTrade['status'];
   pnl_r: number;
   created_at: string;
   closed_at: string | null;
 };
 
 type PaperTradesResponse = {
-  trades: RawPaperTrade[];
+  trades: StoredPaperTrade[];
 };
 
-function rawToPaperTrade(raw: RawPaperTrade): PaperTrade {
+function storedToPaperTrade(raw: StoredPaperTrade): PaperTrade {
   return {
     id: raw.id,
     videoId: raw.video_id,
     symbol: raw.symbol,
-    interval: (raw.interval || '60') as ReviewTimeframe,
+    interval: raw.interval || '60',
     direction: raw.direction,
     entryPrice: raw.entry_price,
     takeProfitPrice: raw.tp_price,
@@ -40,47 +55,65 @@ function rawToPaperTrade(raw: RawPaperTrade): PaperTrade {
   };
 }
 
-function paperTradeToRaw(trade: Omit<PaperTrade, 'createdAt' | 'closedAt'> & { createdAt?: string; closedAt?: string | null }): RawPaperTrade {
+function responseToPaperTrade(raw: PaperTradeResponse): PaperTrade {
   return {
-    id: trade.id,
-    video_id: trade.videoId || '',
-    symbol: trade.symbol,
-    interval: trade.interval || '60',
-    direction: trade.direction,
-    entry_price: trade.entryPrice,
-    tp_price: trade.takeProfitPrice,
-    sl_price: trade.stopLossPrice,
-    rr_ratio: trade.riskRewardRatio,
-    status: trade.status,
-    pnl_r: trade.pnlR,
-    created_at: trade.createdAt || new Date().toISOString(),
-    closed_at: trade.closedAt || null,
+    id: raw.id,
+    videoId: raw.videoId,
+    symbol: raw.symbol,
+    interval: raw.interval,
+    direction: raw.direction,
+    entryPrice: raw.entryPrice,
+    takeProfitPrice: raw.tpPrice,
+    stopLossPrice: raw.slPrice,
+    riskRewardRatio: raw.rrRatio,
+    status: raw.status,
+    pnlR: raw.pnlR,
+    createdAt: raw.createdAt,
+    closedAt: raw.closedAt,
   };
 }
 
-export async function fetchPaperTrades(videoId = '', symbol = '', signal?: AbortSignal): Promise<PaperTrade[]> {
+export async function fetchPaperTrades(
+  symbol = '',
+  signal?: AbortSignal
+): Promise<PaperTrade[]> {
   const params = new URLSearchParams();
-  if (videoId) params.set('video_id', videoId);
   if (symbol) params.set('symbol', symbol);
-  const data = await requestJson<PaperTradesResponse>(`/api/trades?${params}`, { signal });
-  return (data.trades || []).map(rawToPaperTrade);
+  const data = await requestJson<PaperTradesResponse>(
+    `/api/paper-trades?${params}`,
+    { signal }
+  );
+  return (data.trades || []).map(storedToPaperTrade);
 }
 
-export async function savePaperTrade(trade: Omit<PaperTrade, 'createdAt' | 'closedAt'> & { createdAt?: string; closedAt?: string | null }): Promise<PaperTrade> {
-  const raw = paperTradeToRaw(trade);
-  const data = await requestJson<RawPaperTrade>('/api/trades', {
+export async function savePaperTrade(
+  trade: Omit<PaperTrade, 'createdAt' | 'closedAt'> & {
+    createdAt?: string;
+    closedAt?: string | null;
+  }
+): Promise<PaperTrade> {
+  const data = await requestJson<PaperTradeResponse>('/api/paper-trades', {
     method: 'POST',
-    body: JSON.stringify(raw),
+    body: JSON.stringify({
+      id: trade.id,
+      videoId: trade.videoId || '__global__',
+      symbol: trade.symbol,
+      interval: trade.interval,
+      direction: trade.direction,
+      entryPrice: trade.entryPrice,
+      tpPrice: trade.takeProfitPrice,
+      slPrice: trade.stopLossPrice,
+      status: trade.status,
+      createdAt: trade.createdAt,
+      closedAt: trade.closedAt,
+    }),
   });
-  return rawToPaperTrade(data);
+  return responseToPaperTrade(data);
 }
 
-export async function deletePaperTrade(id: string, videoId = '', symbol = ''): Promise<void> {
-  const params = new URLSearchParams();
-  if (id) params.set('id', id);
-  if (videoId) params.set('video_id', videoId);
-  if (symbol) params.set('symbol', symbol);
-  await requestJson<{ ok: boolean }>(`/api/trades?${params}`, {
+export async function deletePaperTrade(id: string): Promise<void> {
+  const params = new URLSearchParams({ id });
+  await requestJson<{ ok: boolean }>(`/api/paper-trades?${params}`, {
     method: 'DELETE',
   });
 }

@@ -42,14 +42,14 @@ export function filterAndSortVideos(
 ): VideoItem[] {
   let result = [...videos];
 
-  // 1. Search Query Filter (title, date, notes)
+  // 1. Search Query Filter (title, date, note)
   if (params.searchQuery.trim()) {
     const q = params.searchQuery.trim().toLowerCase();
     result = result.filter((v) => {
       const st = stateMap[v.videoId];
       const matchTitle = v.title.toLowerCase().includes(q);
       const matchDate = v.date.toLowerCase().includes(q);
-      const matchNotes = st?.notes ? st.notes.toLowerCase().includes(q) : false;
+      const matchNotes = st?.note ? st.note.toLowerCase().includes(q) : false;
       return matchTitle || matchDate || matchNotes;
     });
   }
@@ -73,7 +73,7 @@ export function filterAndSortVideos(
   } else if (params.quickFilter === 'bookmarked') {
     result = result.filter((v) => Boolean(stateMap[v.videoId]?.bookmarked));
   } else if (params.quickFilter === 'noted') {
-    result = result.filter((v) => Boolean(stateMap[v.videoId]?.notes?.trim()));
+    result = result.filter((v) => Boolean(stateMap[v.videoId]?.note?.trim()));
   }
 
   // 5. Sort Order (asc: earliest first, desc: latest first)

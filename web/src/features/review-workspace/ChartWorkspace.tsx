@@ -1,49 +1,37 @@
-import { useEffect, useState, useRef, useCallback, useMemo } from 'react';
+import { useEffect, useState, useCallback, useMemo } from 'react';
 import type { ReviewTimeframe } from '@/domain/timeframe';
 import { TIMEFRAME_DISPLAY_MAP } from '@/domain/timeframe';
+import { timeframeMs } from '@/chart/chart-time';
 import type { Candlestick } from '@/domain/candle';
 import {
   fetchSymbols,
   addCustomSymbol,
-  fetchChartCandles,
-  fetchEarlierCandles,
-  fetchLaterCandles,
 } from '@/api/market-api';
-import {
-  fetchDrawings,
-  saveDrawing,
-  deleteDrawing,
-  clearAllDrawingsForSymbol,
-} from '@/api/drawing-api';
-import {
-  fetchPaperTrades,
-  savePaperTrade,
-  deletePaperTrade,
-} from '@/api/paper-trade-api';
 import { ChartCanvas } from '@/chart/ChartCanvas';
 import { computeReadoutInfo, type ReadoutInfo } from '@/chart/candlestick-readout';
-import { formatChartTime } from '@/chart/chart-time';
 import type { ReplayState } from '@/features/replay/replay-state';
 import {
   filterVisibleCandles,
+  findCandleCompletingAt,
   getNextCursorTimeMs,
   getPrevCursorTimeMs,
   shouldPrefetchFuture,
 } from '@/features/replay/free-replay-logic';
 import { FreeReplayPanel } from '@/features/replay/FreeReplayPanel';
-import type { ActiveToolType, DrawingToolState } from '@/features/drawings/drawing-types';
-import { deserializeDrawing, serializeDrawing } from '@/features/drawings/drawing-engine';
 import { DraggableDrawingToolbar } from '@/features/drawings/DraggableDrawingToolbar';
 import type { VideoReviewContext } from '@/domain/review-context';
 import { buildVideoPublishedMarker } from '@/chart/system-marker';
 import type { PositionToolParams } from '@/features/paper-trading/paper-trade-types';
 import type { PaperTrade } from '@/domain/paper-trade';
-import { checkTradeTrigger, calculateRR } from '@/features/paper-trading/paper-trade-logic';
+import { calculateRR } from '@/features/paper-trading/paper-trade-logic';
 import { PaperTradingPanel } from '@/features/paper-trading/PaperTradingPanel';
+import { useCandleWorkspaceData } from './useCandleWorkspaceData';
+import { useDrawingWorkspace } from './useDrawingWorkspace';
+import { usePaperTrading } from './usePaperTrading';
+import { ChartReadoutBar } from './ChartReadoutBar';
 import {
   AlertCircle,
   Plus,
-  BarChart2,
   RefreshCw,
   Video,
   Target,
@@ -53,38 +41,28 @@ const TIMEFRAMES: ReviewTimeframe[] = ['5', '15', '60', '240', 'D', 'W'];
 
 interface ChartWorkspaceProps {
   initialVideoContext?: VideoReviewContext | null;
+  themeMode?: 'dark' | 'light';
 }
 
-export function ChartWorkspace({ initialVideoContext }: ChartWorkspaceProps) {
+export function ChartWorkspace({
+  initialVideoContext,
+  themeMode = 'dark',
+}: ChartWorkspaceProps) {
   const [symbols, setSymbols] = useState<string[]>(['BTCUSDT']);
   const [activeSymbol, setActiveSymbol] = useState<string>(
     initialVideoContext?.symbol || 'BTCUSDT'
   );
   const [activeTimeframe, setActiveTimeframe] = useState<ReviewTimeframe>('60');
   const [isLogScale, setIsLogScale] = useState<boolean>(false);
+  const [chartFocusTimeMs, setChartFocusTimeMs] = useState<number | null>(null);
 
-  const [candles, setCandles] = useState<Candlestick[]>([]);
   const [hoveredCandle, setHoveredCandle] = useState<Candlestick | null>(null);
-
-  const [loading, setLoading] = useState<boolean>(true);
-  const [isLoadingEarlier, setIsLoadingEarlier] = useState<boolean>(false);
-  const [offlineWarning, setOfflineWarning] = useState<string | null>(null);
-  const [error, setError] = useState<string | null>(null);
 
   const [newSymbolInput, setNewSymbolInput] = useState<string>('');
   const [showAddSymbol, setShowAddSymbol] = useState<boolean>(false);
 
-  // Drawing State
-  const [activeTool, setActiveTool] = useState<ActiveToolType>('select');
-  const [magnetEnabled, setMagnetEnabled] = useState<boolean>(false);
-  const [drawings, setDrawings] = useState<DrawingToolState[]>([]);
-  const [selectedDrawingId, setSelectedDrawingId] = useState<string | null>(null);
-  const [undoStack, setUndoStack] = useState<DrawingToolState[][]>([]);
-  const [redoStack, setRedoStack] = useState<DrawingToolState[][]>([]);
-
   // Paper Trading State
   const [showPaperPanel, setShowPaperPanel] = useState<boolean>(false);
-  const [paperTrades, setPaperTrades] = useState<PaperTrade[]>([]);
   const [pendingPositionParams, setPendingPositionParams] = useState<PositionToolParams | null>(null);
 
   // Replay State Machine
@@ -102,7 +80,45 @@ export function ChartWorkspace({ initialVideoContext }: ChartWorkspaceProps) {
     return { status: 'idle' };
   });
 
-  const activeReqControllerRef = useRef<AbortController | null>(null);
+  const {
+    candles,
+    loading,
+    isLoadingEarlier,
+    offlineWarning,
+    error,
+    loadEarlier: handleLoadEarlier,
+    prefetchFuture: prefetchFutureCandles,
+  } = useCandleWorkspaceData(
+    activeSymbol,
+    activeTimeframe,
+    replayState
+  );
+  const {
+    activeTool,
+    setActiveTool,
+    magnetEnabled,
+    toggleMagnet,
+    drawings,
+    selectedDrawingId,
+    setSelectedDrawingId,
+    saveDrawingState: handleSaveDrawingState,
+    deleteSelectedDrawing: handleDeleteSelectedDrawing,
+    clearAllDrawings: handleClearAllDrawings,
+    toggleLockSelected: handleToggleLockSelected,
+    undo: handleUndo,
+    redo: handleRedo,
+  } = useDrawingWorkspace(activeSymbol, activeTimeframe);
+  const {
+    trades: paperTrades,
+    createTrade: createPaperTrade,
+    closeTrade: handleClosePaperTrade,
+    removeTrade: handleDeletePaperTrade,
+    checkTriggers: checkOpenTradesTriggers,
+  } = usePaperTrading(activeSymbol, activeTimeframe, replayState);
+  const replayDataContextKey =
+    replayState.status === 'idle'
+      ? 'live'
+      : `${replayState.context.mode}:${replayState.startTimeMs}`;
 
   // Sync initialVideoContext if passed from parent
   useEffect(() => {
@@ -135,272 +151,40 @@ export function ChartWorkspace({ initialVideoContext }: ChartWorkspaceProps) {
       });
   }, []);
 
-  // Main Candle Loading Effect
   useEffect(() => {
-    if (activeReqControllerRef.current) {
-      activeReqControllerRef.current.abort();
-    }
-
-    const controller = new AbortController();
-    activeReqControllerRef.current = controller;
-
-    setLoading(true);
-    setError(null);
-    setOfflineWarning(null);
-    setCandles([]);
     setHoveredCandle(null);
-
-    const initialAnchor = replayState.status !== 'idle' ? replayState.startTimeMs : 0;
-
-    fetchChartCandles(activeSymbol, activeTimeframe, initialAnchor, controller.signal)
-      .then((data) => {
-        if (controller.signal.aborted) return;
-        setCandles(data);
-        if (data.length === 0) {
-          setOfflineWarning(`符号 ${activeSymbol} (${TIMEFRAME_DISPLAY_MAP[activeTimeframe]}) 暂无本地缓存数据。`);
-        }
-      })
-      .catch((err) => {
-        if (controller.signal.aborted) return;
-        setError(err instanceof Error ? err.message : '加载 K 线数据失败');
-      })
-      .finally(() => {
-        if (!controller.signal.aborted) {
-          setLoading(false);
-        }
-      });
-
-    return () => {
-      controller.abort();
-    };
-  }, [activeSymbol, activeTimeframe]);
-
-  // Load Persisted Drawings & Paper Trades from Server
-  useEffect(() => {
-    fetchDrawings('', activeSymbol)
-      .then((list) => {
-        const deserialized = list.map(deserializeDrawing);
-        setDrawings(deserialized);
-        setSelectedDrawingId(null);
-        setUndoStack([]);
-        setRedoStack([]);
-      })
-      .catch((err) => {
-        console.warn('拉取画图持久化记录失败:', err);
-      });
-
-    fetchPaperTrades('', activeSymbol)
-      .then((list) => {
-        setPaperTrades(list || []);
-      })
-      .catch((err) => {
-        console.warn('拉取模拟交易记录失败:', err);
-      });
-  }, [activeSymbol]);
-
-  // Check Open Trades against new candles during Replay or Candle update
-  const checkOpenTradesTriggers = useCallback(
-    (latestCandle: Candlestick) => {
-      setPaperTrades((prevTrades) => {
-        let hasChanges = false;
-        const updatedList = prevTrades.map((t) => {
-          if (t.status === 'OPEN') {
-            const triggered = checkTradeTrigger(t, latestCandle);
-            if (triggered) {
-              hasChanges = true;
-              savePaperTrade(triggered).catch((err) => console.error('结单写库失败:', err));
-              return triggered;
-            }
-          }
-          return t;
-        });
-        return hasChanges ? updatedList : prevTrades;
-      });
-    },
-    []
-  );
-
-  // Handle auto-load earlier candles when scrolling left
-  const handleLoadEarlier = useCallback(() => {
-    if (isLoadingEarlier || loading || candles.length === 0) return;
-
-    const earliestTs = Math.min(...candles.map((c) => c.timestampMs));
-    setIsLoadingEarlier(true);
-
-    fetchEarlierCandles(activeSymbol, activeTimeframe, earliestTs, 1000)
-      .then((newEarlierCandles) => {
-        if (newEarlierCandles.length > 0) {
-          setCandles((prev) => {
-            const existingTs = new Set(prev.map((c) => c.timestampMs));
-            const fresh = newEarlierCandles.filter((c) => !existingTs.has(c.timestampMs));
-            return [...fresh, ...prev];
-          });
-        }
-      })
-      .catch((err) => {
-        console.warn('扩展加载更早 K 线失败:', err);
-      })
-      .finally(() => {
-        setIsLoadingEarlier(false);
-      });
-  }, [activeSymbol, activeTimeframe, candles, isLoadingEarlier, loading]);
-
-  // Handle prefetching future candles for replay in background
-  const prefetchFutureCandles = useCallback(() => {
-    if (candles.length === 0) return;
-    const latestTs = Math.max(...candles.map((c) => c.timestampMs));
-    fetchLaterCandles(activeSymbol, activeTimeframe, latestTs, 1000)
-      .then((laterCandles) => {
-        if (laterCandles.length > 0) {
-          setCandles((prev) => {
-            const existingTs = new Set(prev.map((c) => c.timestampMs));
-            const fresh = laterCandles.filter((c) => !existingTs.has(c.timestampMs));
-            return [...prev, ...fresh];
-          });
-        }
-      })
-      .catch((err) => {
-        console.warn('预取未来数据失败:', err);
-      });
-  }, [activeSymbol, activeTimeframe, candles]);
-
-  // Drawing Actions & Persistence Sync
-  const persistStateChange = (newDrawings: DrawingToolState[]) => {
-    setUndoStack((prev) => [...prev, drawings]);
-    setRedoStack([]);
-    setDrawings(newDrawings);
-  };
-
-  const handleSaveDrawingState = async (toolState: DrawingToolState) => {
-    try {
-      const persistedPayload = serializeDrawing(toolState);
-      const saved = await saveDrawing(persistedPayload);
-      const deserializedSaved = deserializeDrawing(saved);
-
-      const exists = drawings.some((d) => d.id === toolState.id);
-      const next = exists
-        ? drawings.map((d) => (d.id === toolState.id ? deserializedSaved : d))
-        : [...drawings, deserializedSaved];
-
-      persistStateChange(next);
-    } catch (err) {
-      alert(`保存画图记录失败: ${err instanceof Error ? err.message : '网络或数据库异常'}`);
-    }
-  };
-
-  const handleDeleteSelectedDrawing = async () => {
-    if (!selectedDrawingId) return;
-    const target = drawings.find((d) => d.id === selectedDrawingId);
-    if (!target) return;
-
-    try {
-      await deleteDrawing(selectedDrawingId, '', activeSymbol);
-      const next = drawings.filter((d) => d.id !== selectedDrawingId);
-      persistStateChange(next);
-      setSelectedDrawingId(null);
-    } catch (err) {
-      alert(`删除画图记录失败: ${err instanceof Error ? err.message : '网络异常'}`);
-    }
-  };
-
-  const handleClearAllDrawings = async () => {
-    if (drawings.length === 0) return;
-    const confirmClear = window.confirm(`确认要清空当前 Symbol (${activeSymbol}) 的所有画图记录吗？此操作无法撤销。`);
-    if (!confirmClear) return;
-
-    try {
-      await clearAllDrawingsForSymbol(activeSymbol);
-      persistStateChange([]);
-      setSelectedDrawingId(null);
-    } catch (err) {
-      alert(`清空画图失败: ${err instanceof Error ? err.message : '网络异常'}`);
-    }
-  };
-
-  const handleToggleLockSelected = async () => {
-    if (!selectedDrawingId) return;
-    const target = drawings.find((d) => d.id === selectedDrawingId);
-    if (!target) return;
-
-    const updated = { ...target, locked: !target.locked };
-    await handleSaveDrawingState(updated);
-  };
-
-  const handleUndo = () => {
-    if (undoStack.length === 0) return;
-    const prev = undoStack[undoStack.length - 1];
-    setRedoStack((r) => [...r, drawings]);
-    setUndoStack((u) => u.slice(0, -1));
-    setDrawings(prev);
-  };
-
-  const handleRedo = () => {
-    if (redoStack.length === 0) return;
-    const next = redoStack[redoStack.length - 1];
-    setUndoStack((u) => [...u, drawings]);
-    setRedoStack((r) => r.slice(0, -1));
-    setDrawings(next);
-  };
+  }, [activeSymbol, activeTimeframe, replayDataContextKey]);
 
   // Paper Trade CRUD Actions
-  const handleCreatePaperTrade = async (tradeDraft: Omit<PaperTrade, 'id' | 'createdAt' | 'closedAt'>) => {
-    const payload: Omit<PaperTrade, 'createdAt' | 'closedAt'> = {
-      ...tradeDraft,
-      id: `trade_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`,
-      interval: activeTimeframe,
-    };
+  const handleCreatePaperTrade = useCallback(
+    async (
+      tradeDraft: Omit<
+        PaperTrade,
+        'id' | 'createdAt' | 'closedAt'
+      >
+    ) => {
+      if (await createPaperTrade(tradeDraft)) {
+        setPendingPositionParams(null);
+      }
+    },
+    [createPaperTrade]
+  );
 
-    try {
-      const saved = await savePaperTrade(payload);
-      setPaperTrades((prev) => [saved, ...prev]);
-    } catch (err) {
-      alert(`挂单开仓失败: ${err instanceof Error ? err.message : '网络异常'}`);
-    }
-  };
-
-  const handleClosePaperTrade = async (
-    id: string,
-    closePrice: number,
-    forceStatus?: 'WIN' | 'LOSS'
-  ) => {
-    const target = paperTrades.find((t) => t.id === id);
-    if (!target) return;
-
-    const status = forceStatus || (closePrice >= target.entryPrice ? 'WIN' : 'LOSS');
-    const rr = calculateRR(target.direction, target.entryPrice, target.takeProfitPrice, target.stopLossPrice);
-
-    const updated: PaperTrade = {
-      ...target,
-      status,
-      closedAt: new Date().toISOString(),
-      pnlR: status === 'WIN' ? rr : -1.0,
-    };
-
-    try {
-      const saved = await savePaperTrade(updated);
-      setPaperTrades((prev) => prev.map((t) => (t.id === id ? saved : t)));
-    } catch (err) {
-      alert(`平仓写库失败: ${err instanceof Error ? err.message : '网络异常'}`);
-    }
-  };
-
-  const handleDeletePaperTrade = async (id: string) => {
-    try {
-      await deletePaperTrade(id, '', activeSymbol);
-      setPaperTrades((prev) => prev.filter((t) => t.id !== id));
-    } catch (err) {
-      alert(`删除交易记录失败: ${err instanceof Error ? err.message : '网络异常'}`);
-    }
-  };
-
-  const handleCreateTradeFromPosition = (params: PositionToolParams) => {
+  const handleCreateTradeFromPosition = useCallback((params: PositionToolParams) => {
     setPendingPositionParams(params);
     setShowPaperPanel(true);
-  };
+  }, []);
+  const togglePaperPanel = useCallback(() => {
+    setShowPaperPanel((visible) => !visible);
+  }, []);
+  const closePaperPanel = useCallback(() => {
+    setShowPaperPanel(false);
+  }, []);
 
   // Replay Actions
   const handleStartReplay = (symbol: string, startTimeMs: number) => {
     setActiveSymbol(symbol);
+    setChartFocusTimeMs(startTimeMs);
     setReplayState({
       status: 'ready',
       context: {
@@ -416,19 +200,67 @@ export function ChartWorkspace({ initialVideoContext }: ChartWorkspaceProps) {
   };
 
   const handleStopReplay = () => {
+    setChartFocusTimeMs(null);
     setReplayState({ status: 'idle' });
   };
 
+  const handleDoubleClickCandle = useCallback(
+    (candle: Candlestick) => {
+      const cutInTimeMs =
+        candle.timestampMs + timeframeMs(activeTimeframe);
+      setChartFocusTimeMs(candle.timestampMs);
+      setReplayState({
+        status: 'ready',
+        context: {
+          mode: 'free',
+          symbol: activeSymbol,
+          anchorTimeMs: cutInTimeMs,
+        },
+        startTimeMs: cutInTimeMs,
+        progressTimeMs: cutInTimeMs,
+        cursorTimeMs: cutInTimeMs,
+        speed: 1,
+      });
+    },
+    [activeSymbol, activeTimeframe]
+  );
+
   const handleNextBar = useCallback(() => {
     if (replayState.status === 'idle') return;
-    const nextCursorMs = getNextCursorTimeMs(candles, replayState.cursorTimeMs);
+    const nextCursorMs = getNextCursorTimeMs(
+      candles,
+      replayState.cursorTimeMs,
+      activeTimeframe
+    );
     if (nextCursorMs === replayState.cursorTimeMs) {
-      prefetchFutureCandles();
+      const resumePlayback = replayState.status === 'playing';
+      setReplayState((prev) =>
+        prev.status === 'idle' ? prev : { ...prev, status: 'paused' }
+      );
+      void prefetchFutureCandles().then((addedCount) => {
+        if (addedCount < 0) return;
+        setReplayState((prev) => {
+          if (prev.status === 'idle') return prev;
+          return {
+            ...prev,
+            status:
+              addedCount > 0
+                ? resumePlayback
+                  ? 'playing'
+                  : 'paused'
+                : 'completed',
+          };
+        });
+      });
       return;
     }
 
     // Check TP/SL trigger on new candle
-    const nextCandle = candles.find((c) => c.timestampMs === nextCursorMs);
+    const nextCandle = findCandleCompletingAt(
+      candles,
+      nextCursorMs,
+      activeTimeframe
+    );
     if (nextCandle) {
       checkOpenTradesTriggers(nextCandle);
     }
@@ -437,19 +269,31 @@ export function ChartWorkspace({ initialVideoContext }: ChartWorkspaceProps) {
       if (prev.status === 'idle') return prev;
       return {
         ...prev,
+        status: prev.status === 'completed' ? 'paused' : prev.status,
         cursorTimeMs: nextCursorMs,
         progressTimeMs: Math.max(prev.progressTimeMs, nextCursorMs),
       };
     });
 
-    if (shouldPrefetchFuture(candles, nextCursorMs)) {
-      prefetchFutureCandles();
+    if (shouldPrefetchFuture(candles, nextCursorMs, activeTimeframe)) {
+      void prefetchFutureCandles();
     }
-  }, [candles, replayState, prefetchFutureCandles, checkOpenTradesTriggers]);
+  }, [
+    activeTimeframe,
+    candles,
+    replayState,
+    prefetchFutureCandles,
+    checkOpenTradesTriggers,
+  ]);
 
   const handlePrevBar = useCallback(() => {
     if (replayState.status === 'idle') return;
-    const prevCursorMs = getPrevCursorTimeMs(candles, replayState.cursorTimeMs, replayState.startTimeMs);
+    const prevCursorMs = getPrevCursorTimeMs(
+      candles,
+      replayState.cursorTimeMs,
+      replayState.startTimeMs,
+      activeTimeframe
+    );
     setReplayState((prev) => {
       if (prev.status === 'idle') return prev;
       return {
@@ -457,7 +301,7 @@ export function ChartWorkspace({ initialVideoContext }: ChartWorkspaceProps) {
         cursorTimeMs: prevCursorMs,
       };
     });
-  }, [candles, replayState]);
+  }, [activeTimeframe, candles, replayState]);
 
   const handleTogglePlay = useCallback(() => {
     setReplayState((prev) => {
@@ -493,9 +337,13 @@ export function ChartWorkspace({ initialVideoContext }: ChartWorkspaceProps) {
     if (!newSymbolInput.trim()) return;
     const clean = newSymbolInput.trim().toUpperCase();
     try {
-      const updated = await addCustomSymbol(clean);
-      setSymbols(updated);
-      setActiveSymbol(clean);
+      const addedSymbol = await addCustomSymbol(clean);
+      setSymbols((current) =>
+        current.includes(addedSymbol)
+          ? current
+          : [...current, addedSymbol]
+      );
+      setActiveSymbol(addedSymbol);
       setNewSymbolInput('');
       setShowAddSymbol(false);
     } catch (err) {
@@ -504,32 +352,51 @@ export function ChartWorkspace({ initialVideoContext }: ChartWorkspaceProps) {
   };
 
   // Build System Markers for Video Review
+  const videoReplayContext =
+    replayState.status !== 'idle' &&
+    replayState.context.mode === 'video'
+      ? replayState.context
+      : null;
   const systemMarkers = useMemo(() => {
-    if (
-      replayState.status !== 'idle' &&
-      replayState.context.mode === 'video'
-    ) {
+    if (videoReplayContext) {
       return [
         buildVideoPublishedMarker(
-          replayState.context.anchorTimeMs,
-          replayState.context.title
+          videoReplayContext.anchorTimeMs,
+          videoReplayContext.title,
+          candles,
+          activeTimeframe
         ),
       ];
     }
     return [];
-  }, [replayState]);
+  }, [activeTimeframe, candles, videoReplayContext]);
 
   // Determine Visible Candles for Chart Canvas
-  const visibleCandles =
-    replayState.status !== 'idle'
-      ? filterVisibleCandles(candles, replayState.cursorTimeMs)
-      : candles;
+  const replayCursorTimeMs =
+    replayState.status === 'idle' ? null : replayState.cursorTimeMs;
+  const visibleCandles = useMemo(
+    () =>
+      replayCursorTimeMs !== null
+        ? filterVisibleCandles(
+            candles,
+            replayCursorTimeMs,
+            activeTimeframe
+          )
+        : candles,
+    [activeTimeframe, candles, replayCursorTimeMs]
+  );
 
   const displayCandle =
     hoveredCandle || (visibleCandles.length > 0 ? visibleCandles[visibleCandles.length - 1] : null);
-  const readoutInfo: ReadoutInfo | null = computeReadoutInfo(displayCandle);
+  const readoutInfo: ReadoutInfo | null = useMemo(
+    () => computeReadoutInfo(displayCandle),
+    [displayCandle]
+  );
 
-  const selectedDrawing = drawings.find((d) => d.id === selectedDrawingId);
+  const selectedDrawing = useMemo(
+    () => drawings.find((drawing) => drawing.id === selectedDrawingId),
+    [drawings, selectedDrawingId]
+  );
   const selectedLocked = Boolean(selectedDrawing?.locked);
 
   // Extract selected position parameters if user selected a long/short position drawing
@@ -558,10 +425,7 @@ export function ChartWorkspace({ initialVideoContext }: ChartWorkspaceProps) {
     };
   }, [selectedDrawing]);
 
-  const activeVideoTitle =
-    replayState.status !== 'idle' && replayState.context.mode === 'video'
-      ? replayState.context.title
-      : null;
+  const activeVideoTitle = videoReplayContext?.title || null;
 
   return (
     <div style={{ width: '100%', height: '100%', display: 'flex', flexDirection: 'column', background: 'var(--bg-dark-900)', position: 'relative' }}>
@@ -573,13 +437,13 @@ export function ChartWorkspace({ initialVideoContext }: ChartWorkspaceProps) {
         selectedLocked={selectedLocked}
         selectedPositionInfo={selectedPositionInfo}
         onSelectTool={setActiveTool}
-        onToggleMagnet={() => setMagnetEnabled(!magnetEnabled)}
+        onToggleMagnet={toggleMagnet}
         onUndo={handleUndo}
         onRedo={handleRedo}
         onToggleLock={handleToggleLockSelected}
         onDeleteSelected={handleDeleteSelectedDrawing}
         onClearAll={handleClearAllDrawings}
-        onOpenPaperTrading={() => setShowPaperPanel(!showPaperPanel)}
+        onOpenPaperTrading={togglePaperPanel}
         onCreatePaperTradeFromPosition={handleCreateTradeFromPosition}
       />
 
@@ -590,7 +454,7 @@ export function ChartWorkspace({ initialVideoContext }: ChartWorkspaceProps) {
           currentPrice={displayCandle?.close || 0}
           trades={paperTrades}
           pendingPositionParams={pendingPositionParams}
-          onClosePanel={() => setShowPaperPanel(false)}
+          onClosePanel={closePaperPanel}
           onCreateTrade={handleCreatePaperTrade}
           onCloseTrade={handleClosePaperTrade}
           onDeleteTrade={handleDeletePaperTrade}
@@ -755,7 +619,7 @@ export function ChartWorkspace({ initialVideoContext }: ChartWorkspaceProps) {
         {/* Right: Paper Trading Drawer Toggle & Log Scale */}
         <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
           <button
-            onClick={() => setShowPaperPanel(!showPaperPanel)}
+            onClick={togglePaperPanel}
             style={{
               background: showPaperPanel ? 'var(--accent-blue)' : 'var(--bg-dark-700)',
               color: showPaperPanel ? '#fff' : 'var(--text-secondary)',
@@ -792,66 +656,11 @@ export function ChartWorkspace({ initialVideoContext }: ChartWorkspaceProps) {
         </div>
       </div>
 
-      {/* OHLC Readout Bar */}
-      <div
-        style={{
-          height: '32px',
-          background: 'var(--bg-dark-800)',
-          borderBottom: '1px solid var(--border-color)',
-          display: 'flex',
-          alignItems: 'center',
-          padding: '0 16px',
-          fontSize: '12px',
-          gap: '16px',
-          fontFamily: 'var(--font-mono)',
-          color: 'var(--text-secondary)',
-        }}
-      >
-        <div style={{ display: 'flex', alignItems: 'center', gap: '6px', color: 'var(--text-primary)', fontWeight: 600 }}>
-          <BarChart2 size={14} color="var(--accent-blue)" />
-          <span>{activeSymbol}</span>
-          <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>({TIMEFRAME_DISPLAY_MAP[activeTimeframe]})</span>
-        </div>
-
-        {readoutInfo ? (
-          <>
-            <div>
-              <span style={{ color: 'var(--text-muted)' }}>时间: </span>
-              <span>{formatChartTime(readoutInfo.candle!.timestampMs, activeTimeframe)}</span>
-            </div>
-            <div>
-              <span style={{ color: 'var(--text-muted)' }}>O: </span>
-              <span>{readoutInfo.formattedOpen}</span>
-            </div>
-            <div>
-              <span style={{ color: 'var(--text-muted)' }}>H: </span>
-              <span>{readoutInfo.formattedHigh}</span>
-            </div>
-            <div>
-              <span style={{ color: 'var(--text-muted)' }}>L: </span>
-              <span>{readoutInfo.formattedLow}</span>
-            </div>
-            <div>
-              <span style={{ color: 'var(--text-muted)' }}>C: </span>
-              <span style={{ color: readoutInfo.isUp ? 'var(--accent-green)' : 'var(--accent-red)' }}>
-                {readoutInfo.formattedClose}
-              </span>
-            </div>
-            <div>
-              <span style={{ color: 'var(--text-muted)' }}>幅: </span>
-              <span style={{ color: readoutInfo.isUp ? 'var(--accent-green)' : 'var(--accent-red)' }}>
-                {readoutInfo.formattedChange}
-              </span>
-            </div>
-            <div>
-              <span style={{ color: 'var(--text-muted)' }}>Vol: </span>
-              <span>{readoutInfo.formattedVolume}</span>
-            </div>
-          </>
-        ) : (
-          <div style={{ color: 'var(--text-muted)' }}>暂无 Candlestick 数据</div>
-        )}
-      </div>
+      <ChartReadoutBar
+        symbol={activeSymbol}
+        timeframe={activeTimeframe}
+        readout={readoutInfo}
+      />
 
       {/* Warnings & Loading Overlay */}
       {offlineWarning && (
@@ -892,7 +701,7 @@ export function ChartWorkspace({ initialVideoContext }: ChartWorkspaceProps) {
 
       {/* Main Chart Canvas Area */}
       <div style={{ flex: 1, position: 'relative', overflow: 'hidden' }}>
-        {loading && (
+        {loading && candles.length === 0 && (
           <div
             style={{
               position: 'absolute',
@@ -910,16 +719,51 @@ export function ChartWorkspace({ initialVideoContext }: ChartWorkspaceProps) {
             <span>加载 K 线数据中...</span>
           </div>
         )}
+        {loading && candles.length > 0 && (
+          <div
+            style={{
+              position: 'absolute',
+              top: '10px',
+              right: '12px',
+              zIndex: 10,
+              display: 'flex',
+              alignItems: 'center',
+              gap: '6px',
+              padding: '6px 10px',
+              border: '1px solid var(--border-color)',
+              borderRadius: 'var(--radius-sm)',
+              background: 'var(--bg-dark-800)',
+              color: 'var(--text-secondary)',
+              fontSize: '12px',
+              pointerEvents: 'none',
+            }}
+          >
+            <RefreshCw size={14} className="spin" color="var(--accent-blue)" />
+            <span>正在切换周期...</span>
+          </div>
+        )}
 
         <ChartCanvas
           candles={visibleCandles}
           symbol={activeSymbol}
           interval={activeTimeframe}
           isLogScale={isLogScale}
+          themeMode={themeMode}
+          focusTimeMs={chartFocusTimeMs}
           systemMarkers={systemMarkers}
           onCrosshairMove={setHoveredCandle}
+          onDoubleClickCandle={handleDoubleClickCandle}
           onLoadEarlier={handleLoadEarlier}
           isLoadingEarlier={isLoadingEarlier}
+          drawings={drawings}
+          activeDrawingTool={activeTool}
+          selectedDrawingId={selectedDrawingId}
+          magnetEnabled={magnetEnabled}
+          drawingVideoId="__global__"
+          onSelectDrawing={setSelectedDrawingId}
+          onSaveDrawing={handleSaveDrawingState}
+          onDrawingComplete={() => setActiveTool('select')}
+          showVolume
         />
       </div>
     </div>

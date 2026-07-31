@@ -61,6 +61,14 @@ export function PaperTradingPanel({
       alert('请输入完整的开仓价、止盈价和止损价');
       return;
     }
+    if (currentRR <= 0) {
+      alert(
+        tradeType === 'LONG'
+          ? '做多必须满足：止盈价 > 开仓价 > 止损价'
+          : '做空必须满足：止盈价 < 开仓价 < 止损价'
+      );
+      return;
+    }
 
     onCreateTrade({
       videoId: '',

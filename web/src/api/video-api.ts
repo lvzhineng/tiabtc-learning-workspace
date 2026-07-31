@@ -2,8 +2,8 @@ import { requestJson } from './http';
 
 export type LearningStateRecord = {
   status: 'unlearned' | 'learning' | 'learned';
-  updatedAt: string;
-  notes?: string;
+  updatedAt?: string;
+  note?: string;
   bookmarked?: boolean;
 };
 

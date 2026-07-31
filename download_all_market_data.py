@@ -65,7 +65,7 @@ def format_time(timestamp):
 def download_batch(symbol, interval, start, end, retries):
     for attempt in range(1, retries + 1):
         try:
-            candles = study_server.fetch_bybit_candles(symbol, interval, start, end)
+            candles = study_server.fetch_market_candles(symbol, interval, start, end)
             study_server.save_candles(symbol, interval, start, end, candles)
             return len(candles)
         except Exception:

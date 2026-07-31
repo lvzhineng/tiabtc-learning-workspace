@@ -18,7 +18,7 @@ def main():
             cleaned_row = {k.strip(): v.strip() for k, v in row.items() if k}
             idx = cleaned_row.get('序号', '')
             pub_date = cleaned_row.get('发布日期', '')
-            pub_time = cleaned_row.get('发布时间（网页时间）', '')
+            pub_time = cleaned_row.get('发布时间（页面时区）', '')
             title = cleaned_row.get('视频标题', '')
             url = cleaned_row.get('视频链接', '')
             video_id = cleaned_row.get('视频ID', '')

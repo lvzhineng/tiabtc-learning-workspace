@@ -6,7 +6,11 @@ export type PersistedDrawing = {
   symbol: string;
   interval: ReviewTimeframe;
   toolType: string;
-  tool: unknown;
+  points: Array<{
+    timestamp: number;
+    price: number;
+  }>;
+  options: Record<string, unknown>;
   createdAt?: string;
   updatedAt?: string;
 };

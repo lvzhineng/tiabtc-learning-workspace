@@ -1,18 +1,48 @@
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { fetchSymbols, fetchChartConfig } from '@/api/market-api';
-import { Activity, RefreshCw, BookOpen, BarChart2 } from 'lucide-react';
+import {
+  Activity,
+  RefreshCw,
+  BookOpen,
+  BarChart2,
+  ListChecks,
+  Moon,
+  Sun,
+} from 'lucide-react';
 import { ChartWorkspace } from '@/features/review-workspace/ChartWorkspace';
 import { LearningWorkspace } from '@/features/learning/LearningWorkspace';
+import { BitlangTradeWorkspace } from '@/features/bitlang/BitlangTradeWorkspace';
 import type { VideoItem } from '@/features/learning/learning-types';
 import type { VideoReviewContext } from '@/domain/review-context';
 import { parseVideoPublishedTimeMs } from '@/chart/chart-time';
 
+type WorkspaceTab = 'learning' | 'review' | 'bitlang';
+export type ThemeMode = 'dark' | 'light';
+
+function initialWorkspaceTab(): WorkspaceTab {
+  const tab = new URLSearchParams(window.location.search).get('tab');
+  return tab === 'review' || tab === 'bitlang' ? tab : 'learning';
+}
+
+function initialThemeMode(): ThemeMode {
+  try {
+    const savedTheme =
+      window.localStorage.getItem('tiabtc-theme-mode') ||
+      window.localStorage.getItem('bitlang-theme-mode');
+    return savedTheme === 'light' ? 'light' : 'dark';
+  } catch {
+    return 'dark';
+  }
+}
+
 export function AppShell() {
-  const [activeTab, setActiveTab] = useState<'learning' | 'review'>('learning');
-  const [, setSymbols] = useState<string[]>([]);
-  const [offlineMode] = useState<boolean>(false);
+  const [activeTab, setActiveTab] = useState<WorkspaceTab>(
+    initialWorkspaceTab
+  );
+  const [offlineMode, setOfflineMode] = useState<boolean>(false);
   const [loading, setLoading] = useState<boolean>(true);
   const [error, setError] = useState<string | null>(null);
+  const [themeMode, setThemeMode] = useState<ThemeMode>(initialThemeMode);
 
   const [videoReviewContext, setVideoReviewContext] = useState<VideoReviewContext | null>(null);
 
@@ -20,11 +50,11 @@ export function AppShell() {
     setLoading(true);
     setError(null);
     try {
-      const [syms] = await Promise.all([
+      const [, config] = await Promise.all([
         fetchSymbols(),
         fetchChartConfig(),
       ]);
-      setSymbols(syms);
+      setOfflineMode(config.offlineMode);
     } catch (err) {
       setError(err instanceof Error ? err.message : '与后端通讯失败');
     } finally {
@@ -34,6 +64,24 @@ export function AppShell() {
 
   useEffect(() => {
     checkConnection();
+  }, []);
+
+  useEffect(() => {
+    document.documentElement.dataset.theme = themeMode;
+    document.body.dataset.theme = themeMode;
+    try {
+      window.localStorage.setItem('tiabtc-theme-mode', themeMode);
+    } catch {
+      // The theme still applies when storage is unavailable.
+    }
+  }, [themeMode]);
+
+  const navigateToTab = useCallback((tab: WorkspaceTab) => {
+    setActiveTab(tab);
+    const url = new URL(window.location.href);
+    if (tab === 'learning') url.searchParams.delete('tab');
+    else url.searchParams.set('tab', tab);
+    window.history.replaceState(null, '', url);
   }, []);
 
   const handleOpenVideoReview = (video: VideoItem) => {
@@ -46,7 +94,7 @@ export function AppShell() {
       anchorTimeMs,
     };
     setVideoReviewContext(ctx);
-    setActiveTab('review');
+    navigateToTab('review');
   };
 
   return (
@@ -59,7 +107,7 @@ export function AppShell() {
           {/* Top Navigation Tabs */}
           <div style={{ display: 'flex', gap: '4px', marginLeft: '24px' }}>
             <button
-              onClick={() => setActiveTab('learning')}
+              onClick={() => navigateToTab('learning')}
               style={{
                 background: activeTab === 'learning' ? 'var(--accent-blue)' : 'var(--bg-dark-700)',
                 color: activeTab === 'learning' ? '#fff' : 'var(--text-secondary)',
@@ -79,7 +127,7 @@ export function AppShell() {
             </button>
 
             <button
-              onClick={() => setActiveTab('review')}
+              onClick={() => navigateToTab('review')}
               style={{
                 background: activeTab === 'review' ? 'var(--accent-blue)' : 'var(--bg-dark-700)',
                 color: activeTab === 'review' ? '#fff' : 'var(--text-secondary)',
@@ -97,10 +145,55 @@ export function AppShell() {
               <BarChart2 size={14} />
               <span>行情复盘</span>
             </button>
+
+            <button
+              onClick={() => navigateToTab('bitlang')}
+              style={{
+                background: activeTab === 'bitlang' ? 'var(--accent-blue)' : 'var(--bg-dark-700)',
+                color: activeTab === 'bitlang' ? '#fff' : 'var(--text-secondary)',
+                border: 'none',
+                borderRadius: 'var(--radius-sm)',
+                padding: '4px 12px',
+                fontSize: '12px',
+                fontWeight: 600,
+                cursor: 'pointer',
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: '6px',
+              }}
+            >
+              <ListChecks size={14} />
+              <span>bit浪浪实盘分析</span>
+            </button>
           </div>
         </div>
 
         <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+          <button
+            onClick={() =>
+              setThemeMode((current) =>
+                current === 'dark' ? 'light' : 'dark'
+              )
+            }
+            title={themeMode === 'dark' ? '切换到亮色主题' : '切换到暗色主题'}
+            aria-label={
+              themeMode === 'dark' ? '切换到亮色主题' : '切换到暗色主题'
+            }
+            style={{
+              width: '30px',
+              height: '30px',
+              background: 'var(--bg-dark-700)',
+              border: '1px solid var(--border-color)',
+              borderRadius: 'var(--radius-sm)',
+              color: 'var(--text-secondary)',
+              cursor: 'pointer',
+              display: 'inline-flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+            }}
+          >
+            {themeMode === 'dark' ? <Sun size={15} /> : <Moon size={15} />}
+          </button>
           <div className="app-status-badge">
             <span
               className={`app-status-dot ${
@@ -136,9 +229,18 @@ export function AppShell() {
 
       <main className="app-body">
         {activeTab === 'learning' ? (
-          <LearningWorkspace onOpenVideoReview={handleOpenVideoReview} />
+          <LearningWorkspace
+            onOpenVideoReview={handleOpenVideoReview}
+            onOpenReview={() => navigateToTab('review')}
+            onOpenBitlang={() => navigateToTab('bitlang')}
+          />
+        ) : activeTab === 'review' ? (
+          <ChartWorkspace
+            initialVideoContext={videoReviewContext}
+            themeMode={themeMode}
+          />
         ) : (
-          <ChartWorkspace initialVideoContext={videoReviewContext} />
+          <BitlangTradeWorkspace themeMode={themeMode} />
         )}
       </main>
     </div>

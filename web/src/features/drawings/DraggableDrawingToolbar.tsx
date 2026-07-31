@@ -1,4 +1,4 @@
-import React, { useRef, useState } from 'react';
+import React, { memo, useRef, useState } from 'react';
 import type { ActiveToolType } from './drawing-types';
 import type { PositionToolParams } from '@/features/paper-trading/paper-trade-types';
 import {
@@ -45,7 +45,7 @@ interface DraggableDrawingToolbarProps {
 
 const STORAGE_KEY = 'tiabtc-drawing-toolbar-pos-v2';
 
-export function DraggableDrawingToolbar({
+export const DraggableDrawingToolbar = memo(function DraggableDrawingToolbar({
   activeTool,
   magnetEnabled,
   selectedDrawingId,
@@ -114,6 +114,7 @@ export function DraggableDrawingToolbar({
   return (
     <div
       className="drawing-toolbar-floating"
+      data-dragging={isDragging ? 'true' : 'false'}
       style={{
         left: `${position.left}px`,
         top: `${position.top}px`,
@@ -158,6 +159,60 @@ export function DraggableDrawingToolbar({
           title="水平支撑/阻力线 (HorizontalLine)"
         >
           <Minus size={15} />
+        </button>
+
+        <button
+          type="button"
+          className={`toolbar-btn ${activeTool === 'HorizontalRay' ? 'active' : ''}`}
+          onClick={() => onSelectTool('HorizontalRay')}
+          title="水平射线 (HorizontalRay)"
+        >
+          <Minus size={15} />
+        </button>
+
+        <button
+          type="button"
+          className={`toolbar-btn ${activeTool === 'VerticalLine' ? 'active' : ''}`}
+          onClick={() => onSelectTool('VerticalLine')}
+          title="垂直线 (VerticalLine)"
+        >
+          <Slash size={15} />
+        </button>
+
+        <button
+          type="button"
+          className={`toolbar-btn ${activeTool === 'Ray' ? 'active' : ''}`}
+          onClick={() => onSelectTool('Ray')}
+          title="射线 (Ray)"
+        >
+          <Slash size={15} />
+        </button>
+
+        <button
+          type="button"
+          className={`toolbar-btn ${activeTool === 'ExtendedLine' ? 'active' : ''}`}
+          onClick={() => onSelectTool('ExtendedLine')}
+          title="延长线 (ExtendedLine)"
+        >
+          <Slash size={15} />
+        </button>
+
+        <button
+          type="button"
+          className={`toolbar-btn ${activeTool === 'Arrow' ? 'active' : ''}`}
+          onClick={() => onSelectTool('Arrow')}
+          title="箭头线 (Arrow)"
+        >
+          <ArrowUp size={15} />
+        </button>
+
+        <button
+          type="button"
+          className={`toolbar-btn ${activeTool === 'ParallelChannel' ? 'active' : ''}`}
+          onClick={() => onSelectTool('ParallelChannel')}
+          title="平行通道 (ParallelChannel)"
+        >
+          <GitCommit size={15} />
         </button>
 
         <button
@@ -245,6 +300,33 @@ export function DraggableDrawingToolbar({
           title="自由画笔 (Brush)"
         >
           <BrushIcon size={15} />
+        </button>
+
+        <button
+          type="button"
+          className={`toolbar-btn ${activeTool === 'path' ? 'active' : ''}`}
+          onClick={() => onSelectTool('path')}
+          title="路径 (Path)"
+        >
+          <Slash size={15} />
+        </button>
+
+        <button
+          type="button"
+          className={`toolbar-btn ${activeTool === 'fixed-range-volume-profile' ? 'active' : ''}`}
+          onClick={() => onSelectTool('fixed-range-volume-profile')}
+          title="固定区间成交量分布 (Fixed Range Volume Profile)"
+        >
+          <Ruler size={15} />
+        </button>
+
+        <button
+          type="button"
+          className={`toolbar-btn ${activeTool === 'rotated-rectangle' ? 'active' : ''}`}
+          onClick={() => onSelectTool('rotated-rectangle')}
+          title="旋转矩形 (Rotated Rectangle)"
+        >
+          <Square size={15} />
         </button>
 
         <span className="toolbar-divider" />
@@ -341,4 +423,4 @@ export function DraggableDrawingToolbar({
       </div>
     </div>
   );
-}
+});

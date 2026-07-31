@@ -7,7 +7,7 @@ interface Props {
   stateMap: Record<string, UserLearningState>;
   onToggleBookmark: (videoId: string) => void;
   onSetStatus: (videoId: string, status: LearningStatus) => void;
-  onSetNotes: (videoId: string, notes: string) => void;
+  onSetNote: (videoId: string, note: string) => void;
   onOpenVideoReview: (video: VideoItem) => void;
 }
 
@@ -16,7 +16,7 @@ export function VideoTable({
   stateMap,
   onToggleBookmark,
   onSetStatus,
-  onSetNotes,
+  onSetNote,
   onOpenVideoReview,
 }: Props) {
   const [expandedNotes, setExpandedNotes] = useState<Record<string, boolean>>({});
@@ -50,7 +50,7 @@ export function VideoTable({
           {videos.map((v) => {
             const st = stateMap[v.videoId] || { status: 'unlearned', updatedAt: '' };
             const isBookmarked = Boolean(st.bookmarked);
-            const notesText = st.notes || '';
+            const noteText = st.note || '';
             const isNotesExpanded = Boolean(expandedNotes[v.videoId]);
 
             const rowClass =
@@ -124,7 +124,7 @@ export function VideoTable({
                       style={{
                         background: 'none',
                         border: 'none',
-                        color: notesText ? 'var(--accent-blue)' : 'var(--text-muted)',
+                        color: noteText ? 'var(--accent-blue)' : 'var(--text-muted)',
                         fontSize: '12px',
                         cursor: 'pointer',
                         padding: 0,
@@ -134,13 +134,13 @@ export function VideoTable({
                       }}
                     >
                       <FileText size={12} />
-                      <span>{notesText ? '编辑笔记' : '+ 添加笔记'}</span>
+                      <span>{noteText ? '编辑笔记' : '+ 添加笔记'}</span>
                     </button>
 
-                    {(isNotesExpanded || notesText) && (
+                    {(isNotesExpanded || noteText) && (
                       <textarea
-                        value={notesText}
-                        onChange={(e) => onSetNotes(v.videoId, e.target.value)}
+                        value={noteText}
+                        onChange={(e) => onSetNote(v.videoId, e.target.value)}
                         placeholder="输入对此视频的学习笔记、要点总结..."
                         rows={2}
                         style={{

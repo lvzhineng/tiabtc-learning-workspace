@@ -41,22 +41,23 @@ export function parseVideoPublishedTimeMs(dateStr: string, timeStr?: string): nu
   return !Number.isNaN(defaultParsed) ? defaultParsed : Date.now();
 }
 
-export function formatChartTime(timestampMs: number, timeframe: ReviewTimeframe): string {
+export function formatChartTime(
+  timestampMs: number,
+  _timeframe: ReviewTimeframe
+): string {
   const date = new Date(timestampMs);
   const parts = shanghaiParts(date);
+  return `${parts.year}-${parts.month}-${parts.day} ${parts.hour}:${parts.minute} ${parts.weekday}`;
+}
 
-  if (timeframe === 'D') {
-    return `${parts.year}-${parts.month}-${parts.day}`;
+export function formatChartTickTime(
+  timestampMs: number,
+  timeframe: ReviewTimeframe
+): string {
+  const parts = shanghaiParts(new Date(timestampMs));
+  if (timeframe === 'D' || timeframe === 'W') {
+    return `${parts.year.slice(2)}-${parts.month}-${parts.day}`;
   }
-
-  if (timeframe === 'W') {
-    return `${parts.year}-${parts.month}-${parts.day} (周)`;
-  }
-
-  if (parts.hour === '00' && parts.minute === '00') {
-    return `${parts.month}-${parts.day}`;
-  }
-
   return `${parts.month}-${parts.day} ${parts.hour}:${parts.minute}`;
 }
 
@@ -64,7 +65,9 @@ export function timeframeMs(timeframe: ReviewTimeframe): number {
   return (TIMEFRAME_SECONDS_MAP[timeframe] || 300) * 1000;
 }
 
-function shanghaiParts(date: Date): Record<'year' | 'month' | 'day' | 'hour' | 'minute', string> {
+function shanghaiParts(
+  date: Date
+): Record<'year' | 'month' | 'day' | 'hour' | 'minute' | 'weekday', string> {
   const parts = new Intl.DateTimeFormat('zh-CN', {
     timeZone: 'Asia/Shanghai',
     year: 'numeric',
@@ -72,6 +75,7 @@ function shanghaiParts(date: Date): Record<'year' | 'month' | 'day' | 'hour' | '
     day: '2-digit',
     hour: '2-digit',
     minute: '2-digit',
+    weekday: 'short',
     hourCycle: 'h23',
   }).formatToParts(date);
 
@@ -82,5 +86,6 @@ function shanghaiParts(date: Date): Record<'year' | 'month' | 'day' | 'hour' | '
     day: get('day'),
     hour: get('hour'),
     minute: get('minute'),
+    weekday: get('weekday'),
   };
 }

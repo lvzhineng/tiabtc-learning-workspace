@@ -5,16 +5,38 @@ import { computeLearningStats, filterAndSortVideos } from './learning-filter';
 import { LearningStatsHeader } from './LearningStatsHeader';
 import { LearningFilterBar } from './LearningFilterBar';
 import { VideoTable } from './VideoTable';
-import { RefreshCw } from 'lucide-react';
+import { BarChart2, ListChecks, RefreshCw } from 'lucide-react';
 import '@/styles/learning.css';
 
 interface Props {
   onOpenVideoReview: (video: VideoItem) => void;
+  onOpenReview: () => void;
+  onOpenBitlang: () => void;
 }
 
 const PAGE_SIZE = 30;
+let videosRequest: Promise<VideoItem[]> | null = null;
 
-export function LearningWorkspace({ onOpenVideoReview }: Props) {
+function loadVideos(): Promise<VideoItem[]> {
+  if (!videosRequest) {
+    videosRequest = fetch('/videos.json')
+      .then((response) => {
+        if (!response.ok) throw new Error(`HTTP ${response.status}`);
+        return response.json() as Promise<VideoItem[]>;
+      })
+      .catch((error) => {
+        videosRequest = null;
+        throw error;
+      });
+  }
+  return videosRequest;
+}
+
+export function LearningWorkspace({
+  onOpenVideoReview,
+  onOpenReview,
+  onOpenBitlang,
+}: Props) {
   const [videos, setVideos] = useState<VideoItem[]>([]);
   const [loadingVideos, setLoadingVideos] = useState<boolean>(true);
 
@@ -23,7 +45,7 @@ export function LearningWorkspace({ onOpenVideoReview }: Props) {
     saveStatus,
     toggleBookmark,
     setStatus,
-    setNotes,
+    setNote,
   } = useLearningState();
 
   const [filters, setFilters] = useState<FilterParams>({
@@ -38,17 +60,22 @@ export function LearningWorkspace({ onOpenVideoReview }: Props) {
 
   // Fetch videos.json on mount
   useEffect(() => {
-    fetch('/videos.json')
-      .then((res) => res.json())
+    let active = true;
+    void loadVideos()
       .then((data: VideoItem[]) => {
+        if (!active) return;
         setVideos(data || []);
       })
       .catch((err) => {
+        if (!active) return;
         console.error('获取 videos.json 失败:', err);
       })
       .finally(() => {
-        setLoadingVideos(false);
+        if (active) setLoadingVideos(false);
       });
+    return () => {
+      active = false;
+    };
   }, []);
 
   // Compute available years list
@@ -92,27 +119,77 @@ export function LearningWorkspace({ onOpenVideoReview }: Props) {
       <section className="learning-hero">
         <div>
           <p className="learning-eyebrow">TIA BTC · SYSTEMATIC LEARNING</p>
-          <h1 className="learning-title">顺序学习工作台 (React V2)</h1>
+          <h1 className="learning-title">顺序学习工作台</h1>
           <p className="learning-subtitle">
-            从最早的视频开始按年月推进。书签、学习状态与笔记将实时持久化保存在 SQLite 本地数据库中。
+            从最早的视频开始按年月推进。书签、学习状态与笔记将实时持久化保存在本地学习状态文件中。
           </p>
         </div>
 
-        {saveStatus && (
-          <div
+        <div
+          style={{
+            display: 'flex',
+            alignItems: 'center',
+            gap: '10px',
+          }}
+        >
+          {saveStatus && (
+            <div
+              style={{
+                padding: '6px 12px',
+                borderRadius: 'var(--radius-sm)',
+                fontSize: '13px',
+                fontWeight: 600,
+                background: 'rgba(8, 153, 129, 0.15)',
+                color: 'var(--accent-green)',
+                border: '1px solid var(--accent-green)',
+              }}
+            >
+              {saveStatus}
+            </div>
+          )}
+          <button
+            type="button"
+            onClick={onOpenReview}
             style={{
-              padding: '6px 12px',
+              display: 'inline-flex',
+              alignItems: 'center',
+              gap: '6px',
+              padding: '8px 14px',
+              border: '1px solid var(--accent-blue)',
               borderRadius: 'var(--radius-sm)',
+              background: 'var(--accent-blue)',
+              color: '#fff',
               fontSize: '13px',
-              fontWeight: 600,
-              background: 'rgba(8, 153, 129, 0.15)',
-              color: 'var(--accent-green)',
-              border: '1px solid var(--accent-green)',
+              fontWeight: 700,
+              cursor: 'pointer',
+              whiteSpace: 'nowrap',
             }}
           >
-            {saveStatus}
-          </div>
-        )}
+            <BarChart2 size={15} />
+            行情复盘
+          </button>
+          <button
+            type="button"
+            onClick={onOpenBitlang}
+            style={{
+              display: 'inline-flex',
+              alignItems: 'center',
+              gap: '6px',
+              padding: '8px 14px',
+              border: '1px solid var(--accent-blue)',
+              borderRadius: 'var(--radius-sm)',
+              background: 'var(--bg-dark-700)',
+              color: 'var(--text-primary)',
+              fontSize: '13px',
+              fontWeight: 700,
+              cursor: 'pointer',
+              whiteSpace: 'nowrap',
+            }}
+          >
+            <ListChecks size={15} color="var(--accent-blue)" />
+            bit浪浪实盘分析
+          </button>
+        </div>
       </section>
 
       {/* Stats Header Cards */}
@@ -154,7 +231,7 @@ export function LearningWorkspace({ onOpenVideoReview }: Props) {
             stateMap={stateMap}
             onToggleBookmark={toggleBookmark}
             onSetStatus={setStatus}
-            onSetNotes={setNotes}
+            onSetNote={setNote}
             onOpenVideoReview={onOpenVideoReview}
           />
 

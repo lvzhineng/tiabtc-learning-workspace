@@ -11,8 +11,8 @@ export type LearningStatus = 'unlearned' | 'learning' | 'learned';
 
 export type UserLearningState = {
   status: LearningStatus;
-  updatedAt: string;
-  notes?: string;
+  updatedAt?: string;
+  note?: string;
   bookmarked?: boolean;
 };
 

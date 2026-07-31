@@ -1,73 +1,101 @@
 import type { PersistedDrawing } from '@/domain/drawing';
 import type { DrawingToolState, DrawingPoint } from './drawing-types';
 
-export function deserializeDrawing(persisted: PersistedDrawing): DrawingToolState {
-  const toolObj = typeof persisted.tool === 'object' && persisted.tool !== null ? (persisted.tool as Record<string, unknown>) : {};
+const SERVER_TOOL_TYPES: Record<string, string> = {
+  'short-position': 'ShortPosition',
+  'long-position': 'LongPosition',
+  'date-price-range': 'DatePriceRange',
+  path: 'Path',
+  'text-annotation': 'TextAnnotation',
+  'fixed-range-volume-profile': 'FixedRangeVolumeProfile',
+  'arrow-mark-up': 'ArrowMarkUp',
+  'arrow-mark-down': 'ArrowMarkDown',
+  brush: 'Brush',
+  'rotated-rectangle': 'RotatedRectangle',
+};
 
-  const points: DrawingPoint[] = [];
+const UI_TOOL_TYPES = Object.fromEntries(
+  Object.entries(SERVER_TOOL_TYPES).map(([uiType, serverType]) => [
+    serverType,
+    uiType,
+  ])
+);
 
-  // Parse points if in legacy "points" array format
-  if (Array.isArray(toolObj.points)) {
-    for (const pt of toolObj.points) {
-      if (typeof pt === 'object' && pt !== null) {
-        const rawTs = (pt as { timestamp?: number; time?: number }).timestamp ?? (pt as { time?: number }).time ?? 0;
-        const tsMs = rawTs < 10000000000 ? rawTs * 1000 : rawTs;
-        const price = Number((pt as { price?: number }).price) || 0;
-        points.push({ timestampMs: tsMs, price });
-      }
-    }
-  }
+export function toServerToolType(toolType: string): string {
+  return SERVER_TOOL_TYPES[toolType] || toolType;
+}
 
-  // Parse points if in enhanced "anchors" array format
-  if (points.length === 0 && Array.isArray(toolObj.anchors)) {
-    for (const pt of toolObj.anchors) {
-      if (typeof pt === 'object' && pt !== null) {
-        const rawTs = (pt as { time?: number; timestamp?: number }).time ?? (pt as { timestamp?: number }).timestamp ?? 0;
-        const tsMs = rawTs < 10000000000 ? rawTs * 1000 : rawTs;
-        const price = Number((pt as { price?: number }).price) || 0;
-        points.push({ timestampMs: tsMs, price });
-      }
-    }
-  }
+export function toUiToolType(toolType: string): string {
+  return UI_TOOL_TYPES[toolType] || toolType;
+}
 
-  const toolType = (toolObj.toolType as string) || (toolObj.type as string) || persisted.toolType;
+export function deserializeDrawing(
+  persisted: PersistedDrawing
+): DrawingToolState {
+  const lineOptions =
+    typeof persisted.options.line === 'object' &&
+    persisted.options.line !== null
+      ? (persisted.options.line as Record<string, unknown>)
+      : {};
+  const points: DrawingPoint[] = (persisted.points || []).map((point) => {
+    const rawTimestamp = Number(point.timestamp);
+    return {
+      timestampMs:
+        rawTimestamp < 10_000_000_000
+          ? rawTimestamp * 1000
+          : rawTimestamp,
+      price: Number(point.price),
+    };
+  });
 
   return {
     id: persisted.id,
     videoId: persisted.videoId,
     symbol: persisted.symbol,
     interval: persisted.interval,
-    toolType,
+    toolType: toUiToolType(persisted.toolType),
     points,
-    text: (toolObj.text as string) || '',
-    locked: Boolean(toolObj.locked || toolObj.isLocked),
-    color: (toolObj.color as string) || '#2962ff',
-    lineWidth: Number(toolObj.lineWidth || toolObj.width) || 2,
-    extra: toolObj,
+    text: String(persisted.options.text || ''),
+    locked: Boolean(
+      persisted.options.locked || persisted.options.editable === false
+    ),
+    color: String(
+      persisted.options.color || lineOptions.color || '#2962ff'
+    ),
+    lineWidth:
+      Number(persisted.options.lineWidth || lineOptions.width) || 2,
+    extra: persisted.options,
   };
 }
 
-export function serializeDrawing(state: DrawingToolState): PersistedDrawing {
-  const toolPayload = {
-    id: state.id,
-    toolType: state.toolType,
-    points: state.points.map((pt) => ({
-      timestamp: pt.timestampMs,
-      price: pt.price,
-    })),
-    text: state.text,
-    locked: Boolean(state.locked),
-    color: state.color || '#2962ff',
-    lineWidth: state.lineWidth || 2,
-    ...state.extra,
-  };
+export function serializeDrawing(
+  state: DrawingToolState
+): PersistedDrawing {
+  const {
+    text: _oldText,
+    locked: _oldLocked,
+    color: _oldColor,
+    lineWidth: _oldLineWidth,
+    ...extraOptions
+  } = state.extra || {};
 
   return {
     id: state.id,
     videoId: state.videoId,
     symbol: state.symbol,
-    interval: state.interval as any,
-    toolType: state.toolType,
-    tool: toolPayload,
+    interval: state.interval,
+    toolType: toServerToolType(state.toolType),
+    points: state.points.map((point) => ({
+      timestamp: point.timestampMs,
+      price: point.price,
+    })),
+    options: {
+      ...extraOptions,
+      text: state.text || '',
+      locked: Boolean(state.locked),
+      editable: !state.locked,
+      color: state.color || '#2962ff',
+      lineWidth: state.lineWidth || 2,
+    },
   };
 }

@@ -156,6 +156,7 @@ export function FreeReplayPanel({
                 <input
                   type="datetime-local"
                   value={startTimeInput}
+                  max={formatDateTimeLocalInput(Date.now())}
                   onChange={(e) => setStartTimeInput(e.target.value)}
                   style={{
                     width: '100%',
@@ -187,6 +188,10 @@ export function FreeReplayPanel({
                 <button
                   onClick={() => {
                     const parsedMs = parseDateTimeInput(startTimeInput);
+                    if (parsedMs > Date.now()) {
+                      alert('回放起点不能晚于当前时间');
+                      return;
+                    }
                     onStartReplay(activeSymbol, parsedMs);
                     setShowModal(false);
                   }}

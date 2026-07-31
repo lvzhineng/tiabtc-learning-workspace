@@ -4,6 +4,10 @@ import type {
   TradeType,
 } from './paper-trade-types';
 import type { Candlestick } from '@/domain/candle';
+import {
+  TIMEFRAME_SECONDS_MAP,
+  type ReviewTimeframe,
+} from '@/domain/timeframe';
 
 export function calculateRR(type: TradeType, entry: number, tp: number, sl: number): number {
   if (type === 'LONG') {
@@ -53,48 +57,62 @@ export function computePaperTradeStats(trades: PaperTradeItem[]): PaperTradeStat
 
 export function checkTradeTrigger(
   trade: PaperTradeItem,
-  candle: Candlestick
+  candle: Candlestick,
+  timeframe: ReviewTimeframe
 ): PaperTradeItem | null {
   if (trade.status !== 'OPEN') return null;
 
   const rrRatio = calculateRR(trade.direction, trade.entryPrice, trade.takeProfitPrice, trade.stopLossPrice);
+  const candleCompletionTimeMs =
+    candle.timestampMs + TIMEFRAME_SECONDS_MAP[timeframe] * 1000;
+  const tradeCreatedTimeMs = Date.parse(trade.createdAt);
+  if (
+    Number.isFinite(tradeCreatedTimeMs) &&
+    candleCompletionTimeMs <= tradeCreatedTimeMs
+  ) {
+    return null;
+  }
 
   if (trade.direction === 'LONG') {
-    // Take Profit Trigger
-    if (candle.high >= trade.takeProfitPrice) {
-      return {
-        ...trade,
-        status: 'WIN',
-        pnlR: rrRatio,
-        closedAt: new Date(candle.timestampMs).toISOString(),
-      };
-    }
-    // Stop Loss Trigger
-    if (candle.low <= trade.stopLossPrice) {
+    const hitTakeProfit = candle.high >= trade.takeProfitPrice;
+    const hitStopLoss = candle.low <= trade.stopLossPrice;
+
+    // OHLC cannot reveal intrabar order. Use the conservative outcome when
+    // both boundaries are touched by the same candle.
+    if (hitStopLoss) {
       return {
         ...trade,
         status: 'LOSS',
         pnlR: -1.0,
-        closedAt: new Date(candle.timestampMs).toISOString(),
+        closedAt: new Date(candleCompletionTimeMs).toISOString(),
+      };
+    }
+    if (hitTakeProfit) {
+      return {
+        ...trade,
+        status: 'WIN',
+        pnlR: rrRatio,
+        closedAt: new Date(candleCompletionTimeMs).toISOString(),
       };
     }
   } else {
-    // Short Take Profit Trigger
-    if (candle.low <= trade.takeProfitPrice) {
-      return {
-        ...trade,
-        status: 'WIN',
-        pnlR: rrRatio,
-        closedAt: new Date(candle.timestampMs).toISOString(),
-      };
-    }
-    // Short Stop Loss Trigger
-    if (candle.high >= trade.stopLossPrice) {
+    const hitTakeProfit = candle.low <= trade.takeProfitPrice;
+    const hitStopLoss = candle.high >= trade.stopLossPrice;
+
+    if (hitStopLoss) {
       return {
         ...trade,
         status: 'LOSS',
         pnlR: -1.0,
-        closedAt: new Date(candle.timestampMs).toISOString(),
+        closedAt: new Date(candleCompletionTimeMs).toISOString(),
+      };
+    }
+    if (hitTakeProfit) {
+      return {
+        ...trade,
+        status: 'WIN',
+        pnlR: rrRatio,
+        closedAt: new Date(candleCompletionTimeMs).toISOString(),
       };
     }
   }

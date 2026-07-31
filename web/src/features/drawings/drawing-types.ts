@@ -1,3 +1,5 @@
+import type { ReviewTimeframe } from '@/domain/timeframe';
+
 export type LegacyToolType =
   | 'TrendLine'
   | 'HorizontalLine'
@@ -33,7 +35,7 @@ export type DrawingToolState = {
   id: string;
   videoId: string;
   symbol: string;
-  interval: string;
+  interval: ReviewTimeframe;
   toolType: string;
   points: DrawingPoint[];
   text?: string;
