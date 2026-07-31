@@ -1,0 +1,221 @@
+.learning-container {
+  max-width: 1360px;
+  width: 100%;
+  margin: 0 auto;
+  padding: 24px 20px 48px;
+  overflow-y: auto;
+  height: 100%;
+}
+
+.learning-hero {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 24px;
+  margin-bottom: 24px;
+}
+
+.learning-eyebrow {
+  margin: 0 0 6px;
+  color: var(--accent-blue);
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  font-size: 13px;
+  text-transform: uppercase;
+}
+
+.learning-title {
+  margin: 0;
+  font-size: clamp(24px, 3vw, 32px);
+  letter-spacing: -0.02em;
+  font-weight: 800;
+  color: var(--text-primary);
+}
+
+.learning-subtitle {
+  margin: 8px 0 0;
+  color: var(--text-secondary);
+  line-height: 1.6;
+  font-size: 14px;
+}
+
+.learning-stats-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(120px, 1fr)) 2fr;
+  gap: 14px;
+  margin-bottom: 20px;
+}
+
+.learning-metric-card, .learning-progress-card {
+  background-color: var(--bg-dark-800);
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-md);
+  padding: 16px 18px;
+  box-shadow: var(--shadow-main);
+  transition: all 0.2s ease;
+}
+
+.learning-metric-card:hover {
+  border-color: var(--border-active);
+  transform: translateY(-2px);
+}
+
+.learning-metric-label {
+  color: var(--text-secondary);
+  font-size: 13px;
+  font-weight: 500;
+}
+
+.learning-metric-value {
+  display: block;
+  margin-top: 6px;
+  font-size: 26px;
+  font-weight: 800;
+  color: var(--text-primary);
+  font-family: var(--font-mono);
+}
+
+.learning-progress-head {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 10px;
+  align-items: baseline;
+}
+
+.learning-progress-track {
+  height: 10px;
+  background-color: var(--bg-dark-700);
+  border-radius: 999px;
+  overflow: hidden;
+  border: 1px solid var(--border-color);
+}
+
+.learning-progress-fill {
+  height: 100%;
+  border-radius: inherit;
+  background: linear-gradient(90deg, var(--accent-blue), var(--accent-green));
+  transition: width 0.3s ease;
+}
+
+.learning-filters-card {
+  background-color: var(--bg-dark-800);
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-md);
+  padding: 16px;
+  margin-bottom: 16px;
+}
+
+.learning-filter-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.learning-filter-row + .learning-filter-row {
+  margin-top: 12px;
+}
+
+.learning-chip {
+  border-radius: 999px;
+  padding: 6px 14px;
+  font-size: 13px;
+  font-weight: 500;
+  background: var(--bg-dark-700);
+  border: 1px solid var(--border-color);
+  color: var(--text-secondary);
+  cursor: pointer;
+  transition: all 0.16s ease;
+}
+
+.learning-chip:hover {
+  border-color: var(--accent-blue);
+  color: var(--text-primary);
+}
+
+.learning-chip.active {
+  background: var(--accent-blue);
+  color: #ffffff;
+  border-color: var(--accent-blue);
+  font-weight: 700;
+}
+
+.learning-table-wrap {
+  background: var(--bg-dark-800);
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-main);
+  overflow-x: auto;
+}
+
+.learning-table {
+  width: 100%;
+  border-collapse: collapse;
+  min-width: 1000px;
+}
+
+.learning-table th, .learning-table td {
+  padding: 12px 14px;
+  border-bottom: 1px solid var(--border-color);
+  text-align: left;
+  vertical-align: top;
+}
+
+.learning-table th {
+  background: var(--bg-dark-700);
+  color: var(--text-secondary);
+  font-size: 12px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  position: sticky;
+  top: 0;
+  z-index: 2;
+}
+
+.learning-table tr:hover {
+  background-color: var(--bg-dark-700);
+}
+
+.learning-table tr.status-learned {
+  background-image: linear-gradient(90deg, rgba(8, 153, 129, 0.08), transparent 40%);
+}
+
+.learning-table tr.status-learning {
+  background-image: linear-gradient(90deg, rgba(41, 98, 255, 0.08), transparent 40%);
+}
+
+.bookmark-star {
+  background: none;
+  border: none;
+  cursor: pointer;
+  font-size: 18px;
+  color: var(--text-muted);
+  transition: color 0.15s ease;
+}
+
+.bookmark-star.active {
+  color: var(--accent-orange);
+}
+
+.status-badge-select {
+  background: var(--bg-dark-700);
+  color: var(--text-primary);
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-sm);
+  padding: 4px 8px;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.learning-pagination {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-top: 20px;
+  color: var(--text-secondary);
+}

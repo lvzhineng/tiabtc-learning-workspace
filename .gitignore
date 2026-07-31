@@ -4,3 +4,6 @@ learning-state.json.tmp
 tiabtc-review.sqlite*
 data/*.sqlite-wal
 data/*.sqlite-shm
+web/node_modules/
+web/dist/
+.run/

@@ -9,11 +9,11 @@ import time
 from contextlib import contextmanager
 from datetime import datetime
 from http import HTTPStatus
-from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from urllib.error import HTTPError, URLError
-from urllib.parse import parse_qs, unquote, urlencode, urlparse
-from urllib.request import Request, urlopen
+from urllib.parse import parse_qs, unquote, urlparse
+
+from market_data_provider import CcxtBybitMarketDataProvider
 
 
 ROOT = Path(__file__).resolve().parent
@@ -25,7 +25,7 @@ HOST = "127.0.0.1"
 PORT = 8765
 VALID_STATUSES = {"unlearned", "learning", "learned"}
 VALID_SYMBOLS = {"BTCUSDT", "ETHUSDT", "SOLUSDT", "BNBUSDT", "DOGEUSDT", "XRPUSDT"}
-VALID_INTERVALS = {"5", "15", "60", "240", "D", "W"}
+VALID_INTERVALS = {"1", "5", "15", "60", "240", "D", "W"}
 VALID_DRAWING_TYPES = {
     "TrendLine", "HorizontalLine", "HorizontalRay", "VerticalLine", "FibRetracement", "Ray",
     "ExtendedLine", "Arrow", "Rectangle", "ParallelChannel", "ShortPosition", "LongPosition",
@@ -44,6 +44,7 @@ SYSTEM_DRAWING_PREFIX = "__system__:"
 GLOBAL_DRAWING_SCOPE = "__global__"
 MAX_DRAWING_JSON_BYTES = 200_000
 INTERVAL_MILLISECONDS = {
+    "1": 60_000,
     "5": 5 * 60_000,
     "15": 15 * 60_000,
     "60": 60 * 60_000,
@@ -51,12 +52,12 @@ INTERVAL_MILLISECONDS = {
     "D": 24 * 60 * 60_000,
     "W": 7 * 24 * 60 * 60_000,
 }
-INITIAL_FUTURE_BARS = 1000
 FETCH_FAILURE_COOLDOWN_SECONDS = 60
 DATABASE_LOCK = threading.RLock()
 MARKET_FETCH_LOCKS_GUARD = threading.Lock()
 MARKET_FETCH_LOCKS = {}
 MARKET_FETCH_FAILURES = {}
+MARKET_DATA_PROVIDER = CcxtBybitMarketDataProvider()
 MARKET_REFRESHING = set()
 
 
@@ -149,7 +150,6 @@ def initialize_database():
                 created_at TEXT NOT NULL,
                 closed_at TEXT
             );
-            INSERT OR IGNORE INTO app_settings (key, value) VALUES ('future_days', '3');
             INSERT OR IGNORE INTO app_settings (key, value) VALUES ('offline_mode', 'true');
             """
         )
@@ -161,28 +161,16 @@ def initialize_database():
             "tool_json", "created_at", "updated_at",
         }
         if drawing_columns != expected_columns:
-            connection.executescript(
-                """
-                DROP TABLE chart_drawings;
-                CREATE TABLE chart_drawings (
-                    id TEXT PRIMARY KEY,
-                    video_id TEXT NOT NULL,
-                    symbol TEXT NOT NULL,
-                    interval TEXT NOT NULL,
-                    tool_type TEXT NOT NULL,
-                    tool_json TEXT NOT NULL,
-                    created_at TEXT NOT NULL,
-                    updated_at TEXT NOT NULL
-                );
-                """
+            raise RuntimeError(
+                "chart_drawings 表结构与当前版本不兼容。为避免丢失画图数据，"
+                "服务不会自动删表；请先备份数据库并执行显式迁移。"
             )
         connection.execute(
             "UPDATE chart_drawings SET video_id = ? WHERE video_id <> ?",
             (GLOBAL_DRAWING_SCOPE, GLOBAL_DRAWING_SCOPE),
         )
-        connection.execute("DROP INDEX IF EXISTS idx_chart_drawings_scope")
         connection.execute(
-            "CREATE INDEX idx_chart_drawings_scope ON chart_drawings (symbol)"
+            "CREATE INDEX IF NOT EXISTS idx_chart_drawings_scope ON chart_drawings (symbol)"
         )
 
 
@@ -219,7 +207,7 @@ def validate_market_scope(symbol, interval):
         raise ValueError("不支持该 K 线周期")
 
 
-def cached_range_contains(symbol, interval, start_timestamp, end_timestamp):
+def missing_cached_ranges(symbol, interval, start_timestamp, end_timestamp):
     with DATABASE_LOCK, database() as connection:
         rows = connection.execute(
             """SELECT start_timestamp, end_timestamp FROM market_cache_ranges
@@ -228,69 +216,58 @@ def cached_range_contains(symbol, interval, start_timestamp, end_timestamp):
                ORDER BY start_timestamp ASC""",
             (symbol, interval, start_timestamp, end_timestamp),
         ).fetchall()
-    covered_until = start_timestamp - 1
+
+    missing = []
+    cursor = start_timestamp
     for row in rows:
-        range_start = int(row["start_timestamp"])
-        range_end = int(row["end_timestamp"])
-        if range_start > covered_until + 1:
-            return False
-        covered_until = max(covered_until, range_end)
-        if covered_until >= end_timestamp:
-            return True
-    return False
+        range_start = max(start_timestamp, int(row["start_timestamp"]))
+        range_end = min(end_timestamp, int(row["end_timestamp"]))
+        if range_end < cursor:
+            continue
+        if range_start > cursor:
+            missing.append((cursor, range_start - 1))
+        cursor = max(cursor, range_end + 1)
+        if cursor > end_timestamp:
+            break
+    if cursor <= end_timestamp:
+        missing.append((cursor, end_timestamp))
+    return missing
 
 
-def fetch_bybit_candles(symbol, interval, start_timestamp, end_timestamp):
-    candles = []
-    cursor_end = end_timestamp
-    while cursor_end >= start_timestamp:
-        query = urlencode(
-            {
-                "category": "linear",
-                "symbol": symbol,
-                "interval": interval,
-                "start": start_timestamp,
-                "end": cursor_end,
-                "limit": 1000,
-            }
-        )
-        request = Request(
-            f"https://api.bybit.com/v5/market/kline?{query}",
-            headers={"Accept": "application/json", "User-Agent": "TiaBTC-Learning-Workspace/1.0"},
-        )
-        try:
-            with urlopen(request, timeout=8) as response:
-                payload = json.loads(response.read().decode("utf-8"))
-        except (HTTPError, URLError, TimeoutError) as error:
-            raise RuntimeError(f"Bybit K 线请求失败：{error}") from error
-        if payload.get("retCode") != 0:
-            raise RuntimeError(payload.get("retMsg") or "Bybit K 线请求失败")
-        rows = payload.get("result", {}).get("list", [])
-        if not rows:
-            break
-        page = [
-            (
-                symbol,
-                interval,
-                int(row[0]),
-                float(row[1]),
-                float(row[2]),
-                float(row[3]),
-                float(row[4]),
-                float(row[5]),
-            )
-            for row in rows
-            if len(row) >= 6 and start_timestamp <= int(row[0]) <= end_timestamp
-        ]
-        candles.extend(page)
-        earliest = min(int(row[0]) for row in rows)
-        if len(rows) < 1000 or earliest <= start_timestamp:
-            break
-        cursor_end = earliest - 1
-    return candles
+def cached_range_contains(symbol, interval, start_timestamp, end_timestamp):
+    return not missing_cached_ranges(
+        symbol,
+        interval,
+        start_timestamp,
+        end_timestamp,
+    )
+
+
+def fetch_market_candles(symbol, interval, start_timestamp, end_timestamp):
+    interval_milliseconds = INTERVAL_MILLISECONDS.get(interval)
+    if interval_milliseconds is None:
+        raise ValueError("不支持该 K 线周期")
+    return MARKET_DATA_PROVIDER.fetch_candles(
+        symbol,
+        interval,
+        interval_milliseconds,
+        start_timestamp,
+        end_timestamp,
+    )
+
+
+def market_range_chunks(interval, start_timestamp, end_timestamp, limit=1000):
+    interval_milliseconds = INTERVAL_MILLISECONDS[interval]
+    cursor = start_timestamp
+    chunk_span = interval_milliseconds * limit
+    while cursor <= end_timestamp:
+        chunk_end = min(end_timestamp, cursor + chunk_span - 1)
+        yield cursor, chunk_end
+        cursor = chunk_end + 1
 
 
 def save_candles(symbol, interval, start_timestamp, end_timestamp, candles):
+    fetched_at = datetime.now().astimezone().isoformat()
     with DATABASE_LOCK, database() as connection:
         connection.executemany(
             """INSERT INTO market_candles
@@ -301,11 +278,49 @@ def save_candles(symbol, interval, start_timestamp, end_timestamp, candles):
                  close = excluded.close, volume = excluded.volume""",
             candles,
         )
+        merged_start = start_timestamp
+        merged_end = end_timestamp
+        while True:
+            overlapping_ranges = connection.execute(
+                """SELECT start_timestamp, end_timestamp
+                   FROM market_cache_ranges
+                   WHERE symbol = ? AND interval = ?
+                     AND end_timestamp >= ? AND start_timestamp <= ?""",
+                (
+                    symbol,
+                    interval,
+                    merged_start - 1,
+                    merged_end + 1,
+                ),
+            ).fetchall()
+            expanded_start = min(
+                [merged_start]
+                + [int(row["start_timestamp"]) for row in overlapping_ranges]
+            )
+            expanded_end = max(
+                [merged_end]
+                + [int(row["end_timestamp"]) for row in overlapping_ranges]
+            )
+            if expanded_start == merged_start and expanded_end == merged_end:
+                break
+            merged_start = expanded_start
+            merged_end = expanded_end
         connection.execute(
-            """INSERT OR REPLACE INTO market_cache_ranges
+            """DELETE FROM market_cache_ranges
+               WHERE symbol = ? AND interval = ?
+                 AND end_timestamp >= ? AND start_timestamp <= ?""",
+            (
+                symbol,
+                interval,
+                merged_start - 1,
+                merged_end + 1,
+            ),
+        )
+        connection.execute(
+            """INSERT INTO market_cache_ranges
                (symbol, interval, start_timestamp, end_timestamp, fetched_at)
                VALUES (?, ?, ?, ?, ?)""",
-            (symbol, interval, start_timestamp, end_timestamp, datetime.now().astimezone().isoformat()),
+            (symbol, interval, merged_start, merged_end, fetched_at),
         )
 
 
@@ -327,6 +342,14 @@ def market_fetch_lock(symbol, interval):
         return MARKET_FETCH_LOCKS.setdefault(key, threading.Lock())
 
 
+def warm_up_market_provider():
+    try:
+        MARKET_DATA_PROVIDER.warm_up()
+        print("[market] CCXT Bybit 市场信息预热完成", flush=True)
+    except RuntimeError as error:
+        print(f"[market] {error}", flush=True)
+
+
 def schedule_candle_refresh(symbol, interval, start_timestamp, end_timestamp):
     fetch_key = (symbol, interval)
     with MARKET_FETCH_LOCKS_GUARD:
@@ -343,8 +366,30 @@ def schedule_candle_refresh(symbol, interval, start_timestamp, end_timestamp):
                 if failed_message and time.monotonic() - failed_at < FETCH_FAILURE_COOLDOWN_SECONDS:
                     return
                 try:
-                    fetched = fetch_bybit_candles(symbol, interval, start_timestamp, end_timestamp)
-                    save_candles(symbol, interval, start_timestamp, end_timestamp, fetched)
+                    for missing_start, missing_end in missing_cached_ranges(
+                        symbol,
+                        interval,
+                        start_timestamp,
+                        end_timestamp,
+                    ):
+                        for chunk_start, chunk_end in market_range_chunks(
+                            interval,
+                            missing_start,
+                            missing_end,
+                        ):
+                            fetched = fetch_market_candles(
+                                symbol,
+                                interval,
+                                chunk_start,
+                                chunk_end,
+                            )
+                            save_candles(
+                                symbol,
+                                interval,
+                                chunk_start,
+                                chunk_end,
+                                fetched,
+                            )
                     MARKET_FETCH_FAILURES.pop(fetch_key, None)
                 except RuntimeError as error:
                     MARKET_FETCH_FAILURES[fetch_key] = (time.monotonic(), str(error))
@@ -371,22 +416,66 @@ def load_candle_range(symbol, interval, start_timestamp, end_timestamp, offline=
     if not covered and not offline:
         fetch_key = (symbol, interval)
         with market_fetch_lock(symbol, interval):
-            covered = cached_range_contains(symbol, interval, start_timestamp, end_timestamp)
-            if not covered:
+            missing_ranges = missing_cached_ranges(
+                symbol,
+                interval,
+                start_timestamp,
+                end_timestamp,
+            )
+            if missing_ranges:
                 failed_at, failed_message = MARKET_FETCH_FAILURES.get(fetch_key, (0, ""))
                 cooldown_remaining = FETCH_FAILURE_COOLDOWN_SECONDS - (time.monotonic() - failed_at)
                 if failed_message and cooldown_remaining > 0:
                     warning = f"{failed_message}（稍后再试，避免重复等待）"
                 else:
+                    fetch_started = time.perf_counter()
+                    fetched_count = 0
+                    chunk_count = 0
                     try:
-                        fetched = fetch_bybit_candles(symbol, interval, start_timestamp, end_timestamp)
-                        save_candles(symbol, interval, start_timestamp, end_timestamp, fetched)
+                        for missing_start, missing_end in missing_ranges:
+                            for chunk_start, chunk_end in market_range_chunks(
+                                interval,
+                                missing_start,
+                                missing_end,
+                            ):
+                                fetched = fetch_market_candles(
+                                    symbol,
+                                    interval,
+                                    chunk_start,
+                                    chunk_end,
+                                )
+                                save_candles(
+                                    symbol,
+                                    interval,
+                                    chunk_start,
+                                    chunk_end,
+                                    fetched,
+                                )
+                                fetched_count += len(fetched)
+                                chunk_count += 1
                         MARKET_FETCH_FAILURES.pop(fetch_key, None)
                         source = "bybit"
                     except RuntimeError as error:
                         warning = str(error)
                         MARKET_FETCH_FAILURES[fetch_key] = (time.monotonic(), warning)
-        candles = list_candles(symbol, interval, start_timestamp, end_timestamp)
+                    finally:
+                        elapsed_milliseconds = round(
+                            (time.perf_counter() - fetch_started) * 1000,
+                            1,
+                        )
+                        print(
+                            f"[market] {symbol} {interval} "
+                            f"missing={len(missing_ranges)} chunks={chunk_count} "
+                            f"candles={fetched_count} elapsed={elapsed_milliseconds}ms",
+                            flush=True,
+                        )
+            covered = not missing_cached_ranges(
+                symbol,
+                interval,
+                start_timestamp,
+                end_timestamp,
+            )
+    candles = list_candles(symbol, interval, start_timestamp, end_timestamp)
     if offline and not covered:
         warning = "仅本地模式：该时间范围的缓存不完整"
     if not candles and warning:
@@ -422,6 +511,45 @@ def load_chart_candles(symbol, interval, anchor_timestamp):
         "hasMoreLater": loaded_cutoff < effective_cutoff,
         "source": source,
         "warning": warning,
+    }
+
+
+def load_bitlang_trade_candles(symbol, interval, entry_timestamp, exit_timestamp):
+    if not isinstance(symbol, str) or not re.match(r"^[A-Z0-9]{3,15}USDT$", symbol):
+        raise ValueError("交割单交易对无法映射为 Bybit USDT 永续合约")
+    if interval not in VALID_INTERVALS:
+        raise ValueError("不支持该 K 线周期")
+    now_timestamp = int(time.time() * 1000)
+    if (
+        entry_timestamp < 1_230_768_000_000
+        or exit_timestamp < entry_timestamp
+        or exit_timestamp > now_timestamp
+    ):
+        raise ValueError("交割单开平仓时间无效")
+
+    interval_milliseconds = INTERVAL_MILLISECONDS[interval]
+    holding_bars = max(
+        1,
+        math.ceil((exit_timestamp - entry_timestamp) / interval_milliseconds),
+    )
+    padding_bars = 200 if holding_bars < 400 else 50
+    start_timestamp = entry_timestamp - interval_milliseconds * padding_bars
+    end_timestamp = min(
+        now_timestamp,
+        exit_timestamp + interval_milliseconds * padding_bars,
+    )
+    candles, source, warning = load_candle_range(
+        symbol,
+        interval,
+        start_timestamp,
+        end_timestamp,
+    )
+    return {
+        "candles": candles,
+        "source": source,
+        "warning": warning,
+        "entry": entry_timestamp,
+        "exit": exit_timestamp,
     }
 
 
@@ -665,7 +793,7 @@ def add_custom_symbol(symbol_str):
     now_ts = int(time.time() * 1000)
     start_ts = now_ts - 86_400_000 * 2
     try:
-        candles = fetch_bybit_candles(symbol, "60", start_ts, now_ts)
+        candles = fetch_market_candles(symbol, "60", start_ts, now_ts)
     except Exception as err:
         raise ValueError(f"校验该合约失败：{err}")
     if not candles:
@@ -763,13 +891,12 @@ def save_paper_trade(payload):
 
 
 def delete_paper_trades(trade_id=None):
+    if not trade_id:
+        raise ValueError("删除模拟订单时必须提供订单 ID")
     if trade_id and not re.match(r"^[A-Za-z0-9_-]{1,100}$", trade_id):
         raise ValueError("模拟订单 ID 无效")
     with DATABASE_LOCK, database() as connection:
-        if trade_id:
-            connection.execute("DELETE FROM paper_trades WHERE id = ?", (trade_id,))
-        else:
-            connection.execute("DELETE FROM paper_trades")
+        connection.execute("DELETE FROM paper_trades WHERE id = ?", (trade_id,))
     return True
 
 def delete_drawings(query):
@@ -793,15 +920,34 @@ def delete_drawings(query):
         )
 
 
-class StudyHandler(SimpleHTTPRequestHandler):
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, directory=ROOT, **kwargs)
-
+class StudyHandler(BaseHTTPRequestHandler):
     def do_GET(self):
         parsed = urlparse(self.path)
         query = parse_qs(parsed.query)
         if parsed.path == "/":
-            self.path = "/TiaBTC_学习视频清单.html"
+            self.send_response(HTTPStatus.TEMPORARY_REDIRECT)
+            self.send_header("Location", "http://127.0.0.1:3000/")
+            self.end_headers()
+            return
+        if parsed.path == "/api/health":
+            return self.send_json(
+                HTTPStatus.OK,
+                {
+                    "service": "tiabtc-learning-workspace",
+                    "version": 8,
+                    "capabilities": [
+                        "learning",
+                        "marketReplay",
+                        "bitlangTradeReview",
+                        "oneMinuteCandles",
+                        "resilientBybitFetch",
+                        "ccxtBybitMarketData",
+                        "gapAwareMarketCache",
+                        "apiOnlyBackend",
+                        "warmCcxtMarkets",
+                    ],
+                },
+            )
         if parsed.path == "/api/symbols":
             self.send_json(HTTPStatus.OK, {"symbols": get_all_symbols()})
             return
@@ -819,6 +965,25 @@ class StudyHandler(SimpleHTTPRequestHandler):
                 HTTPStatus.OK,
                 {"offlineMode": get_offline_mode()},
             )
+        if parsed.path == "/api/bitlang/candles":
+            try:
+                symbol = query.get("symbol", [""])[0]
+                interval = query.get("interval", [""])[0]
+                entry = int(query.get("entry", ["0"])[0])
+                exit_timestamp = int(query.get("exit", ["0"])[0])
+                return self.send_json(
+                    HTTPStatus.OK,
+                    load_bitlang_trade_candles(
+                        symbol,
+                        interval,
+                        entry,
+                        exit_timestamp,
+                    ),
+                )
+            except ValueError as error:
+                return self.send_json(HTTPStatus.BAD_REQUEST, {"error": str(error)})
+            except RuntimeError as error:
+                return self.send_json(HTTPStatus.BAD_GATEWAY, {"error": str(error)})
         if parsed.path == "/api/chart/candles":
             try:
                 query = parse_qs(parsed.query)
@@ -867,7 +1032,7 @@ class StudyHandler(SimpleHTTPRequestHandler):
                 return self.send_json(HTTPStatus.OK, {"drawings": drawings})
             except ValueError as error:
                 return self.send_json(HTTPStatus.BAD_REQUEST, {"error": str(error)})
-        return super().do_GET()
+        return self.send_error(HTTPStatus.NOT_FOUND)
 
     def do_POST(self):
         parsed = urlparse(self.path)
@@ -965,6 +1130,12 @@ class StudyHandler(SimpleHTTPRequestHandler):
 
 if __name__ == "__main__":
     initialize_database()
+    if not get_offline_mode():
+        threading.Thread(
+            target=warm_up_market_provider,
+            name="ccxt-market-warmup",
+            daemon=True,
+        ).start()
     print(f"学习页已启动：http://{HOST}:{PORT}/")
     print("按 Ctrl+C 停止服务。")
     ThreadingHTTPServer((HOST, PORT), StudyHandler).serve_forever()

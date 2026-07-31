@@ -109,13 +109,13 @@ class DrawingStorageTests(unittest.TestCase):
         self.assertFalse(study_server.cached_range_contains("BTCUSDT", "60", 1200, 4100))
 
     def test_offline_mode_never_fetches_missing_ranges(self):
-        original_fetch = study_server.fetch_bybit_candles
-        study_server.fetch_bybit_candles = lambda *args: self.fail("offline mode used network")
+        original_fetch = study_server.fetch_market_candles
+        study_server.fetch_market_candles = lambda *args: self.fail("offline mode used network")
         try:
             with self.assertRaisesRegex(RuntimeError, "仅本地模式"):
                 study_server.load_candle_range("BTCUSDT", "60", 1000, 2000, offline=True)
         finally:
-            study_server.fetch_bybit_candles = original_fetch
+            study_server.fetch_market_candles = original_fetch
 
     def test_video_chart_stops_exactly_at_publish_time(self):
         anchor = 1_704_067_200_000
