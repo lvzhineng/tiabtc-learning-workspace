@@ -10,6 +10,7 @@ import {
   type HistogramData,
   type SeriesMarker,
   type UTCTimestamp,
+  type Time,
 } from 'lightweight-charts';
 import type { Candlestick } from '@/domain/candle';
 import type { ReviewTimeframe } from '@/domain/timeframe';
@@ -21,6 +22,7 @@ import {
 import {
   formatChartTickTime,
   formatChartTime,
+  coordinateToChartTimestampMs,
   timestampMsToUtcTimestamp,
   utcTimestampToTimestampMs,
 } from './chart-time';
@@ -41,7 +43,7 @@ interface ChartCanvasProps {
   focusRevision?: number;
   systemMarkers?: SeriesMarker<UTCTimestamp>[];
   onCrosshairMove?: (candle: Candlestick | null) => void;
-  onDoubleClickCandle?: (candle: Candlestick) => void;
+  onDoubleClickTime?: (timestampMs: number) => void;
   onLoadEarlier?: () => void;
   isLoadingEarlier?: boolean;
   onLoadLater?: () => void;
@@ -78,6 +80,17 @@ function findNearestCandle(
     : right;
 }
 
+function chartThemeColors(themeMode: 'dark' | 'light') {
+  const isLight = themeMode === 'light';
+  return {
+    background: isLight ? '#ffffff' : '#0c0f14',
+    text: isLight ? '#475569' : '#8b92a8',
+    grid: isLight ? '#e4e9f2' : '#1c2230',
+    border: isLight ? '#d5dbe8' : '#2a3142',
+    crosshair: '#8b92a8',
+  };
+}
+
 export function ChartCanvas({
   candles,
   symbol,
@@ -89,7 +102,7 @@ export function ChartCanvas({
   focusRevision = 0,
   systemMarkers = [],
   onCrosshairMove,
-  onDoubleClickCandle,
+  onDoubleClickTime,
   onLoadEarlier,
   isLoadingEarlier = false,
   onLoadLater,
@@ -119,16 +132,21 @@ export function ChartCanvas({
   const onLoadEarlierRef = useRef(onLoadEarlier);
   const onLoadLaterRef = useRef(onLoadLater);
   const onSelectDrawingRef = useRef(onSelectDrawing);
-  const onDoubleClickCandleRef = useRef(onDoubleClickCandle);
+  const onDoubleClickTimeRef = useRef(onDoubleClickTime);
   const activeDrawingToolRef = useRef(activeDrawingTool);
   const selectedDrawingIdRef = useRef(selectedDrawingId);
   const intervalRef = useRef(interval);
   const lastAppliedFocusKeyRef = useRef<string | null>(null);
+  const focusTimeMsRef = useRef(focusTimeMs);
+  const focusRangeMsRef = useRef(focusRangeMs);
   const [chartReady, setChartReady] = useState(false);
 
   useEffect(() => {
     isFetchingEarlierRef.current = isLoadingEarlier;
   }, [isLoadingEarlier]);
+
+  focusTimeMsRef.current = focusTimeMs;
+  focusRangeMsRef.current = focusRangeMs;
 
   useEffect(() => {
     isFetchingLaterRef.current = isLoadingLater;
@@ -155,8 +173,8 @@ export function ChartCanvas({
   }, [onSelectDrawing]);
 
   useEffect(() => {
-    onDoubleClickCandleRef.current = onDoubleClickCandle;
-  }, [onDoubleClickCandle]);
+    onDoubleClickTimeRef.current = onDoubleClickTime;
+  }, [onDoubleClickTime]);
 
   useEffect(() => {
     activeDrawingToolRef.current = activeDrawingTool;
@@ -172,51 +190,52 @@ export function ChartCanvas({
     const container = containerRef.current;
     if (!container) return;
 
+    const theme = chartThemeColors(themeMode);
     const chart = createChart(container, {
       width: container.clientWidth,
       height: container.clientHeight,
       layout: {
         background: {
           type: ColorType.Solid,
-          color: themeMode === 'light' ? '#ffffff' : '#0f1218',
+          color: theme.background,
         },
-        textColor: themeMode === 'light' ? '#475569' : '#787b86',
+        textColor: theme.text,
       },
       localization: {
         locale: 'zh-CN',
-        timeFormatter: (time) =>
+        timeFormatter: (time: Time) =>
           formatChartTime(
             utcTimestampToTimestampMs(time),
             intervalRef.current
           ),
       },
       grid: {
-        vertLines: { color: themeMode === 'light' ? '#e8edf3' : '#1e222d' },
-        horzLines: { color: themeMode === 'light' ? '#e8edf3' : '#1e222d' },
+        vertLines: { color: theme.grid },
+        horzLines: { color: theme.grid },
       },
       crosshair: {
         mode: CrosshairMode.Normal,
         vertLine: {
-          color: '#787b86',
+          color: theme.crosshair,
           width: 1,
           style: 3, // dashed
         },
         horzLine: {
-          color: '#787b86',
+          color: theme.crosshair,
           width: 1,
           style: 3,
         },
       },
       rightPriceScale: {
-        borderColor: themeMode === 'light' ? '#d8dee9' : '#2a2e39',
+        borderColor: theme.border,
         mode: isLogScale ? PriceScaleMode.Logarithmic : PriceScaleMode.Normal,
         autoScale: true,
       },
       timeScale: {
-        borderColor: themeMode === 'light' ? '#d8dee9' : '#2a2e39',
+        borderColor: theme.border,
         timeVisible: true,
         secondsVisible: false,
-        tickMarkFormatter: (time) =>
+        tickMarkFormatter: (time: Time) =>
           formatChartTickTime(
             utcTimestampToTimestampMs(time),
             intervalRef.current
@@ -314,24 +333,31 @@ export function ChartCanvas({
         return;
       }
 
-      const chartTime = chart
-        .timeScale()
-        .coordinateToTime(event.clientX - container.getBoundingClientRect().left);
-      if (chartTime === null) return;
+      const containerBounds = container.getBoundingClientRect();
+      const chartCoordinateX = event.clientX - containerBounds.left;
+      // The price scale is rendered inside the chart container, but it is not
+      // a time-axis surface.  In particular, its double-click auto-scale
+      // gesture must not be interpreted as a double-click on the right-side
+      // whitespace used for replay positioning.
+      if (chartCoordinateX < 0 || chartCoordinateX >= chart.timeScale().width()) {
+        return;
+      }
 
-      const targetTimeMs = utcTimestampToTimestampMs(chartTime);
-      const maxDistanceMs = TIMEFRAME_SECONDS_MAP[intervalRef.current] * 500;
+      const targetTimeMs = coordinateToChartTimestampMs(
+        chart,
+        chartCoordinateX,
+        candlesRef.current[candlesRef.current.length - 1]?.timestampMs,
+        intervalRef.current
+      );
+      if (targetTimeMs === null) return;
+
       const nearestCandle = findNearestCandle(
         candlesRef.current,
         targetTimeMs
       );
-      const nearestDistanceMs = nearestCandle
-        ? Math.abs(nearestCandle.timestampMs - targetTimeMs)
-        : Number.POSITIVE_INFINITY;
-
-      if (nearestCandle && nearestDistanceMs <= maxDistanceMs) {
+      if (nearestCandle) {
         event.preventDefault();
-        onDoubleClickCandleRef.current?.(nearestCandle);
+        onDoubleClickTimeRef.current?.(targetTimeMs);
       }
     };
     container.addEventListener('dblclick', handleDoubleClick);
@@ -360,24 +386,24 @@ export function ChartCanvas({
     const chart = chartRef.current;
     if (!chart) return;
 
-    const isLight = themeMode === 'light';
+    const theme = chartThemeColors(themeMode);
     chart.applyOptions({
       layout: {
         background: {
           type: ColorType.Solid,
-          color: isLight ? '#ffffff' : '#0f1218',
+          color: theme.background,
         },
-        textColor: isLight ? '#475569' : '#787b86',
+        textColor: theme.text,
       },
       grid: {
-        vertLines: { color: isLight ? '#e8edf3' : '#1e222d' },
-        horzLines: { color: isLight ? '#e8edf3' : '#1e222d' },
+        vertLines: { color: theme.grid },
+        horzLines: { color: theme.grid },
       },
       rightPriceScale: {
-        borderColor: isLight ? '#d8dee9' : '#2a2e39',
+        borderColor: theme.border,
       },
       timeScale: {
-        borderColor: isLight ? '#d8dee9' : '#2a2e39',
+        borderColor: theme.border,
       },
     });
   }, [themeMode]);
@@ -399,8 +425,10 @@ export function ChartCanvas({
     if (!series || !chart) return;
 
     const seriesKey = `${symbol}:${interval}`;
-    if (prevSeriesKeyRef.current !== seriesKey) {
+    const isSeriesContextChange = prevSeriesKeyRef.current !== seriesKey;
+    if (isSeriesContextChange) {
       prevSeriesKeyRef.current = seriesKey;
+      lastAppliedFocusKeyRef.current = null;
       prevBarsCountRef.current = 0;
       prevFirstTimestampRef.current = null;
       prevLastTimestampRef.current = null;
@@ -508,6 +536,26 @@ export function ChartCanvas({
     series.setData(sortedData);
     volumeSeries?.setData(volumeData);
 
+    // A symbol or interval switch has no shared logical index with the
+    // previous series. Position the newly loaded range explicitly instead of
+    // reusing the previous series' viewport indices. When a focus target is
+    // pending, skip right-align so the focus effect can center without a flash.
+    const hasPendingFocus =
+      focusTimeMsRef.current !== null || focusRangeMsRef.current !== null;
+    if (
+      (isSeriesContextChange || prevBarsCountRef.current === 0) &&
+      !hasPendingFocus
+    ) {
+      const visibleSpan = prevLogicalRange
+        ? Math.max(30, prevLogicalRange.to - prevLogicalRange.from)
+        : 120;
+      const rightPadding = 12;
+      chart.timeScale().setVisibleLogicalRange({
+        from: sortedData.length - visibleSpan + rightPadding,
+        to: sortedData.length - 1 + rightPadding,
+      });
+    }
+
     // If prepended earlier candles, adjust logical range so view doesn't jump
     if (isPrepended && prevLogicalRange && addedCount > 0) {
       chart.timeScale().setVisibleLogicalRange({
@@ -524,11 +572,12 @@ export function ChartCanvas({
   // Keep the replay cut-in candle visible after future candles are masked.
   useEffect(() => {
     const chart = chartRef.current;
-    if (
-      !chart ||
-      (focusTimeMs === null && focusRangeMs === null) ||
-      candles.length === 0
-    ) {
+    if (!chart) return;
+    if (focusTimeMs === null && focusRangeMs === null) {
+      lastAppliedFocusKeyRef.current = null;
+      return;
+    }
+    if (candles.length === 0) {
       return;
     }
 
@@ -567,12 +616,14 @@ export function ChartCanvas({
       const padding = Math.max(12, Math.round(tradeSpan * 0.2));
       const visibleSpan = tradeSpan + padding * 2;
       const tradeCenter = (resolvedFrom + resolvedTo) / 2;
-      chart.timeScale().setVisibleLogicalRange({
-        from: tradeCenter - visibleSpan / 2,
-        to: tradeCenter + visibleSpan / 2,
+      const frame = window.requestAnimationFrame(() => {
+        chart.timeScale().setVisibleLogicalRange({
+          from: tradeCenter - visibleSpan / 2,
+          to: tradeCenter + visibleSpan / 2,
+        });
+        lastAppliedFocusKeyRef.current = focusKey;
       });
-      lastAppliedFocusKeyRef.current = focusKey;
-      return;
+      return () => window.cancelAnimationFrame(frame);
     }
 
     const resolvedFocusTimeMs =
@@ -594,11 +645,14 @@ export function ChartCanvas({
       ? Math.max(30, currentRange.to - currentRange.from)
       : 120;
     const rightPadding = 12;
-    chart.timeScale().setVisibleLogicalRange({
-      from: focusIndex - visibleSpan + rightPadding,
-      to: focusIndex + rightPadding,
+    const frame = window.requestAnimationFrame(() => {
+      chart.timeScale().setVisibleLogicalRange({
+        from: focusIndex - visibleSpan + rightPadding,
+        to: focusIndex + rightPadding,
+      });
+      lastAppliedFocusKeyRef.current = focusKey;
     });
-    lastAppliedFocusKeyRef.current = focusKey;
+    return () => window.cancelAnimationFrame(frame);
   }, [
     candles,
     focusRangeMs,

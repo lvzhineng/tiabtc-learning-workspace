@@ -1,4 +1,4 @@
-import type { Time, UTCTimestamp } from 'lightweight-charts';
+import type { IChartApi, Time, UTCTimestamp } from 'lightweight-charts';
 import type { ReviewTimeframe } from '@/domain/timeframe';
 import { TIMEFRAME_SECONDS_MAP } from '@/domain/timeframe';
 
@@ -63,6 +63,37 @@ export function formatChartTickTime(
 
 export function timeframeMs(timeframe: ReviewTimeframe): number {
   return (TIMEFRAME_SECONDS_MAP[timeframe] || 300) * 1000;
+}
+
+/**
+ * Lightweight Charts only resolves a time for coordinates backed by a data
+ * point.  The chart deliberately keeps room to the right of the last candle,
+ * so derive the matching bar time from the logical scale when that area is
+ * clicked or used as a drawing anchor.
+ */
+export function coordinateToChartTimestampMs(
+  chart: IChartApi,
+  coordinate: number,
+  lastCandleTimestampMs: number | undefined,
+  timeframe: ReviewTimeframe
+): number | null {
+  const chartTime = chart.timeScale().coordinateToTime(coordinate);
+  if (chartTime !== null) return utcTimestampToTimestampMs(chartTime);
+  if (lastCandleTimestampMs === undefined) return null;
+
+  const logical = chart.timeScale().coordinateToLogical(coordinate);
+  const lastCoordinate = chart.timeScale().timeToCoordinate(
+    timestampMsToUtcTimestamp(lastCandleTimestampMs)
+  );
+  if (logical === null || lastCoordinate === null) return null;
+
+  const lastLogical = chart.timeScale().coordinateToLogical(lastCoordinate);
+  if (lastLogical === null) return null;
+
+  return (
+    lastCandleTimestampMs +
+    Math.round(logical - lastLogical) * timeframeMs(timeframe)
+  );
 }
 
 function shanghaiParts(

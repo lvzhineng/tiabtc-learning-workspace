@@ -36,8 +36,9 @@ import {
   Video,
   Target,
 } from 'lucide-react';
+import '@/styles/review-workspace.css';
 
-const TIMEFRAMES: ReviewTimeframe[] = ['5', '15', '60', '240', 'D', 'W'];
+const TIMEFRAMES: ReviewTimeframe[] = ['1', '5', '15', '60', '240', 'D', 'W'];
 
 interface ChartWorkspaceProps {
   initialVideoContext?: VideoReviewContext | null;
@@ -55,6 +56,8 @@ export function ChartWorkspace({
   const [activeTimeframe, setActiveTimeframe] = useState<ReviewTimeframe>('60');
   const [isLogScale, setIsLogScale] = useState<boolean>(false);
   const [chartFocusTimeMs, setChartFocusTimeMs] = useState<number | null>(null);
+  const [timeframeSwitchAnchorTimeMs, setTimeframeSwitchAnchorTimeMs] =
+    useState<number | null>(null);
 
   const [hoveredCandle, setHoveredCandle] = useState<Candlestick | null>(null);
 
@@ -91,8 +94,23 @@ export function ChartWorkspace({
   } = useCandleWorkspaceData(
     activeSymbol,
     activeTimeframe,
-    replayState
+    replayState,
+    timeframeSwitchAnchorTimeMs
   );
+
+  // One-shot anchor for the timeframe switch fetch; clear once data arrives so
+  // subsequent live requests are not pinned to a historical window.
+  useEffect(() => {
+    if (
+      loading ||
+      candles.length === 0 ||
+      timeframeSwitchAnchorTimeMs === null
+    ) {
+      return;
+    }
+    setTimeframeSwitchAnchorTimeMs(null);
+  }, [candles.length, loading, timeframeSwitchAnchorTimeMs]);
+
   const {
     activeTool,
     setActiveTool,
@@ -119,6 +137,49 @@ export function ChartWorkspace({
     replayState.status === 'idle'
       ? 'live'
       : `${replayState.context.mode}:${replayState.startTimeMs}`;
+
+  const handleTimeframeChange = useCallback(
+    (nextTimeframe: ReviewTimeframe) => {
+      if (nextTimeframe === activeTimeframe) return;
+      const selectedDrawing = drawings.find(
+        (drawing) => drawing.id === selectedDrawingId
+      );
+      const drawingAnchorTimeMs =
+        selectedDrawing?.points[selectedDrawing.points.length - 1]
+          ?.timestampMs ?? null;
+      const replayAnchorTimeMs =
+        replayState.status === 'idle' ? null : replayState.cursorTimeMs;
+      // Keep the current review position across timeframe switches. Only fall
+      // back to a null anchor (live tip / right-align) when nothing is focused.
+      const anchorTimeMs =
+        drawingAnchorTimeMs ??
+        chartFocusTimeMs ??
+        replayAnchorTimeMs ??
+        hoveredCandle?.timestampMs ??
+        null;
+      setTimeframeSwitchAnchorTimeMs(anchorTimeMs);
+      setChartFocusTimeMs(anchorTimeMs);
+      setActiveTimeframe(nextTimeframe);
+    },
+    [
+      activeTimeframe,
+      chartFocusTimeMs,
+      drawings,
+      hoveredCandle,
+      replayState,
+      selectedDrawingId,
+    ]
+  );
+
+  const handleSymbolChange = useCallback(
+    (nextSymbol: string) => {
+      if (nextSymbol === activeSymbol) return;
+      setTimeframeSwitchAnchorTimeMs(null);
+      setChartFocusTimeMs(null);
+      setActiveSymbol(nextSymbol);
+    },
+    [activeSymbol]
+  );
 
   // Sync initialVideoContext if passed from parent
   useEffect(() => {
@@ -204,11 +265,14 @@ export function ChartWorkspace({
     setReplayState({ status: 'idle' });
   };
 
-  const handleDoubleClickCandle = useCallback(
-    (candle: Candlestick) => {
-      const cutInTimeMs =
-        candle.timestampMs + timeframeMs(activeTimeframe);
-      setChartFocusTimeMs(candle.timestampMs);
+  const handleDoubleClickTime = useCallback(
+    (timestampMs: number) => {
+      const intervalMs = timeframeMs(activeTimeframe);
+      // The right-side padding may extend beyond the current time.  Replay
+      // cannot start in the future, so keep that edge on the latest valid
+      // instant while preserving the exact clicked period for past data.
+      const cutInTimeMs = Math.min(timestampMs + intervalMs, Date.now());
+      setChartFocusTimeMs(cutInTimeMs - intervalMs);
       setReplayState({
         status: 'ready',
         context: {
@@ -343,7 +407,7 @@ export function ChartWorkspace({
           ? current
           : [...current, addedSymbol]
       );
-      setActiveSymbol(addedSymbol);
+      handleSymbolChange(addedSymbol);
       setNewSymbolInput('');
       setShowAddSymbol(false);
     } catch (err) {
@@ -428,8 +492,7 @@ export function ChartWorkspace({
   const activeVideoTitle = videoReplayContext?.title || null;
 
   return (
-    <div style={{ width: '100%', height: '100%', display: 'flex', flexDirection: 'column', background: 'var(--bg-dark-900)', position: 'relative' }}>
-      {/* Draggable Drawing Toolbar Overlay */}
+    <div className="review-workspace">
       <DraggableDrawingToolbar
         activeTool={activeTool}
         magnetEnabled={magnetEnabled}
@@ -447,7 +510,6 @@ export function ChartWorkspace({
         onCreatePaperTradeFromPosition={handleCreateTradeFromPosition}
       />
 
-      {/* Paper Trading Side Panel */}
       {showPaperPanel && (
         <PaperTradingPanel
           symbol={activeSymbol}
@@ -461,56 +523,19 @@ export function ChartWorkspace({
         />
       )}
 
-      {/* Video Review Context Header Banner if active */}
       {activeVideoTitle && (
-        <div
-          style={{
-            background: 'var(--bg-dark-700)',
-            borderBottom: '1px solid var(--accent-blue)',
-            color: '#fff',
-            padding: '4px 16px',
-            fontSize: '12px',
-            display: 'flex',
-            alignItems: 'center',
-            gap: '8px',
-            fontWeight: 600,
-          }}
-        >
+        <div className="review-video-banner">
           <Video size={14} color="var(--accent-blue)" />
           <span>正在复盘视频: {activeVideoTitle}</span>
         </div>
       )}
 
-      {/* Top Controls Bar */}
-      <div
-        style={{
-          height: '42px',
-          background: 'var(--bg-dark-800)',
-          borderBottom: '1px solid var(--border-color)',
-          display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'space-between',
-          padding: '0 12px',
-          gap: '12px',
-        }}
-      >
-        {/* Left: Symbol, Timeframe & Free Replay Controls */}
-        <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-          {/* Symbol Select */}
+      <div className="review-toolbar">
+        <div className="review-toolbar-left">
           <select
+            className="review-symbol-select"
             value={activeSymbol}
-            onChange={(e) => setActiveSymbol(e.target.value)}
-            style={{
-              background: 'var(--bg-dark-700)',
-              color: 'var(--text-primary)',
-              border: '1px solid var(--border-color)',
-              borderRadius: 'var(--radius-sm)',
-              padding: '4px 8px',
-              fontWeight: 600,
-              fontSize: '13px',
-              cursor: 'pointer',
-              outline: 'none',
-            }}
+            onChange={(e) => handleSymbolChange(e.target.value)}
           >
             {symbols.map((sym) => (
               <option key={sym} value={sym}>
@@ -519,90 +544,48 @@ export function ChartWorkspace({
             ))}
           </select>
 
-          {/* Add Symbol Toggle */}
           {showAddSymbol ? (
-            <div style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
+            <div className="review-add-symbol">
               <input
                 type="text"
                 value={newSymbolInput}
                 onChange={(e) => setNewSymbolInput(e.target.value)}
                 placeholder="例如: ETHUSDT"
-                style={{
-                  width: '90px',
-                  background: 'var(--bg-dark-700)',
-                  color: '#fff',
-                  border: '1px solid var(--accent-blue)',
-                  borderRadius: 'var(--radius-sm)',
-                  padding: '3px 6px',
-                  fontSize: '12px',
-                  outline: 'none',
-                }}
                 onKeyDown={(e) => e.key === 'Enter' && handleAddSymbol()}
               />
-              <button
-                onClick={handleAddSymbol}
-                style={{
-                  background: 'var(--accent-blue)',
-                  color: '#fff',
-                  border: 'none',
-                  borderRadius: 'var(--radius-sm)',
-                  padding: '3px 8px',
-                  fontSize: '12px',
-                  cursor: 'pointer',
-                }}
-              >
+              <button type="button" className="ui-btn ui-btn-primary" onClick={handleAddSymbol}>
                 确定
               </button>
             </div>
           ) : (
             <button
+              type="button"
+              className="ui-btn"
               onClick={() => setShowAddSymbol(true)}
               title="添加自定义 Symbol"
-              style={{
-                background: 'var(--bg-dark-700)',
-                color: 'var(--text-secondary)',
-                border: '1px solid var(--border-color)',
-                borderRadius: 'var(--radius-sm)',
-                padding: '4px 6px',
-                cursor: 'pointer',
-                display: 'flex',
-                alignItems: 'center',
-              }}
+              aria-label="添加自定义 Symbol"
             >
               <Plus size={14} />
             </button>
           )}
 
-          <div style={{ width: '1px', height: '16px', background: 'var(--border-color)', margin: '0 4px' }} />
+          <div className="ui-divider-v" />
 
-          {/* Timeframe Selector Buttons */}
-          <div style={{ display: 'flex', gap: '2px', background: 'var(--bg-dark-700)', padding: '2px', borderRadius: 'var(--radius-sm)' }}>
-            {TIMEFRAMES.map((tf) => {
-              const active = activeTimeframe === tf;
-              return (
-                <button
-                  key={tf}
-                  onClick={() => setActiveTimeframe(tf)}
-                  style={{
-                    background: active ? 'var(--bg-dark-600)' : 'transparent',
-                    color: active ? '#fff' : 'var(--text-secondary)',
-                    fontWeight: active ? 600 : 400,
-                    border: 'none',
-                    borderRadius: 'var(--radius-sm)',
-                    padding: '3px 8px',
-                    fontSize: '12px',
-                    cursor: 'pointer',
-                  }}
-                >
-                  {TIMEFRAME_DISPLAY_MAP[tf]}
-                </button>
-              );
-            })}
+          <div className="tf-segment" role="group" aria-label="K线周期">
+            {TIMEFRAMES.map((tf) => (
+              <button
+                key={tf}
+                type="button"
+                className={activeTimeframe === tf ? 'active' : ''}
+                onClick={() => handleTimeframeChange(tf)}
+              >
+                {TIMEFRAME_DISPLAY_MAP[tf]}
+              </button>
+            ))}
           </div>
 
-          <div style={{ width: '1px', height: '16px', background: 'var(--border-color)', margin: '0 4px' }} />
+          <div className="ui-divider-v" />
 
-          {/* Free Replay Panel Integration */}
           <FreeReplayPanel
             replayState={replayState}
             activeSymbol={activeSymbol}
@@ -616,40 +599,22 @@ export function ChartWorkspace({
           />
         </div>
 
-        {/* Right: Paper Trading Drawer Toggle & Log Scale */}
-        <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+        <div className="review-toolbar-right">
           <button
+            type="button"
+            className={`ui-btn ${showPaperPanel ? 'ui-btn-active' : ''}`}
             onClick={togglePaperPanel}
-            style={{
-              background: showPaperPanel ? 'var(--accent-blue)' : 'var(--bg-dark-700)',
-              color: showPaperPanel ? '#fff' : 'var(--text-secondary)',
-              border: '1px solid var(--border-color)',
-              borderRadius: 'var(--radius-sm)',
-              padding: '3px 8px',
-              fontSize: '12px',
-              fontWeight: 500,
-              cursor: 'pointer',
-              display: 'flex',
-              alignItems: 'center',
-              gap: '4px',
-            }}
           >
             <Target size={13} />
-            <span>模拟交易 {paperTrades.length > 0 && `(${paperTrades.length})`}</span>
+            <span>
+              模拟交易 {paperTrades.length > 0 && `(${paperTrades.length})`}
+            </span>
           </button>
 
           <button
+            type="button"
+            className={`ui-btn ${isLogScale ? 'ui-btn-active' : ''}`}
             onClick={() => setIsLogScale(!isLogScale)}
-            style={{
-              background: isLogScale ? 'var(--accent-blue)' : 'var(--bg-dark-700)',
-              color: isLogScale ? '#fff' : 'var(--text-secondary)',
-              border: '1px solid var(--border-color)',
-              borderRadius: 'var(--radius-sm)',
-              padding: '3px 8px',
-              fontSize: '12px',
-              fontWeight: 500,
-              cursor: 'pointer',
-            }}
           >
             LOG 对数坐标
           </button>
@@ -662,82 +627,29 @@ export function ChartWorkspace({
         readout={readoutInfo}
       />
 
-      {/* Warnings & Loading Overlay */}
       {offlineWarning && (
-        <div
-          style={{
-            background: 'rgba(255, 152, 0, 0.15)',
-            borderBottom: '1px solid var(--accent-orange)',
-            color: 'var(--accent-orange)',
-            padding: '6px 16px',
-            fontSize: '12px',
-            display: 'flex',
-            alignItems: 'center',
-            gap: '8px',
-          }}
-        >
+        <div className="review-banner-warning">
           <AlertCircle size={14} />
           <span>{offlineWarning}</span>
         </div>
       )}
 
       {error && (
-        <div
-          style={{
-            background: 'rgba(242, 54, 69, 0.15)',
-            borderBottom: '1px solid var(--accent-red)',
-            color: 'var(--accent-red)',
-            padding: '6px 16px',
-            fontSize: '12px',
-            display: 'flex',
-            alignItems: 'center',
-            gap: '8px',
-          }}
-        >
+        <div className="review-banner-error">
           <AlertCircle size={14} />
           <span>加载失败: {error}</span>
         </div>
       )}
 
-      {/* Main Chart Canvas Area */}
-      <div style={{ flex: 1, position: 'relative', overflow: 'hidden' }}>
+      <div className="review-chart-area">
         {loading && candles.length === 0 && (
-          <div
-            style={{
-              position: 'absolute',
-              inset: 0,
-              background: 'rgba(15, 18, 24, 0.7)',
-              zIndex: 10,
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'center',
-              gap: '8px',
-              color: 'var(--text-primary)',
-            }}
-          >
+          <div className="review-chart-loading">
             <RefreshCw size={20} className="spin" color="var(--accent-blue)" />
             <span>加载 K 线数据中...</span>
           </div>
         )}
         {loading && candles.length > 0 && (
-          <div
-            style={{
-              position: 'absolute',
-              top: '10px',
-              right: '12px',
-              zIndex: 10,
-              display: 'flex',
-              alignItems: 'center',
-              gap: '6px',
-              padding: '6px 10px',
-              border: '1px solid var(--border-color)',
-              borderRadius: 'var(--radius-sm)',
-              background: 'var(--bg-dark-800)',
-              color: 'var(--text-secondary)',
-              fontSize: '12px',
-              pointerEvents: 'none',
-            }}
-          >
+          <div className="review-chart-loading-chip">
             <RefreshCw size={14} className="spin" color="var(--accent-blue)" />
             <span>正在切换周期...</span>
           </div>
@@ -752,7 +664,7 @@ export function ChartWorkspace({
           focusTimeMs={chartFocusTimeMs}
           systemMarkers={systemMarkers}
           onCrosshairMove={setHoveredCandle}
-          onDoubleClickCandle={handleDoubleClickCandle}
+          onDoubleClickTime={handleDoubleClickTime}
           onLoadEarlier={handleLoadEarlier}
           isLoadingEarlier={isLoadingEarlier}
           drawings={drawings}
