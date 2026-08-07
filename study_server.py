@@ -59,6 +59,7 @@ MARKET_FETCH_LOCKS_GUARD = threading.Lock()
 MARKET_FETCH_LOCKS = {}
 MARKET_FETCH_FAILURES = {}
 MARKET_TRAILING_REFRESH_AT = {}
+MARKET_TRAILING_REFRESHING = set()
 MARKET_DATA_PROVIDER = CcxtBybitMarketDataProvider()
 MARKET_REFRESHING = set()
 
@@ -432,19 +433,30 @@ def trailing_refresh_bar_count(interval):
     return 5
 
 
-def refresh_trailing_candles(symbol, interval, end_timestamp):
-    """Force-upsert recent candles even when the cache range looks covered."""
+def live_trailing_window(interval, now_timestamp=None):
+    now_timestamp = int(time.time() * 1000) if now_timestamp is None else now_timestamp
+    interval_milliseconds = INTERVAL_MILLISECONDS[interval]
+    bar_count = trailing_refresh_bar_count(interval)
+    open_ts = current_open_candle_timestamp(interval, now_timestamp)
+    refresh_start = open_ts - interval_milliseconds * (bar_count - 1)
+    refresh_end = open_ts + interval_milliseconds - 1
+    return refresh_start, refresh_end
+
+
+def request_needs_trailing_refresh(interval, start_timestamp, end_timestamp):
+    refresh_start, refresh_end = live_trailing_window(interval)
+    return end_timestamp >= refresh_start and start_timestamp <= refresh_end
+
+
+def refresh_trailing_candles(symbol, interval):
+    """Force-upsert recent live candles even when the cache range looks covered."""
     fetch_key = (symbol, interval)
     now_monotonic = time.monotonic()
     last_refresh_at = MARKET_TRAILING_REFRESH_AT.get(fetch_key, 0)
     if now_monotonic - last_refresh_at < TRAILING_REFRESH_COOLDOWN_SECONDS:
         return 0
 
-    interval_milliseconds = INTERVAL_MILLISECONDS[interval]
-    bar_count = trailing_refresh_bar_count(interval)
-    open_ts = current_open_candle_timestamp(interval, end_timestamp)
-    refresh_end = min(end_timestamp, open_ts + interval_milliseconds - 1)
-    refresh_start = open_ts - interval_milliseconds * (bar_count - 1)
+    refresh_start, refresh_end = live_trailing_window(interval)
     if refresh_end < refresh_start:
         return 0
 
@@ -475,13 +487,41 @@ def refresh_trailing_candles(symbol, interval, end_timestamp):
             MARKET_TRAILING_REFRESH_AT[fetch_key] = time.monotonic()
             print(
                 f"[market] trailing-refresh {symbol} {interval} "
-                f"bars={len(fetched)} window={bar_count}",
+                f"bars={len(fetched)} window={trailing_refresh_bar_count(interval)}",
                 flush=True,
             )
             return len(fetched)
         except RuntimeError as error:
             MARKET_FETCH_FAILURES[fetch_key] = (time.monotonic(), str(error))
             return 0
+
+
+def schedule_trailing_refresh(symbol, interval, start_timestamp, end_timestamp):
+    """Refresh live trailing bars in the background so chart requests stay snappy."""
+    if not request_needs_trailing_refresh(interval, start_timestamp, end_timestamp):
+        return
+    fetch_key = (symbol, interval)
+    now_monotonic = time.monotonic()
+    last_refresh_at = MARKET_TRAILING_REFRESH_AT.get(fetch_key, 0)
+    if now_monotonic - last_refresh_at < TRAILING_REFRESH_COOLDOWN_SECONDS:
+        return
+    with MARKET_FETCH_LOCKS_GUARD:
+        if fetch_key in MARKET_TRAILING_REFRESHING:
+            return
+        MARKET_TRAILING_REFRESHING.add(fetch_key)
+
+    def refresh():
+        try:
+            refresh_trailing_candles(symbol, interval)
+        finally:
+            with MARKET_FETCH_LOCKS_GUARD:
+                MARKET_TRAILING_REFRESHING.discard(fetch_key)
+
+    threading.Thread(
+        target=refresh,
+        name=f"market-trailing-{symbol}-{interval}",
+        daemon=True,
+    ).start()
 
 
 def load_candle_range(symbol, interval, start_timestamp, end_timestamp, offline=None):
@@ -492,12 +532,7 @@ def load_candle_range(symbol, interval, start_timestamp, end_timestamp, offline=
     candles = list_candles(symbol, interval, start_timestamp, end_timestamp)
     if not covered and not offline and candles:
         schedule_candle_refresh(symbol, interval, start_timestamp, end_timestamp)
-        # Still refresh the trailing window now so incomplete daily/weekly bars
-        # are not served forever from a previously closed cache range.
-        refreshed = refresh_trailing_candles(symbol, interval, end_timestamp)
-        if refreshed:
-            source = "bybit"
-            candles = list_candles(symbol, interval, start_timestamp, end_timestamp)
+        schedule_trailing_refresh(symbol, interval, start_timestamp, end_timestamp)
         return candles, source, warning
     if not covered and not offline:
         fetch_key = (symbol, interval)
@@ -562,9 +597,7 @@ def load_candle_range(symbol, interval, start_timestamp, end_timestamp, offline=
                 end_timestamp,
             )
     elif covered and not offline:
-        refreshed = refresh_trailing_candles(symbol, interval, end_timestamp)
-        if refreshed:
-            source = "bybit"
+        schedule_trailing_refresh(symbol, interval, start_timestamp, end_timestamp)
     candles = list_candles(symbol, interval, start_timestamp, end_timestamp)
     if offline and not covered:
         warning = "仅本地模式：该时间范围的缓存不完整"
