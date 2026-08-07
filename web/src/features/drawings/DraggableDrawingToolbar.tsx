@@ -2,28 +2,30 @@ import React, { memo, useRef, useState } from 'react';
 import type { ActiveToolType } from './drawing-types';
 import type { PositionToolParams } from '@/features/paper-trading/paper-trade-types';
 import {
-  Crosshair,
-  Slash,
-  Minus,
-  Square,
-  TrendingUp,
-  TrendingDown,
-  GitCommit,
-  Ruler,
-  Type,
-  ArrowUp,
-  ArrowDown,
-  Brush as BrushIcon,
-  Magnet,
-  Undo,
-  Redo,
-  Lock,
-  Unlock,
-  Trash2,
-  Eraser,
-  Move,
-  Target,
-} from 'lucide-react';
+  IconArrowDown,
+  IconArrowUp,
+  IconBrush,
+  IconClear,
+  IconDatePriceRange,
+  IconFibRetracement,
+  IconHorizontalRay,
+  IconLock,
+  IconLongPosition,
+  IconMagnet,
+  IconPaperTrading,
+  IconParallelChannel,
+  IconRectangle,
+  IconRedo,
+  IconRotatedRectangle,
+  IconSelect,
+  IconShortPosition,
+  IconText,
+  IconTrash,
+  IconTrendLine,
+  IconUndo,
+  IconUnlock,
+  IconVolumeProfile,
+} from './drawing-toolbar-icons';
 import '@/styles/toolbar.css';
 
 interface DraggableDrawingToolbarProps {
@@ -44,6 +46,39 @@ interface DraggableDrawingToolbarProps {
 }
 
 const STORAGE_KEY = 'tiabtc-drawing-toolbar-pos-v2';
+
+const QUICK_TOOLS: Array<{
+  tool: ActiveToolType;
+  title: string;
+  Icon: React.ComponentType;
+}> = [
+  { tool: 'TrendLine', title: '趋势线 (Alt+T)', Icon: IconTrendLine },
+  { tool: 'FibRetracement', title: '斐波那契回撤', Icon: IconFibRetracement },
+  { tool: 'ShortPosition', title: '空头仓位', Icon: IconShortPosition },
+  { tool: 'LongPosition', title: '多头仓位', Icon: IconLongPosition },
+  {
+    tool: 'date-price-range',
+    title: '日期和价格范围',
+    Icon: IconDatePriceRange,
+  },
+  { tool: 'HorizontalRay', title: '水平射线 (Alt+J)', Icon: IconHorizontalRay },
+  { tool: 'ParallelChannel', title: '平行通道', Icon: IconParallelChannel },
+  { tool: 'Rectangle', title: '矩形', Icon: IconRectangle },
+  { tool: 'text-annotation', title: '文字', Icon: IconText },
+  {
+    tool: 'fixed-range-volume-profile',
+    title: '固定范围成交量分布图',
+    Icon: IconVolumeProfile,
+  },
+  { tool: 'arrow-mark-up', title: '向上箭头', Icon: IconArrowUp },
+  { tool: 'arrow-mark-down', title: '向下箭头', Icon: IconArrowDown },
+  { tool: 'brush', title: '笔刷', Icon: IconBrush },
+  {
+    tool: 'rotated-rectangle',
+    title: '旋转矩形',
+    Icon: IconRotatedRectangle,
+  },
+];
 
 export const DraggableDrawingToolbar = memo(function DraggableDrawingToolbar({
   activeTool,
@@ -77,7 +112,12 @@ export const DraggableDrawingToolbar = memo(function DraggableDrawingToolbar({
   });
 
   const [isDragging, setIsDragging] = useState(false);
-  const dragRef = useRef<{ startX: number; startY: number; initLeft: number; initTop: number } | null>(null);
+  const dragRef = useRef<{
+    startX: number;
+    startY: number;
+    initLeft: number;
+    initTop: number;
+  } | null>(null);
 
   const handlePointerDown = (e: React.PointerEvent) => {
     if (e.button !== 0) return;
@@ -127,7 +167,14 @@ export const DraggableDrawingToolbar = memo(function DraggableDrawingToolbar({
         onPointerUp={handlePointerUp}
         title="按住拖拽画图工具栏"
       >
-        <Move size={12} />
+        <svg width="10" height="16" viewBox="0 0 10 16" aria-hidden="true">
+          <circle cx="3" cy="3" r="1" fill="#b2b5be" />
+          <circle cx="7" cy="3" r="1" fill="#b2b5be" />
+          <circle cx="3" cy="8" r="1" fill="#b2b5be" />
+          <circle cx="7" cy="8" r="1" fill="#b2b5be" />
+          <circle cx="3" cy="13" r="1" fill="#b2b5be" />
+          <circle cx="7" cy="13" r="1" fill="#b2b5be" />
+        </svg>
       </div>
 
       <div className="toolbar-button-group">
@@ -137,237 +184,49 @@ export const DraggableDrawingToolbar = memo(function DraggableDrawingToolbar({
           onClick={() => onSelectTool('select')}
           title="选择指针 (Esc)"
         >
-          <Crosshair size={15} />
+          <IconSelect />
         </button>
 
-        <span className="toolbar-divider" />
+        {QUICK_TOOLS.map(({ tool, title, Icon }) => (
+          <button
+            key={tool}
+            type="button"
+            className={`toolbar-btn ${activeTool === tool ? 'active' : ''}`}
+            onClick={() => onSelectTool(tool)}
+            title={title}
+          >
+            <Icon />
+          </button>
+        ))}
 
-        {/* 基础线性与图形 */}
-        <button
-          type="button"
-          className={`toolbar-btn ${activeTool === 'TrendLine' ? 'active' : ''}`}
-          onClick={() => onSelectTool('TrendLine')}
-          title="趋势线 (TrendLine)"
-        >
-          <Slash size={15} />
-        </button>
-
-        <button
-          type="button"
-          className={`toolbar-btn ${activeTool === 'HorizontalLine' ? 'active' : ''}`}
-          onClick={() => onSelectTool('HorizontalLine')}
-          title="水平支撑/阻力线 (HorizontalLine)"
-        >
-          <Minus size={15} />
-        </button>
-
-        <button
-          type="button"
-          className={`toolbar-btn ${activeTool === 'HorizontalRay' ? 'active' : ''}`}
-          onClick={() => onSelectTool('HorizontalRay')}
-          title="水平射线 (HorizontalRay)"
-        >
-          <Minus size={15} />
-        </button>
-
-        <button
-          type="button"
-          className={`toolbar-btn ${activeTool === 'VerticalLine' ? 'active' : ''}`}
-          onClick={() => onSelectTool('VerticalLine')}
-          title="垂直线 (VerticalLine)"
-        >
-          <Slash size={15} />
-        </button>
-
-        <button
-          type="button"
-          className={`toolbar-btn ${activeTool === 'Ray' ? 'active' : ''}`}
-          onClick={() => onSelectTool('Ray')}
-          title="射线 (Ray)"
-        >
-          <Slash size={15} />
-        </button>
-
-        <button
-          type="button"
-          className={`toolbar-btn ${activeTool === 'ExtendedLine' ? 'active' : ''}`}
-          onClick={() => onSelectTool('ExtendedLine')}
-          title="延长线 (ExtendedLine)"
-        >
-          <Slash size={15} />
-        </button>
-
-        <button
-          type="button"
-          className={`toolbar-btn ${activeTool === 'Arrow' ? 'active' : ''}`}
-          onClick={() => onSelectTool('Arrow')}
-          title="箭头线 (Arrow)"
-        >
-          <ArrowUp size={15} />
-        </button>
-
-        <button
-          type="button"
-          className={`toolbar-btn ${activeTool === 'ParallelChannel' ? 'active' : ''}`}
-          onClick={() => onSelectTool('ParallelChannel')}
-          title="平行通道 (ParallelChannel)"
-        >
-          <GitCommit size={15} />
-        </button>
-
-        <button
-          type="button"
-          className={`toolbar-btn ${activeTool === 'Rectangle' ? 'active' : ''}`}
-          onClick={() => onSelectTool('Rectangle')}
-          title="矩形结构框 (Rectangle)"
-        >
-          <Square size={15} />
-        </button>
-
-        <span className="toolbar-divider" />
-
-        {/* 做多 / 做空 盈亏比与测量 */}
-        <button
-          type="button"
-          className={`toolbar-btn btn-long ${activeTool === 'long-position' ? 'active' : ''}`}
-          onClick={() => onSelectTool('long-position')}
-          title="做多盈亏比 (Long Position)"
-        >
-          <TrendingUp size={15} />
-        </button>
-
-        <button
-          type="button"
-          className={`toolbar-btn btn-short ${activeTool === 'short-position' ? 'active' : ''}`}
-          onClick={() => onSelectTool('short-position')}
-          title="做空盈亏比 (Short Position)"
-        >
-          <TrendingDown size={15} />
-        </button>
-
-        <button
-          type="button"
-          className={`toolbar-btn ${activeTool === 'FibRetracement' ? 'active' : ''}`}
-          onClick={() => onSelectTool('FibRetracement')}
-          title="斐波那契回调 (0.618/0.66)"
-        >
-          <GitCommit size={15} />
-        </button>
-
-        <button
-          type="button"
-          className={`toolbar-btn ${activeTool === 'date-price-range' ? 'active' : ''}`}
-          onClick={() => onSelectTool('date-price-range')}
-          title="日期价格区间测算 (Date & Price Range)"
-        >
-          <Ruler size={15} />
-        </button>
-
-        <span className="toolbar-divider" />
-
-        {/* 标注与自由画笔 */}
-        <button
-          type="button"
-          className={`toolbar-btn ${activeTool === 'text-annotation' ? 'active' : ''}`}
-          onClick={() => onSelectTool('text-annotation')}
-          title="文字标注 (Text Annotation)"
-        >
-          <Type size={15} />
-        </button>
-
-        <button
-          type="button"
-          className={`toolbar-btn ${activeTool === 'arrow-mark-up' ? 'active' : ''}`}
-          onClick={() => onSelectTool('arrow-mark-up')}
-          title="看涨标记 (Up Arrow)"
-        >
-          <ArrowUp size={15} />
-        </button>
-
-        <button
-          type="button"
-          className={`toolbar-btn ${activeTool === 'arrow-mark-down' ? 'active' : ''}`}
-          onClick={() => onSelectTool('arrow-mark-down')}
-          title="看跌标记 (Down Arrow)"
-        >
-          <ArrowDown size={15} />
-        </button>
-
-        <button
-          type="button"
-          className={`toolbar-btn ${activeTool === 'brush' ? 'active' : ''}`}
-          onClick={() => onSelectTool('brush')}
-          title="自由画笔 (Brush)"
-        >
-          <BrushIcon size={15} />
-        </button>
-
-        <button
-          type="button"
-          className={`toolbar-btn ${activeTool === 'path' ? 'active' : ''}`}
-          onClick={() => onSelectTool('path')}
-          title="路径 (Path)"
-        >
-          <Slash size={15} />
-        </button>
-
-        <button
-          type="button"
-          className={`toolbar-btn ${activeTool === 'fixed-range-volume-profile' ? 'active' : ''}`}
-          onClick={() => onSelectTool('fixed-range-volume-profile')}
-          title="固定区间成交量分布 (Fixed Range Volume Profile)"
-        >
-          <Ruler size={15} />
-        </button>
-
-        <button
-          type="button"
-          className={`toolbar-btn ${activeTool === 'rotated-rectangle' ? 'active' : ''}`}
-          onClick={() => onSelectTool('rotated-rectangle')}
-          title="旋转矩形 (Rotated Rectangle)"
-        >
-          <Square size={15} />
-        </button>
-
-        <span className="toolbar-divider" />
-
-        {/* 磁吸 */}
         <button
           type="button"
           className={`toolbar-btn ${magnetEnabled ? 'active-toggle' : ''}`}
           onClick={onToggleMagnet}
-          title={magnetEnabled ? '关闭磁吸' : '开启磁吸吸附 (🧲)'}
+          title={magnetEnabled ? '关闭磁吸' : '开启磁吸'}
         >
-          <Magnet size={15} />
+          <IconMagnet />
         </button>
 
-        <span className="toolbar-divider" />
-
-        {/* 撤销重做 */}
         <button type="button" className="toolbar-btn" onClick={onUndo} title="撤销 (Ctrl+Z)">
-          <Undo size={15} />
+          <IconUndo />
         </button>
 
         <button type="button" className="toolbar-btn" onClick={onRedo} title="重做 (Ctrl+Y)">
-          <Redo size={15} />
+          <IconRedo />
         </button>
 
-        <span className="toolbar-divider" />
-
-        {/* 模拟交易入口按钮 */}
         {onOpenPaperTrading && (
           <button
             type="button"
             className="toolbar-btn"
             onClick={onOpenPaperTrading}
             title="打开模拟交易面板"
-            style={{ color: 'var(--accent-blue)' }}
           >
-            <Target size={15} />
+            <IconPaperTrading />
           </button>
         )}
 
-        {/* 选中控制与删除 */}
         {selectedDrawingId && (
           <button
             type="button"
@@ -375,49 +234,42 @@ export const DraggableDrawingToolbar = memo(function DraggableDrawingToolbar({
             onClick={onToggleLock}
             title={selectedLocked ? '解锁选中画线' : '锁定选中画线'}
           >
-            {selectedLocked ? <Lock size={15} /> : <Unlock size={15} />}
+            {selectedLocked ? <IconLock /> : <IconUnlock />}
           </button>
         )}
 
         <button
           type="button"
-          className="toolbar-btn btn-danger"
+          className="toolbar-btn"
           disabled={!selectedDrawingId}
           onClick={onDeleteSelected}
           title="删除选中画线"
         >
-          <Trash2 size={15} />
+          <IconTrash />
         </button>
 
         <button
           type="button"
-          className="toolbar-btn btn-danger"
+          className="toolbar-btn"
           onClick={onClearAll}
           title="清空当前 Symbol 所有画线"
         >
-          <Eraser size={15} />
+          <IconClear />
         </button>
 
-        {/* 模拟开仓联动触发按钮 */}
         {selectedPositionInfo && onCreatePaperTradeFromPosition && (
           <button
             type="button"
+            className="toolbar-paper-trade-btn"
             onClick={() => onCreatePaperTradeFromPosition(selectedPositionInfo)}
             style={{
-              marginTop: '4px',
-              background: selectedPositionInfo.type === 'LONG' ? 'var(--accent-green)' : 'var(--accent-red)',
-              color: '#ffffff',
-              border: 'none',
-              borderRadius: 'var(--radius-sm)',
-              padding: '6px 4px',
-              fontSize: '11px',
-              fontWeight: 700,
-              cursor: 'pointer',
-              whiteSpace: 'nowrap',
+              background:
+                selectedPositionInfo.type === 'LONG' ? '#089981' : '#f23645',
             }}
             title={`开仓: ${selectedPositionInfo.type} R:R=${selectedPositionInfo.rrRatio}R`}
           >
-            🎯 模拟开仓 ({selectedPositionInfo.type === 'LONG' ? '多' : '空'} {selectedPositionInfo.rrRatio}R)
+            模拟开仓 ({selectedPositionInfo.type === 'LONG' ? '多' : '空'}{' '}
+            {selectedPositionInfo.rrRatio}R)
           </button>
         )}
       </div>

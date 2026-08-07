@@ -7,16 +7,52 @@ import {
   useState,
   type PointerEvent as ReactPointerEvent,
 } from 'react';
-import type { IChartApi, ISeriesApi, Time } from 'lightweight-charts';
+import type { IChartApi, ISeriesApi } from 'lightweight-charts';
 import type { Candlestick } from '@/domain/candle';
 import type { ReviewTimeframe } from '@/domain/timeframe';
-import { timestampMsToUtcTimestamp } from '@/chart/chart-time';
+import { TIMEFRAME_SECONDS_MAP } from '@/domain/timeframe';
+import {
+  coordinateToChartTimestampMs,
+  timestampMsToUtcTimestamp,
+} from '@/chart/chart-time';
 import type {
   ActiveToolType,
   DrawingPoint,
   DrawingToolState,
 } from './drawing-types';
 import { ANCHOR_COUNTS } from './drawing-types';
+
+function isPositionTool(toolType: string): boolean {
+  return (
+    toolType === 'LongPosition' ||
+    toolType === 'ShortPosition' ||
+    toolType === 'long-position' ||
+    toolType === 'short-position'
+  );
+}
+
+function isLongPositionTool(toolType: string): boolean {
+  return toolType === 'LongPosition' || toolType === 'long-position';
+}
+
+/** TradingView-style: one click places entry + default TP/SL box (about 1:2 RR). */
+function buildPositionPoints(
+  entry: DrawingPoint,
+  toolType: string,
+  interval: ReviewTimeframe
+): DrawingPoint[] {
+  const intervalMs = TIMEFRAME_SECONDS_MAP[interval] * 1000;
+  const risk = Math.max(entry.price * 0.005, Number.EPSILON);
+  const long = isLongPositionTool(toolType);
+  const stopPrice = long ? entry.price - risk : entry.price + risk;
+  const targetPrice = long ? entry.price + risk * 2 : entry.price - risk * 2;
+  const rightTime = entry.timestampMs + intervalMs * 40;
+  return [
+    { timestampMs: entry.timestampMs, price: entry.price },
+    { timestampMs: rightTime, price: targetPrice },
+    { timestampMs: rightTime, price: stopPrice },
+  ];
+}
 
 type Props = {
   chart: IChartApi;
@@ -40,18 +76,6 @@ type DragState = {
   preview: DrawingToolState;
   pointIndex: number | null;
 };
-
-function timeToTimestampMs(time: Time | null): number | null {
-  if (typeof time === 'number') return time * 1000;
-  if (typeof time === 'string') {
-    const parsed = Date.parse(`${time}T00:00:00Z`);
-    return Number.isNaN(parsed) ? null : parsed;
-  }
-  if (time) {
-    return Date.UTC(time.year, time.month - 1, time.day);
-  }
-  return null;
-}
 
 function drawingId(): string {
   if (typeof crypto !== 'undefined' && 'randomUUID' in crypto) {
@@ -79,6 +103,46 @@ function findNearestCandle(
     : right;
 }
 
+function timestampToChartCoordinate(
+  chart: IChartApi,
+  candles: Candlestick[],
+  timestampMs: number
+): number | null {
+  const directCoordinate = chart.timeScale().timeToCoordinate(
+    timestampMsToUtcTimestamp(timestampMs)
+  );
+  if (directCoordinate !== null) return directCoordinate;
+  if (candles.length < 2) return null;
+
+  let low = 0;
+  let high = candles.length;
+  while (low < high) {
+    const middle = Math.floor((low + high) / 2);
+    if (candles[middle].timestampMs < timestampMs) low = middle + 1;
+    else high = middle;
+  }
+
+  const rightIndex = Math.min(
+    candles.length - 1,
+    Math.max(1, low)
+  );
+  const leftIndex = rightIndex - 1;
+  const leftCandle = candles[leftIndex];
+  const rightCandle = candles[rightIndex];
+  const leftCoordinate = chart.timeScale().timeToCoordinate(
+    timestampMsToUtcTimestamp(leftCandle.timestampMs)
+  );
+  const rightCoordinate = chart.timeScale().timeToCoordinate(
+    timestampMsToUtcTimestamp(rightCandle.timestampMs)
+  );
+  if (leftCoordinate === null || rightCoordinate === null) return null;
+
+  const timeSpan = rightCandle.timestampMs - leftCandle.timestampMs;
+  if (timeSpan <= 0) return leftCoordinate;
+  const ratio = (timestampMs - leftCandle.timestampMs) / timeSpan;
+  return leftCoordinate + (rightCoordinate - leftCoordinate) * ratio;
+}
+
 export function ChartDrawingOverlay({
   chart,
   series,
@@ -100,12 +164,73 @@ export function ChartDrawingOverlay({
   const [hoverPoint, setHoverPoint] = useState<DrawingPoint | null>(null);
   const [drag, setDrag] = useState<DragState | null>(null);
   const [viewportRevision, setViewportRevision] = useState(0);
+  const redrawFrameRef = useRef<number | null>(null);
   candlesRef.current = candles;
 
   useEffect(() => {
-    const redraw = () => setViewportRevision((revision) => revision + 1);
-    chart.timeScale().subscribeVisibleLogicalRangeChange(redraw);
-    return () => chart.timeScale().unsubscribeVisibleLogicalRangeChange(redraw);
+    let disposed = false;
+    const scheduleRedraw = () => {
+      if (disposed || redrawFrameRef.current !== null) return;
+      redrawFrameRef.current = window.requestAnimationFrame(() => {
+        redrawFrameRef.current = null;
+        if (disposed) return;
+        setViewportRevision((revision) => revision + 1);
+      });
+    };
+    const timeScale = chart.timeScale();
+    const host = svgRef.current?.parentElement;
+    let pointerActive = false;
+    const handlePointerDown = () => {
+      pointerActive = true;
+      scheduleRedraw();
+    };
+    const handlePointerMove = () => {
+      if (pointerActive) scheduleRedraw();
+    };
+    const handlePointerEnd = () => {
+      if (!pointerActive) return;
+      pointerActive = false;
+      scheduleRedraw();
+    };
+    const pendingTimeouts: number[] = [];
+    const handleWheel = () => {
+      scheduleRedraw();
+      pendingTimeouts.push(window.setTimeout(scheduleRedraw, 0));
+    };
+    const handleDoubleClick = () => {
+      scheduleRedraw();
+      pendingTimeouts.push(window.setTimeout(scheduleRedraw, 0));
+    };
+
+    timeScale.subscribeVisibleLogicalRangeChange(scheduleRedraw);
+    // Logical-range changes already cover pan/zoom; skip the duplicate
+    // time-range subscription to avoid double rAF scheduling.
+    timeScale.subscribeSizeChange(scheduleRedraw);
+    host?.addEventListener('pointerdown', handlePointerDown, true);
+    host?.addEventListener('pointermove', handlePointerMove, true);
+    host?.addEventListener('pointerup', handlePointerEnd, true);
+    host?.addEventListener('pointercancel', handlePointerEnd, true);
+    host?.addEventListener('wheel', handleWheel, true);
+    host?.addEventListener('dblclick', handleDoubleClick, true);
+
+    return () => {
+      disposed = true;
+      timeScale.unsubscribeVisibleLogicalRangeChange(scheduleRedraw);
+      timeScale.unsubscribeSizeChange(scheduleRedraw);
+      host?.removeEventListener('pointerdown', handlePointerDown, true);
+      host?.removeEventListener('pointermove', handlePointerMove, true);
+      host?.removeEventListener('pointerup', handlePointerEnd, true);
+      host?.removeEventListener('pointercancel', handlePointerEnd, true);
+      host?.removeEventListener('wheel', handleWheel, true);
+      host?.removeEventListener('dblclick', handleDoubleClick, true);
+      for (const timeoutId of pendingTimeouts) {
+        window.clearTimeout(timeoutId);
+      }
+      if (redrawFrameRef.current !== null) {
+        window.cancelAnimationFrame(redrawFrameRef.current);
+        redrawFrameRef.current = null;
+      }
+    };
   }, [chart]);
 
   useEffect(() => {
@@ -136,8 +261,11 @@ export function ChartDrawingOverlay({
     const bounds = svg.getBoundingClientRect();
     const x = event.clientX - bounds.left;
     const y = event.clientY - bounds.top;
-    const timestampMs = timeToTimestampMs(
-      chart.timeScale().coordinateToTime(x)
+    const timestampMs = coordinateToChartTimestampMs(
+      chart,
+      x,
+      candlesRef.current[candlesRef.current.length - 1]?.timestampMs,
+      interval
     );
     const price = series.coordinateToPrice(y);
     if (timestampMs === null || price === null || !Number.isFinite(price)) {
@@ -155,7 +283,7 @@ export function ChartDrawingOverlay({
       Math.abs(candidate - price) < Math.abs(best - price) ? candidate : best
     );
     return { timestampMs: nearest.timestampMs, price: nearestPrice };
-  }, [chart, magnetEnabled, series]);
+  }, [chart, interval, magnetEnabled, series]);
 
   const saveNewDrawing = (points: DrawingPoint[]) => {
     const text =
@@ -196,6 +324,12 @@ export function ChartDrawingOverlay({
     if (isFreehandTool) {
       event.currentTarget.setPointerCapture(event.pointerId);
       setDraftPoints([point]);
+      return;
+    }
+
+    // TradingView Long/Short: single click creates the full position box.
+    if (isPositionTool(activeTool)) {
+      saveNewDrawing(buildPositionPoints(point, activeTool, interval));
       return;
     }
 
@@ -254,20 +388,83 @@ export function ChartDrawingOverlay({
     if (!current) return;
     const deltaTime = current.timestampMs - drag.origin.timestampMs;
     const deltaPrice = current.price - drag.origin.price;
+    const toolType = drag.drawing.toolType;
+
+    let nextPoints = drag.drawing.points.map((point, index) =>
+      drag.pointIndex === null
+        ? {
+            timestampMs: point.timestampMs + deltaTime,
+            price: Math.max(Number.EPSILON, point.price + deltaPrice),
+          }
+        : index === drag.pointIndex
+        ? current
+        : point
+    );
+
+    // Keep position box edges aligned while dragging TP / SL / width.
+    if (isPositionTool(toolType) && drag.pointIndex !== null && nextPoints.length >= 3) {
+      if (drag.pointIndex === 0) {
+        // Entry: price only; keep left timestamp, preserve box width.
+        const widthMs = Math.max(
+          0,
+          drag.drawing.points[1].timestampMs - drag.drawing.points[0].timestampMs
+        );
+        nextPoints = [
+          {
+            timestampMs: drag.drawing.points[0].timestampMs + deltaTime,
+            price: Math.max(Number.EPSILON, current.price),
+          },
+          {
+            timestampMs:
+              drag.drawing.points[0].timestampMs + deltaTime + widthMs,
+            price: nextPoints[1].price,
+          },
+          {
+            timestampMs:
+              drag.drawing.points[0].timestampMs + deltaTime + widthMs,
+            price: nextPoints[2].price,
+          },
+        ];
+      } else if (drag.pointIndex === 1) {
+        // Target: adjust price + right edge width together.
+        nextPoints = [
+          nextPoints[0],
+          {
+            timestampMs: Math.max(
+              nextPoints[0].timestampMs + 1,
+              current.timestampMs
+            ),
+            price: Math.max(Number.EPSILON, current.price),
+          },
+          {
+            timestampMs: Math.max(
+              nextPoints[0].timestampMs + 1,
+              current.timestampMs
+            ),
+            price: nextPoints[2].price,
+          },
+        ];
+      } else if (drag.pointIndex === 2) {
+        // Stop: adjust price; keep shared right edge with target.
+        nextPoints = [
+          nextPoints[0],
+          {
+            ...nextPoints[1],
+            timestampMs: nextPoints[1].timestampMs,
+          },
+          {
+            timestampMs: nextPoints[1].timestampMs,
+            price: Math.max(Number.EPSILON, current.price),
+          },
+        ];
+      }
+    }
+
     setDrag({
       ...drag,
       preview: {
         ...drag.drawing,
-        points: drag.drawing.points.map((point, index) =>
-          drag.pointIndex === null
-            ? {
-                timestampMs: point.timestampMs + deltaTime,
-                price: Math.max(Number.EPSILON, point.price + deltaPrice),
-              }
-            : index === drag.pointIndex
-            ? current
-            : point
-        ),
+        points: nextPoints,
       },
     });
   };
@@ -289,16 +486,20 @@ export function ChartDrawingOverlay({
   };
 
   const toCoordinate = useCallback((point: DrawingPoint) => {
-    const x = chart.timeScale().timeToCoordinate(
-      timestampMsToUtcTimestamp(point.timestampMs)
+    const x = timestampToChartCoordinate(
+      chart,
+      candlesRef.current,
+      point.timestampMs
     );
     const y = series.priceToCoordinate(point.price);
-    return x === null || y === null ? null : { x, y };
+    return x === null || y === null ? null : { x, y: Number(y) };
   }, [chart, series]);
 
   const draftCoordinates = draftPoints
     .map(toCoordinate)
-    .filter((point): point is { x: number; y: number } => point !== null);
+    .flatMap((point) =>
+      point === null ? [] : [{ x: point.x, y: Number(point.y) }]
+    );
   const previewPoints =
     !isFreehandTool && hoverPoint && draftPoints.length > 0
       ? [...draftPoints, hoverPoint]
@@ -446,11 +647,11 @@ const DrawingGeometry = memo(function DrawingGeometry({
       <line x1={first.x} y1={0} x2={first.x} y2="100%" {...common} />
     );
   } else if (type === 'FibRetracement') {
-    const levels = [0, 0.382, 0.5, 0.618, 0.66, 1];
+    const levels = [0, 0.618, 0.66, 1];
     geometry = (
       <>
         {levels.map((level) => {
-          const y = first.y + (second.y - first.y) * level;
+          const y = second.y + (first.y - second.y) * level;
           return (
             <g key={level}>
               <line
@@ -529,19 +730,89 @@ const DrawingGeometry = memo(function DrawingGeometry({
     type === 'long-position' ||
     type === 'short-position'
   ) {
+    const entry = first;
+    const target = points[1] || first;
+    const stop = points[2] || first;
+    const left = Math.min(entry.x, target.x, stop.x);
+    const right = Math.max(entry.x, target.x, stop.x);
+    const widthPx = Math.max(56, right - left);
+    const isLong = isLongPositionTool(type);
+    const profitTop = Math.min(entry.y, target.y);
+    const profitHeight = Math.max(2, Math.abs(target.y - entry.y));
+    const lossTop = Math.min(entry.y, stop.y);
+    const lossHeight = Math.max(2, Math.abs(stop.y - entry.y));
+    const entryPrice = drawing.points[0]?.price ?? 0;
+    const targetPrice = drawing.points[1]?.price ?? entryPrice;
+    const stopPrice = drawing.points[2]?.price ?? entryPrice;
+    const reward = Math.abs(targetPrice - entryPrice);
+    const risk = Math.max(Math.abs(entryPrice - stopPrice), Number.EPSILON);
+    const rr = reward / risk;
+    const targetPct = entryPrice
+      ? ((targetPrice - entryPrice) / entryPrice) * 100
+      : 0;
+    const stopPct = entryPrice
+      ? ((stopPrice - entryPrice) / entryPrice) * 100
+      : 0;
     geometry = (
       <>
-        {points.map((point, index) => (
-          <line
-            key={index}
-            x1={first.x}
-            x2={point.x}
-            y1={point.y}
-            y2={point.y}
-            {...common}
-            stroke={index === 1 ? '#089981' : index === 2 ? '#f23645' : stroke}
-          />
-        ))}
+        <rect
+          x={left}
+          y={profitTop}
+          width={widthPx}
+          height={profitHeight}
+          fill="#26a69a"
+          fillOpacity={0.25}
+          stroke="#26a69a"
+          strokeWidth={selected ? 2 : 1.25}
+        />
+        <rect
+          x={left}
+          y={lossTop}
+          width={widthPx}
+          height={lossHeight}
+          fill="#ef5350"
+          fillOpacity={0.25}
+          stroke="#ef5350"
+          strokeWidth={selected ? 2 : 1.25}
+        />
+        <line
+          x1={left}
+          y1={entry.y}
+          x2={left + widthPx}
+          y2={entry.y}
+          stroke={selected ? '#facc15' : '#787b86'}
+          strokeWidth={selected ? width + 1 : width}
+        />
+        <text
+          x={left + 6}
+          y={(profitTop + entry.y) / 2 + 4}
+          fill="#089981"
+          fontSize={11}
+          fontWeight={600}
+          stroke="none"
+        >
+          {`目标 ${targetPct >= 0 ? '+' : ''}${targetPct.toFixed(2)}%`}
+        </text>
+        <text
+          x={left + 6}
+          y={(lossTop + lossTop + lossHeight) / 2 + 4}
+          fill="#f23645"
+          fontSize={11}
+          fontWeight={600}
+          stroke="none"
+        >
+          {`止损 ${stopPct >= 0 ? '+' : ''}${stopPct.toFixed(2)}%`}
+        </text>
+        <text
+          x={left + widthPx + 6}
+          y={entry.y + 4}
+          fill={selected ? '#facc15' : '#d1d4dc'}
+          fontSize={11}
+          fontWeight={600}
+          stroke="none"
+        >
+          {`${isLong ? 'Long' : 'Short'}  ${rr.toFixed(2)} R`}
+        </text>
       </>
     );
   } else if (
@@ -578,14 +849,15 @@ const DrawingGeometry = memo(function DrawingGeometry({
         {isUp ? '▲' : '▼'}
       </text>
     );
-  } else if (type === 'Ray' || type === 'ExtendedLine') {
+  } else if (type === 'ExtendedLine' || type === 'Ray') {
     const dx = second.x - first.x;
     const dy = second.y - first.y;
     const factor = 1000;
+    const isRay = type === 'Ray';
     geometry = (
       <line
-        x1={type === 'ExtendedLine' ? first.x - dx * factor : first.x}
-        y1={type === 'ExtendedLine' ? first.y - dy * factor : first.y}
+        x1={isRay ? first.x : first.x - dx * factor}
+        y1={isRay ? first.y : first.y - dy * factor}
         x2={second.x + dx * factor}
         y2={second.y + dy * factor}
         {...common}

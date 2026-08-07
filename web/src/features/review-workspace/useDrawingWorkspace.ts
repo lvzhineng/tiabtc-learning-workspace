@@ -62,6 +62,13 @@ export function useDrawingWorkspace(
   const saveChainsRef = useRef<Record<string, Promise<void>>>({});
   const saveRevisionsRef = useRef<Record<string, number>>({});
   const workspaceRevisionRef = useRef(0);
+  const historyOperationRef = useRef(false);
+  const loadScopeRef = useRef({ symbol, timeframe });
+  loadScopeRef.current = { symbol, timeframe };
+  const drawingWorkspaceKey =
+    persistence === 'memory'
+      ? `${persistence}:${symbol}:${timeframe}`
+      : `${persistence}:${symbol}`;
 
   const replaceLocalDrawings = useCallback(
     (nextDrawings: DrawingToolState[]) => {
@@ -86,6 +93,7 @@ export function useDrawingWorkspace(
   );
 
   useEffect(() => {
+    const loadScope = loadScopeRef.current;
     const workspaceRevision = ++workspaceRevisionRef.current;
     const controller = new AbortController();
     replaceLocalDrawings([]);
@@ -103,8 +111,8 @@ export function useDrawingWorkspace(
     }
     void fetchDrawings(
       DRAWING_SCOPE,
-      symbol,
-      timeframe,
+      loadScope.symbol,
+      loadScope.timeframe,
       controller.signal
     )
       .then((persistedDrawings) => {
@@ -127,7 +135,7 @@ export function useDrawingWorkspace(
         workspaceRevisionRef.current += 1;
       }
     };
-  }, [persistence, replaceLocalDrawings, symbol, timeframe]);
+  }, [drawingWorkspaceKey, persistence, replaceLocalDrawings]);
 
   const saveDrawingState = useCallback(
     async (toolState: DrawingToolState) => {
@@ -303,19 +311,41 @@ export function useDrawingWorkspace(
     [drawings, symbol]
   );
 
+  const waitForPendingSaves = useCallback(async () => {
+    await Promise.all(
+      Object.values(saveChainsRef.current).map((request) =>
+        request.catch(() => undefined)
+      )
+    );
+  }, []);
+
+  const reconcileSelection = useCallback(
+    (nextDrawings: DrawingToolState[]) => {
+      setSelectedDrawingId((currentId) =>
+        currentId && nextDrawings.some((drawing) => drawing.id === currentId)
+          ? currentId
+          : null
+      );
+    },
+    []
+  );
+
   const undo = useCallback(async () => {
-    if (undoStack.length === 0) return;
+    if (undoStack.length === 0 || historyOperationRef.current) return;
+    historyOperationRef.current = true;
     const previous = undoStack[undoStack.length - 1];
     const current = drawingsRef.current;
-    if (persistence === 'memory') {
-      setRedoStack((stack) =>
-        [...stack, current].slice(-MAX_HISTORY_ENTRIES)
-      );
-      setUndoStack((stack) => stack.slice(0, -1));
-      replaceLocalDrawings(previous);
-      return;
-    }
     try {
+      if (persistence === 'memory') {
+        setRedoStack((stack) =>
+          [...stack, current].slice(-MAX_HISTORY_ENTRIES)
+        );
+        setUndoStack((stack) => stack.slice(0, -1));
+        replaceLocalDrawings(previous);
+        reconcileSelection(previous);
+        return;
+      }
+      await waitForPendingSaves();
       const saved = await replaceDrawings(
         DRAWING_SCOPE,
         symbol,
@@ -326,35 +356,44 @@ export function useDrawingWorkspace(
         [...stack, current].slice(-MAX_HISTORY_ENTRIES)
       );
       setUndoStack((stack) => stack.slice(0, -1));
-      replaceLocalDrawings(saved.map(deserializeDrawing));
+      const restored = saved.map(deserializeDrawing);
+      replaceLocalDrawings(restored);
+      reconcileSelection(restored);
     } catch (undoError) {
       alert(
         `撤销画图失败: ${
           undoError instanceof Error ? undoError.message : '网络异常'
         }`
       );
+    } finally {
+      historyOperationRef.current = false;
     }
   }, [
     persistence,
+    reconcileSelection,
     replaceLocalDrawings,
     symbol,
     timeframe,
     undoStack,
+    waitForPendingSaves,
   ]);
 
   const redo = useCallback(async () => {
-    if (redoStack.length === 0) return;
+    if (redoStack.length === 0 || historyOperationRef.current) return;
+    historyOperationRef.current = true;
     const next = redoStack[redoStack.length - 1];
     const current = drawingsRef.current;
-    if (persistence === 'memory') {
-      setUndoStack((stack) =>
-        [...stack, current].slice(-MAX_HISTORY_ENTRIES)
-      );
-      setRedoStack((stack) => stack.slice(0, -1));
-      replaceLocalDrawings(next);
-      return;
-    }
     try {
+      if (persistence === 'memory') {
+        setUndoStack((stack) =>
+          [...stack, current].slice(-MAX_HISTORY_ENTRIES)
+        );
+        setRedoStack((stack) => stack.slice(0, -1));
+        replaceLocalDrawings(next);
+        reconcileSelection(next);
+        return;
+      }
+      await waitForPendingSaves();
       const saved = await replaceDrawings(
         DRAWING_SCOPE,
         symbol,
@@ -365,15 +404,27 @@ export function useDrawingWorkspace(
         [...stack, current].slice(-MAX_HISTORY_ENTRIES)
       );
       setRedoStack((stack) => stack.slice(0, -1));
-      replaceLocalDrawings(saved.map(deserializeDrawing));
+      const restored = saved.map(deserializeDrawing);
+      replaceLocalDrawings(restored);
+      reconcileSelection(restored);
     } catch (redoError) {
       alert(
         `重做画图失败: ${
           redoError instanceof Error ? redoError.message : '网络异常'
         }`
       );
+    } finally {
+      historyOperationRef.current = false;
     }
-  }, [persistence, redoStack, replaceLocalDrawings, symbol, timeframe]);
+  }, [
+    persistence,
+    reconcileSelection,
+    redoStack,
+    replaceLocalDrawings,
+    symbol,
+    timeframe,
+    waitForPendingSaves,
+  ]);
 
   useEffect(() => {
     const handleShortcut = (event: KeyboardEvent) => {
@@ -386,25 +437,44 @@ export function useDrawingWorkspace(
       }
       if (event.key === 'Escape') {
         setActiveTool('select');
-      } else if (
+        return;
+      }
+      if (
         (event.key === 'Delete' || event.key === 'Backspace') &&
         selectedDrawingId
       ) {
         event.preventDefault();
         void deleteSelectedDrawing();
-      } else if (
+        return;
+      }
+      if (
         (event.ctrlKey || event.metaKey) &&
         event.key.toLowerCase() === 'z'
       ) {
         event.preventDefault();
         if (event.shiftKey) void redo();
         else void undo();
-      } else if (
+        return;
+      }
+      if (
         (event.ctrlKey || event.metaKey) &&
         event.key.toLowerCase() === 'y'
       ) {
         event.preventDefault();
         void redo();
+        return;
+      }
+      if (event.altKey && !event.ctrlKey && !event.metaKey) {
+        if (event.code === 'KeyT') {
+          event.preventDefault();
+          setActiveTool('TrendLine');
+        } else if (event.code === 'KeyJ') {
+          event.preventDefault();
+          setActiveTool('HorizontalRay');
+        } else if (event.code === 'KeyH') {
+          event.preventDefault();
+          setActiveTool('HorizontalLine');
+        }
       }
     };
     window.addEventListener('keydown', handleShortcut);

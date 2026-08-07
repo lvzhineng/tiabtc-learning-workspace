@@ -6,15 +6,14 @@ export type LegacyToolType =
   | 'HorizontalRay'
   | 'VerticalLine'
   | 'FibRetracement'
-  | 'Ray'
   | 'ExtendedLine'
   | 'Arrow'
   | 'Rectangle'
-  | 'ParallelChannel';
+  | 'ParallelChannel'
+  | 'LongPosition'
+  | 'ShortPosition';
 
 export type EnhancedToolType =
-  | 'short-position'
-  | 'long-position'
   | 'date-price-range'
   | 'path'
   | 'text-annotation'
@@ -51,13 +50,12 @@ export const ANCHOR_COUNTS: Record<string, number> = {
   HorizontalRay: 1,
   VerticalLine: 1,
   FibRetracement: 2,
-  Ray: 2,
   ExtendedLine: 2,
   Arrow: 2,
   Rectangle: 2,
   ParallelChannel: 3,
-  'short-position': 3,
-  'long-position': 3,
+  LongPosition: 1,
+  ShortPosition: 1,
   'date-price-range': 2,
   path: 2,
   'text-annotation': 1,
