@@ -14,21 +14,21 @@ export function LearningStatsHeader({ stats }: Props) {
 
       <div className="learning-metric-card">
         <span className="learning-metric-label">已经学完</span>
-        <strong className="learning-metric-value" style={{ color: 'var(--accent-green)' }}>
+        <strong className="learning-metric-value is-green">
           {stats.learnedCount}
         </strong>
       </div>
 
       <div className="learning-metric-card">
         <span className="learning-metric-label">剩余视频</span>
-        <strong className="learning-metric-value" style={{ color: 'var(--accent-orange)' }}>
+        <strong className="learning-metric-value is-orange">
           {stats.remainingCount}
         </strong>
       </div>
 
       <div className="learning-metric-card">
         <span className="learning-metric-label">我的书签</span>
-        <strong className="learning-metric-value" style={{ color: 'var(--accent-blue)' }}>
+        <strong className="learning-metric-value is-blue">
           {stats.bookmarkCount}
         </strong>
       </div>
@@ -36,7 +36,9 @@ export function LearningStatsHeader({ stats }: Props) {
       <div className="learning-progress-card">
         <div className="learning-progress-head">
           <span className="learning-metric-label">总体完成进度</span>
-          <strong style={{ fontSize: '20px', fontWeight: 800 }}>{stats.overallPercent}%</strong>
+          <strong className="learning-progress-percent">
+            {stats.overallPercent}%
+          </strong>
         </div>
         <div className="learning-progress-track">
           <div

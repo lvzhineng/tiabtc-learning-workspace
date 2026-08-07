@@ -156,7 +156,7 @@ try {
         Wait-Endpoint -Uri $backendUrl -ExpectedText "warmCcxtMarkets"
     }
 
-    if (Test-Endpoint -Uri $frontendBaseUrl -ExpectedText "TiaBTC Review Workspace") {
+    if (Test-Endpoint -Uri $frontendBaseUrl -ExpectedText "TiaBTC Workspace") {
         Write-Host "前端已经运行，直接复用 3000 端口。" -ForegroundColor DarkGray
     } else {
         Write-Host "正在启动复盘界面..." -ForegroundColor Cyan
@@ -175,7 +175,7 @@ try {
             -PassThru
         Wait-Endpoint `
             -Uri $frontendBaseUrl `
-            -ExpectedText "TiaBTC Review Workspace"
+            -ExpectedText "TiaBTC Workspace"
     }
 
     Write-Host ""

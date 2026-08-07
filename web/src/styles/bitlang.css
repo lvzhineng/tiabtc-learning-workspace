@@ -28,11 +28,12 @@
 }
 
 .bitlang-sidebar-title {
-  height: 58px;
+  height: 52px;
   display: flex;
   align-items: center;
-  padding: 8px 12px;
+  padding: 8px 14px;
   border-bottom: 1px solid var(--border-color);
+  background: color-mix(in srgb, var(--bg-dark-800) 92%, var(--accent-blue) 8%);
 }
 
 .bitlang-sidebar-title > div {
@@ -42,6 +43,7 @@
 
 .bitlang-sidebar-title strong {
   font-size: 14px;
+  letter-spacing: -0.01em;
 }
 
 .bitlang-sidebar-title span,
@@ -245,10 +247,12 @@
   padding: 8px 16px;
   background: var(--bg-dark-800);
   border-bottom: 1px solid var(--border-color);
+  min-height: 52px;
 }
 
 .bitlang-chart-header h2 {
-  font-size: 17px;
+  font-size: 16px;
+  letter-spacing: -0.01em;
 }
 
 .bitlang-chart-header p {
@@ -257,24 +261,37 @@
 }
 
 .bitlang-timeframes {
-  display: flex;
-  gap: 3px;
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  padding: 2px;
+  border-radius: var(--radius-sm);
+  background: var(--bg-dark-700);
+  border: 1px solid var(--border-color);
 }
 
 .bitlang-timeframes button {
-  height: 28px;
+  height: 26px;
   padding: 0 9px;
   border: 0;
-  border-radius: var(--radius-sm);
-  background: var(--bg-dark-700);
+  border-radius: 4px;
+  background: transparent;
   color: var(--text-secondary);
   cursor: pointer;
-  font-size: 11px;
+  font-size: 12px;
+  font-weight: 500;
+  font-family: inherit;
+  transition: background 0.15s ease, color 0.15s ease;
+}
+
+.bitlang-timeframes button:hover {
+  color: var(--text-primary);
 }
 
 .bitlang-timeframes button.active {
   background: var(--accent-blue);
   color: #fff;
+  font-weight: 600;
 }
 
 .bitlang-chart {
