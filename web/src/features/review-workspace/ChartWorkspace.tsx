@@ -149,14 +149,11 @@ export function ChartWorkspace({
           ?.timestampMs ?? null;
       const replayAnchorTimeMs =
         replayState.status === 'idle' ? null : replayState.cursorTimeMs;
-      // Keep the current review position across timeframe switches. Only fall
-      // back to a null anchor (live tip / right-align) when nothing is focused.
+      // Keep an explicit review anchor (drawing / replay / double-click focus).
+      // Do not use hoveredCandle: crosshair hover would pin mid-history bars to
+      // the right edge and shove the live tip off-screen after a timeframe switch.
       const anchorTimeMs =
-        drawingAnchorTimeMs ??
-        chartFocusTimeMs ??
-        replayAnchorTimeMs ??
-        hoveredCandle?.timestampMs ??
-        null;
+        drawingAnchorTimeMs ?? replayAnchorTimeMs ?? chartFocusTimeMs ?? null;
       setTimeframeSwitchAnchorTimeMs(anchorTimeMs);
       setChartFocusTimeMs(anchorTimeMs);
       setActiveTimeframe(nextTimeframe);
@@ -165,7 +162,6 @@ export function ChartWorkspace({
       activeTimeframe,
       chartFocusTimeMs,
       drawings,
-      hoveredCandle,
       replayState,
       selectedDrawingId,
     ]

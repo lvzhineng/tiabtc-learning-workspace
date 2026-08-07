@@ -125,6 +125,8 @@ export function ChartCanvas({
   const prevFirstTimestampRef = useRef<number | null>(null);
   const prevLastTimestampRef = useRef<number | null>(null);
   const prevSeriesKeyRef = useRef<string>('');
+  const pendingViewportResetRef = useRef(false);
+  const lastVisibleSpanRef = useRef(120);
   const isFetchingEarlierRef = useRef<boolean>(isLoadingEarlier);
   const isFetchingLaterRef = useRef<boolean>(isLoadingLater);
   const candlesRef = useRef<Candlestick[]>(candles);
@@ -432,7 +434,58 @@ export function ChartCanvas({
       prevBarsCountRef.current = 0;
       prevFirstTimestampRef.current = null;
       prevLastTimestampRef.current = null;
+      // Remember that the next non-empty setData must set a viewport. The first
+      // render after a symbol/interval switch often arrives with candles=[], which
+      // would otherwise consume isSeriesContextChange and leave LWC on the left.
+      pendingViewportResetRef.current = true;
     }
+
+    const rememberVisibleSpan = () => {
+      const range = chart.timeScale().getVisibleLogicalRange();
+      if (!range) return;
+      const span = range.to - range.from;
+      if (Number.isFinite(span) && span >= 10) {
+        lastVisibleSpanRef.current = Math.min(200, Math.max(30, span));
+      }
+    };
+
+    const applyRightAlignedViewport = (barCount: number) => {
+      const visibleSpan = lastVisibleSpanRef.current;
+      const rightPadding = 12;
+      chart.timeScale().setVisibleLogicalRange({
+        from: barCount - visibleSpan + rightPadding,
+        to: barCount - 1 + rightPadding,
+      });
+    };
+
+    const applyFocusTimeViewport = (
+      barCount: number,
+      targetTimeMs: number
+    ) => {
+      let focusIndex = 0;
+      let nearestDistanceMs = Number.POSITIVE_INFINITY;
+      for (let index = 0; index < candles.length; index += 1) {
+        const distanceMs = Math.abs(candles[index].timestampMs - targetTimeMs);
+        if (distanceMs < nearestDistanceMs) {
+          focusIndex = index;
+          nearestDistanceMs = distanceMs;
+        }
+      }
+      const visibleSpan = lastVisibleSpanRef.current;
+      const rightPadding = 12;
+      // Near the tip: keep live right-align instead of pinning an early bar.
+      if (focusIndex >= barCount - 3) {
+        applyRightAlignedViewport(barCount);
+        return focusIndex;
+      }
+      chart.timeScale().setVisibleLogicalRange({
+        from: focusIndex - visibleSpan + rightPadding,
+        to: focusIndex + rightPadding,
+      });
+      return focusIndex;
+    };
+
+    rememberVisibleSpan();
 
     if (!candles || candles.length === 0) {
       series.setData([]);
@@ -536,28 +589,24 @@ export function ChartCanvas({
     series.setData(sortedData);
     volumeSeries?.setData(volumeData);
 
-    // A symbol or interval switch has no shared logical index with the
-    // previous series. Position the newly loaded range explicitly instead of
-    // reusing the previous series' viewport indices. When a focus target is
-    // pending, skip right-align so the focus effect can center without a flash.
-    const hasPendingFocus =
-      focusTimeMsRef.current !== null || focusRangeMsRef.current !== null;
-    if (
-      (isSeriesContextChange || prevBarsCountRef.current === 0) &&
-      !hasPendingFocus
-    ) {
-      const visibleSpan = prevLogicalRange
-        ? Math.max(30, prevLogicalRange.to - prevLogicalRange.from)
-        : 120;
-      const rightPadding = 12;
-      chart.timeScale().setVisibleLogicalRange({
-        from: sortedData.length - visibleSpan + rightPadding,
-        to: sortedData.length - 1 + rightPadding,
-      });
-    }
+    const shouldResetViewport =
+      pendingViewportResetRef.current || prevBarsCountRef.current === 0;
+    const pendingFocusTimeMs = focusTimeMsRef.current;
+    const pendingFocusRangeMs = focusRangeMsRef.current;
 
-    // If prepended earlier candles, adjust logical range so view doesn't jump
-    if (isPrepended && prevLogicalRange && addedCount > 0) {
+    if (shouldResetViewport) {
+      pendingViewportResetRef.current = false;
+      if (pendingFocusRangeMs) {
+        // Range focus is applied by the dedicated focus effect once data covers
+        // the trade window; avoid a conflicting right-align flash here.
+      } else if (pendingFocusTimeMs !== null) {
+        applyFocusTimeViewport(sortedData.length, pendingFocusTimeMs);
+        lastAppliedFocusKeyRef.current = `${symbol}:${interval}:${pendingFocusTimeMs}:::${focusRevision}`;
+      } else {
+        applyRightAlignedViewport(sortedData.length);
+      }
+    } else if (isPrepended && prevLogicalRange && addedCount > 0) {
+      // If prepended earlier candles, adjust logical range so view doesn't jump
       chart.timeScale().setVisibleLogicalRange({
         from: prevLogicalRange.from + addedCount,
         to: prevLogicalRange.to + addedCount,
@@ -567,7 +616,7 @@ export function ChartCanvas({
     prevBarsCountRef.current = sortedData.length;
     prevFirstTimestampRef.current = firstTimestamp;
     prevLastTimestampRef.current = lastCandle.timestampMs;
-  }, [candles, interval, symbol]);
+  }, [candles, focusRevision, interval, symbol]);
 
   // Keep the replay cut-in candle visible after future candles are masked.
   useEffect(() => {
@@ -626,14 +675,11 @@ export function ChartCanvas({
       return () => window.cancelAnimationFrame(frame);
     }
 
-    const resolvedFocusTimeMs =
-      focusTimeMs ?? candles[0].timestampMs;
+    const resolvedFocusTimeMs = focusTimeMs ?? candles[0].timestampMs;
     let focusIndex = 0;
     let nearestDistanceMs = Number.POSITIVE_INFINITY;
     candles.forEach((candle, index) => {
-      const distanceMs = Math.abs(
-        candle.timestampMs - resolvedFocusTimeMs
-      );
+      const distanceMs = Math.abs(candle.timestampMs - resolvedFocusTimeMs);
       if (distanceMs < nearestDistanceMs) {
         focusIndex = index;
         nearestDistanceMs = distanceMs;
@@ -641,15 +687,26 @@ export function ChartCanvas({
     });
 
     const currentRange = chart.timeScale().getVisibleLogicalRange();
-    const visibleSpan = currentRange
-      ? Math.max(30, currentRange.to - currentRange.from)
-      : 120;
+    if (currentRange) {
+      const span = currentRange.to - currentRange.from;
+      if (Number.isFinite(span) && span >= 10) {
+        lastVisibleSpanRef.current = Math.min(200, Math.max(30, span));
+      }
+    }
+    const visibleSpan = lastVisibleSpanRef.current;
     const rightPadding = 12;
     const frame = window.requestAnimationFrame(() => {
-      chart.timeScale().setVisibleLogicalRange({
-        from: focusIndex - visibleSpan + rightPadding,
-        to: focusIndex + rightPadding,
-      });
+      if (focusIndex >= candles.length - 3) {
+        chart.timeScale().setVisibleLogicalRange({
+          from: candles.length - visibleSpan + rightPadding,
+          to: candles.length - 1 + rightPadding,
+        });
+      } else {
+        chart.timeScale().setVisibleLogicalRange({
+          from: focusIndex - visibleSpan + rightPadding,
+          to: focusIndex + rightPadding,
+        });
+      }
       lastAppliedFocusKeyRef.current = focusKey;
     });
     return () => window.cancelAnimationFrame(frame);
