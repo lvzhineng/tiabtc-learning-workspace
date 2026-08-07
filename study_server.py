@@ -53,10 +53,12 @@ INTERVAL_MILLISECONDS = {
     "W": 7 * 24 * 60 * 60_000,
 }
 FETCH_FAILURE_COOLDOWN_SECONDS = 60
+TRAILING_REFRESH_COOLDOWN_SECONDS = 90
 DATABASE_LOCK = threading.RLock()
 MARKET_FETCH_LOCKS_GUARD = threading.Lock()
 MARKET_FETCH_LOCKS = {}
 MARKET_FETCH_FAILURES = {}
+MARKET_TRAILING_REFRESH_AT = {}
 MARKET_DATA_PROVIDER = CcxtBybitMarketDataProvider()
 MARKET_REFRESHING = set()
 
@@ -404,6 +406,84 @@ def schedule_candle_refresh(symbol, interval, start_timestamp, end_timestamp):
     ).start()
 
 
+def current_open_candle_timestamp(interval, now_timestamp=None):
+    now_timestamp = int(time.time() * 1000) if now_timestamp is None else now_timestamp
+    interval_milliseconds = INTERVAL_MILLISECONDS[interval]
+    alignment_offset = 4 * 86_400_000 if interval == "W" else 0
+    return (
+        (now_timestamp - alignment_offset) // interval_milliseconds * interval_milliseconds
+        + alignment_offset
+    )
+
+
+def latest_closed_candle_timestamp(interval, now_timestamp=None):
+    return current_open_candle_timestamp(interval, now_timestamp) - INTERVAL_MILLISECONDS[interval]
+
+
+def trailing_refresh_bar_count(interval):
+    # Incomplete daily/weekly bars are often cached once and then never updated,
+    # which creates fake open/close price gaps. Always refresh a short trailing window.
+    if interval == "W":
+        return 4
+    if interval == "D":
+        return 14
+    if interval in {"240", "60"}:
+        return 8
+    return 5
+
+
+def refresh_trailing_candles(symbol, interval, end_timestamp):
+    """Force-upsert recent candles even when the cache range looks covered."""
+    fetch_key = (symbol, interval)
+    now_monotonic = time.monotonic()
+    last_refresh_at = MARKET_TRAILING_REFRESH_AT.get(fetch_key, 0)
+    if now_monotonic - last_refresh_at < TRAILING_REFRESH_COOLDOWN_SECONDS:
+        return 0
+
+    interval_milliseconds = INTERVAL_MILLISECONDS[interval]
+    bar_count = trailing_refresh_bar_count(interval)
+    open_ts = current_open_candle_timestamp(interval, end_timestamp)
+    refresh_end = min(end_timestamp, open_ts + interval_milliseconds - 1)
+    refresh_start = open_ts - interval_milliseconds * (bar_count - 1)
+    if refresh_end < refresh_start:
+        return 0
+
+    with market_fetch_lock(symbol, interval):
+        # Re-check cooldown under the lock so concurrent callers share one fetch.
+        last_refresh_at = MARKET_TRAILING_REFRESH_AT.get(fetch_key, 0)
+        if time.monotonic() - last_refresh_at < TRAILING_REFRESH_COOLDOWN_SECONDS:
+            return 0
+        failed_at, failed_message = MARKET_FETCH_FAILURES.get(fetch_key, (0, ""))
+        if failed_message and time.monotonic() - failed_at < FETCH_FAILURE_COOLDOWN_SECONDS:
+            return 0
+        try:
+            fetched = fetch_market_candles(
+                symbol,
+                interval,
+                refresh_start,
+                refresh_end,
+            )
+            if fetched:
+                save_candles(
+                    symbol,
+                    interval,
+                    refresh_start,
+                    refresh_end,
+                    fetched,
+                )
+            MARKET_FETCH_FAILURES.pop(fetch_key, None)
+            MARKET_TRAILING_REFRESH_AT[fetch_key] = time.monotonic()
+            print(
+                f"[market] trailing-refresh {symbol} {interval} "
+                f"bars={len(fetched)} window={bar_count}",
+                flush=True,
+            )
+            return len(fetched)
+        except RuntimeError as error:
+            MARKET_FETCH_FAILURES[fetch_key] = (time.monotonic(), str(error))
+            return 0
+
+
 def load_candle_range(symbol, interval, start_timestamp, end_timestamp, offline=None):
     source = "sqlite"
     warning = ""
@@ -412,6 +492,12 @@ def load_candle_range(symbol, interval, start_timestamp, end_timestamp, offline=
     candles = list_candles(symbol, interval, start_timestamp, end_timestamp)
     if not covered and not offline and candles:
         schedule_candle_refresh(symbol, interval, start_timestamp, end_timestamp)
+        # Still refresh the trailing window now so incomplete daily/weekly bars
+        # are not served forever from a previously closed cache range.
+        refreshed = refresh_trailing_candles(symbol, interval, end_timestamp)
+        if refreshed:
+            source = "bybit"
+            candles = list_candles(symbol, interval, start_timestamp, end_timestamp)
         return candles, source, warning
     if not covered and not offline:
         fetch_key = (symbol, interval)
@@ -475,23 +561,16 @@ def load_candle_range(symbol, interval, start_timestamp, end_timestamp, offline=
                 start_timestamp,
                 end_timestamp,
             )
+    elif covered and not offline:
+        refreshed = refresh_trailing_candles(symbol, interval, end_timestamp)
+        if refreshed:
+            source = "bybit"
     candles = list_candles(symbol, interval, start_timestamp, end_timestamp)
     if offline and not covered:
         warning = "仅本地模式：该时间范围的缓存不完整"
     if not candles and warning:
         raise RuntimeError(warning)
     return candles, source, warning
-
-
-def latest_closed_candle_timestamp(interval, now_timestamp=None):
-    now_timestamp = int(time.time() * 1000) if now_timestamp is None else now_timestamp
-    interval_milliseconds = INTERVAL_MILLISECONDS[interval]
-    alignment_offset = 4 * 86_400_000 if interval == "W" else 0
-    current_open = (
-        (now_timestamp - alignment_offset) // interval_milliseconds * interval_milliseconds
-        + alignment_offset
-    )
-    return current_open - interval_milliseconds
 
 
 def load_chart_candles(symbol, interval, anchor_timestamp):
@@ -699,7 +778,7 @@ def save_drawing(payload):
                 drawing["toolType"], encoded, created_at, now,
             ),
         )
-    return drawing
+    return {**drawing, "interval": interval}
 
 
 def replace_drawings(payload):
@@ -717,7 +796,13 @@ def replace_drawings(payload):
     validated = []
     seen_ids = set()
     for drawing in drawings:
-        drawing_payload = {**drawing, "videoId": video_id, "symbol": symbol, "interval": interval}
+        drawing_interval = str(drawing.get("interval", interval))
+        drawing_payload = {
+            **drawing,
+            "videoId": video_id,
+            "symbol": symbol,
+            "interval": drawing_interval,
+        }
         item_video, item_symbol, item_interval, normalized, encoded = validate_drawing(drawing_payload)
         if normalized["id"] in seen_ids:
             raise ValueError("画图 ID 重复")
@@ -749,7 +834,10 @@ def replace_drawings(payload):
                 for item_video, item_symbol, item_interval, drawing, encoded in validated
             ],
         )
-    return [item[3] for item in validated]
+    return [
+        {**normalized, "interval": item_interval}
+        for _item_video, _item_symbol, item_interval, normalized, _encoded in validated
+    ]
 
 
 def list_drawings(video_id, symbol, interval):
@@ -758,12 +846,15 @@ def list_drawings(video_id, symbol, interval):
         raise ValueError("视频 ID 无效")
     with DATABASE_LOCK, database() as connection:
         rows = connection.execute(
-            """SELECT tool_json FROM chart_drawings
+            """SELECT interval, tool_json FROM chart_drawings
                WHERE symbol = ?
                ORDER BY created_at ASC""",
             (symbol,),
         ).fetchall()
-    return [json.loads(row["tool_json"]) for row in rows]
+    return [
+        {**json.loads(row["tool_json"]), "interval": row["interval"]}
+        for row in rows
+    ]
 
 
 

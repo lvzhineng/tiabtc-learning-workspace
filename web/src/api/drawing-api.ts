@@ -7,6 +7,7 @@ type DrawingResponse = {
   toolType: string;
   points: Array<{ timestamp: number; price: number }>;
   options: Record<string, unknown>;
+  interval?: ReviewTimeframe;
 };
 
 type DrawingsResponse = {
@@ -23,7 +24,7 @@ function toPersistedDrawing(
     id: raw.id,
     videoId,
     symbol,
-    interval,
+    interval: raw.interval || interval,
     toolType: raw.toolType,
     points: raw.points || [],
     options: raw.options || {},
@@ -78,6 +79,7 @@ export async function replaceDrawings(
       interval,
       drawings: drawings.map((drawing) => ({
         id: drawing.id,
+        interval: drawing.interval,
         toolType: drawing.toolType,
         points: drawing.points,
         options: drawing.options,

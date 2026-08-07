@@ -2,8 +2,8 @@
   max-width: 1360px;
   width: 100%;
   margin: 0 auto;
-  padding: 24px 20px 48px;
-  overflow-y: auto;
+  padding: 28px 24px 56px;
+  overflow: auto;
   height: 100%;
 }
 
@@ -12,67 +12,100 @@
   align-items: flex-start;
   justify-content: space-between;
   gap: 24px;
-  margin-bottom: 24px;
+  margin-bottom: 22px;
 }
 
 .learning-eyebrow {
-  margin: 0 0 6px;
+  margin: 0 0 8px;
   color: var(--accent-blue);
-  font-weight: 700;
-  letter-spacing: 0.08em;
-  font-size: 13px;
+  font-weight: 600;
+  letter-spacing: 0.1em;
+  font-size: 11px;
   text-transform: uppercase;
 }
 
 .learning-title {
   margin: 0;
-  font-size: clamp(24px, 3vw, 32px);
-  letter-spacing: -0.02em;
-  font-weight: 800;
+  font-size: clamp(26px, 3vw, 34px);
+  letter-spacing: -0.03em;
+  font-weight: 700;
   color: var(--text-primary);
+  line-height: 1.15;
 }
 
 .learning-subtitle {
-  margin: 8px 0 0;
+  margin: 10px 0 0;
+  max-width: 640px;
   color: var(--text-secondary);
-  line-height: 1.6;
+  line-height: 1.65;
   font-size: 14px;
+}
+
+.learning-hero-aside {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-shrink: 0;
+}
+
+.learning-save-pill {
+  padding: 6px 12px;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 600;
+  background: color-mix(in srgb, var(--accent-green) 14%, transparent);
+  color: var(--accent-green);
+  border: 1px solid color-mix(in srgb, var(--accent-green) 40%, transparent);
 }
 
 .learning-stats-grid {
   display: grid;
-  grid-template-columns: repeat(4, minmax(120px, 1fr)) 2fr;
-  gap: 14px;
-  margin-bottom: 20px;
+  grid-template-columns: repeat(4, minmax(110px, 1fr)) minmax(220px, 2fr);
+  gap: 12px;
+  margin-bottom: 16px;
 }
 
-.learning-metric-card, .learning-progress-card {
+.learning-metric-card,
+.learning-progress-card {
   background-color: var(--bg-dark-800);
   border: 1px solid var(--border-color);
   border-radius: var(--radius-md);
-  padding: 16px 18px;
-  box-shadow: var(--shadow-main);
-  transition: all 0.2s ease;
+  padding: 14px 16px;
+  box-shadow: var(--shadow-soft);
+  transition: border-color 0.2s ease, transform 0.2s ease;
 }
 
 .learning-metric-card:hover {
   border-color: var(--border-active);
-  transform: translateY(-2px);
+  transform: translateY(-1px);
 }
 
 .learning-metric-label {
   color: var(--text-secondary);
-  font-size: 13px;
+  font-size: 12px;
   font-weight: 500;
 }
 
 .learning-metric-value {
   display: block;
   margin-top: 6px;
-  font-size: 26px;
-  font-weight: 800;
+  font-size: 24px;
+  font-weight: 700;
   color: var(--text-primary);
   font-family: var(--font-mono);
+  letter-spacing: -0.02em;
+}
+
+.learning-metric-value.is-green {
+  color: var(--accent-green);
+}
+
+.learning-metric-value.is-orange {
+  color: var(--accent-orange);
+}
+
+.learning-metric-value.is-blue {
+  color: var(--accent-blue);
 }
 
 .learning-progress-head {
@@ -83,8 +116,15 @@
   align-items: baseline;
 }
 
+.learning-progress-percent {
+  font-size: 18px;
+  font-weight: 700;
+  font-family: var(--font-mono);
+  color: var(--text-primary);
+}
+
 .learning-progress-track {
-  height: 10px;
+  height: 8px;
   background-color: var(--bg-dark-700);
   border-radius: 999px;
   overflow: hidden;
@@ -102,8 +142,8 @@
   background-color: var(--bg-dark-800);
   border: 1px solid var(--border-color);
   border-radius: var(--radius-md);
-  padding: 16px;
-  margin-bottom: 16px;
+  padding: 14px;
+  margin-bottom: 14px;
 }
 
 .learning-filter-row {
@@ -117,11 +157,63 @@
   margin-top: 12px;
 }
 
+.learning-search {
+  flex: 1 1 280px;
+  position: relative;
+  display: flex;
+  align-items: center;
+  min-width: 0;
+}
+
+.learning-search-icon {
+  position: absolute;
+  left: 10px;
+  color: var(--text-muted);
+  pointer-events: none;
+}
+
+.learning-search input {
+  width: 100%;
+  height: var(--control-height);
+  padding: 0 12px 0 34px;
+  background: var(--bg-dark-700);
+  color: var(--text-primary);
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-sm);
+  font-size: 13px;
+  font-family: inherit;
+  outline: none;
+}
+
+.learning-search input:focus {
+  border-color: var(--accent-blue);
+}
+
+.learning-filters-card select {
+  height: var(--control-height);
+  background: var(--bg-dark-700);
+  color: var(--text-primary);
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-sm);
+  padding: 0 10px;
+  font-size: 13px;
+  font-family: inherit;
+  cursor: pointer;
+  outline: none;
+}
+
+.learning-chip-group {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
 .learning-chip {
   border-radius: 999px;
   padding: 6px 14px;
-  font-size: 13px;
+  font-size: 12px;
   font-weight: 500;
+  font-family: inherit;
   background: var(--bg-dark-700);
   border: 1px solid var(--border-color);
   color: var(--text-secondary);
@@ -138,24 +230,53 @@
   background: var(--accent-blue);
   color: #ffffff;
   border-color: var(--accent-blue);
-  font-weight: 700;
+  font-weight: 600;
+}
+
+.learning-context-bar {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+  font-size: 13px;
+  color: var(--text-secondary);
+  margin-bottom: 10px;
+}
+
+.learning-context-bar strong {
+  color: var(--text-primary);
+  font-weight: 600;
+}
+
+.learning-empty-state,
+.learning-loading-state {
+  text-align: center;
+  padding: 48px 20px;
+  color: var(--text-secondary);
+}
+
+.learning-loading-state .spin {
+  display: block;
+  margin: 0 auto 12px;
+  color: var(--accent-blue);
 }
 
 .learning-table-wrap {
   background: var(--bg-dark-800);
   border: 1px solid var(--border-color);
   border-radius: var(--radius-md);
-  box-shadow: var(--shadow-main);
-  overflow-x: auto;
+  box-shadow: var(--shadow-soft);
+  /* Keep overflow visible so thead sticky can attach to .learning-container. */
 }
 
 .learning-table {
   width: 100%;
   border-collapse: collapse;
-  min-width: 1000px;
+  min-width: 960px;
 }
 
-.learning-table th, .learning-table td {
+.learning-table th,
+.learning-table td {
   padding: 12px 14px;
   border-bottom: 1px solid var(--border-color);
   text-align: left;
@@ -165,25 +286,144 @@
 .learning-table th {
   background: var(--bg-dark-700);
   color: var(--text-secondary);
-  font-size: 12px;
-  font-weight: 700;
+  font-size: 11px;
+  font-weight: 600;
   text-transform: uppercase;
-  letter-spacing: 0.04em;
+  letter-spacing: 0.05em;
   position: sticky;
   top: 0;
   z-index: 2;
 }
 
 .learning-table tr:hover {
-  background-color: var(--bg-dark-700);
+  background-color: color-mix(in srgb, var(--bg-dark-700) 70%, transparent);
 }
 
 .learning-table tr.status-learned {
-  background-image: linear-gradient(90deg, rgba(8, 153, 129, 0.08), transparent 40%);
+  background-image: linear-gradient(
+    90deg,
+    color-mix(in srgb, var(--accent-green) 10%, transparent),
+    transparent 42%
+  );
 }
 
 .learning-table tr.status-learning {
-  background-image: linear-gradient(90deg, rgba(41, 98, 255, 0.08), transparent 40%);
+  background-image: linear-gradient(
+    90deg,
+    color-mix(in srgb, var(--accent-blue) 10%, transparent),
+    transparent 42%
+  );
+}
+
+.learning-col-index {
+  width: 60px;
+}
+
+.learning-col-bookmark {
+  width: 50px;
+}
+
+.learning-col-date {
+  width: 130px;
+}
+
+.learning-col-status {
+  width: 118px;
+}
+
+.learning-col-actions {
+  width: 140px;
+}
+
+.learning-index {
+  font-family: var(--font-mono);
+  font-weight: 600;
+  color: var(--text-muted);
+}
+
+.learning-date-main {
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.learning-date-time {
+  margin-top: 2px;
+  font-size: 11px;
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+}
+
+.learning-title-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+}
+
+.learning-video-link {
+  color: var(--accent-blue);
+  font-weight: 600;
+  text-decoration: none;
+  line-height: 1.5;
+}
+
+.learning-video-link:hover {
+  text-decoration: underline;
+}
+
+.learning-external-link {
+  color: var(--text-muted);
+  display: inline-flex;
+  margin-top: 3px;
+}
+
+.learning-external-link:hover {
+  color: var(--text-primary);
+}
+
+.learning-note-block {
+  margin-top: 6px;
+}
+
+.learning-note-toggle {
+  background: none;
+  border: none;
+  color: var(--text-muted);
+  font-size: 12px;
+  font-family: inherit;
+  cursor: pointer;
+  padding: 0;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.learning-note-toggle.has-note {
+  color: var(--accent-blue);
+}
+
+.learning-note-toggle:hover {
+  color: var(--text-primary);
+}
+
+.learning-note-input {
+  display: block;
+  width: 100%;
+  max-width: 560px;
+  margin-top: 6px;
+  background: var(--bg-dark-900);
+  color: var(--text-primary);
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-sm);
+  padding: 8px 10px;
+  font-size: 12px;
+  font-family: inherit;
+  line-height: 1.5;
+  resize: vertical;
+  outline: none;
+}
+
+.learning-note-input:focus {
+  border-color: var(--accent-blue);
 }
 
 .bookmark-star {
@@ -192,7 +432,17 @@
   cursor: pointer;
   font-size: 18px;
   color: var(--text-muted);
-  transition: color 0.15s ease;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 2px;
+  border-radius: 4px;
+  transition: color 0.15s ease, background 0.15s ease;
+}
+
+.bookmark-star:hover {
+  background: var(--bg-dark-700);
+  color: var(--accent-orange);
 }
 
 .bookmark-star.active {
@@ -204,10 +454,20 @@
   color: var(--text-primary);
   border: 1px solid var(--border-color);
   border-radius: var(--radius-sm);
-  padding: 4px 8px;
+  padding: 5px 8px;
   font-size: 12px;
   font-weight: 600;
+  font-family: inherit;
   cursor: pointer;
+  outline: none;
+}
+
+.status-badge-select.status-learned {
+  border-color: color-mix(in srgb, var(--accent-green) 55%, var(--border-color));
+}
+
+.status-badge-select.status-learning {
+  border-color: color-mix(in srgb, var(--accent-blue) 55%, var(--border-color));
 }
 
 .learning-pagination {
@@ -218,4 +478,42 @@
   flex-wrap: wrap;
   margin-top: 20px;
   color: var(--text-secondary);
+}
+
+.learning-pagination button {
+  height: 30px;
+  padding: 0 12px;
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-sm);
+  background: var(--bg-dark-800);
+  color: var(--text-secondary);
+  font-size: 12px;
+  font-weight: 600;
+  font-family: inherit;
+  cursor: pointer;
+}
+
+.learning-pagination button:hover:not(:disabled) {
+  color: var(--text-primary);
+  border-color: var(--border-active);
+}
+
+.learning-pagination button:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.learning-pagination-label {
+  font-size: 13px;
+  margin: 0 8px;
+}
+
+@media (max-width: 1100px) {
+  .learning-stats-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .learning-progress-card {
+    grid-column: 1 / -1;
+  }
 }

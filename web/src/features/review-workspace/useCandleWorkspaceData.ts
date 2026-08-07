@@ -5,7 +5,11 @@ import {
   fetchLaterCandles,
   fetchReplayCandles,
 } from '@/api/market-api';
-import { TIMEFRAME_DISPLAY_MAP, type ReviewTimeframe } from '@/domain/timeframe';
+import {
+  TIMEFRAME_DISPLAY_MAP,
+  TIMEFRAME_SECONDS_MAP,
+  type ReviewTimeframe,
+} from '@/domain/timeframe';
 import type { Candlestick } from '@/domain/candle';
 import type { ReplayState } from '@/features/replay/replay-state';
 
@@ -40,7 +44,8 @@ function mergeCandles(
 export function useCandleWorkspaceData(
   symbol: string,
   timeframe: ReviewTimeframe,
-  replayState: ReplayState
+  replayState: ReplayState,
+  idleAnchorTimeMs: number | null = null
 ): CandleWorkspaceData {
   const [candles, setCandles] = useState<Candlestick[]>([]);
   const [loading, setLoading] = useState(true);
@@ -53,11 +58,16 @@ export function useCandleWorkspaceData(
   const futureRequestControllerRef = useRef<AbortController | null>(null);
   const futurePrefetchRef = useRef<Promise<number> | null>(null);
   const contextKeyRef = useRef('');
+  const contextRevisionRef = useRef(0);
 
   const replayMode =
     replayState.status === 'idle' ? 'live' : replayState.context.mode;
   const replayAnchorTimeMs =
     replayState.status === 'idle' ? 0 : replayState.startTimeMs;
+  const chartAnchorTimeMs =
+    replayState.status === 'idle' ? idleAnchorTimeMs : null;
+  // Idle switch anchors are one-shot fetch hints and must not stay in the
+  // context key, otherwise live mode remains pinned to a historical window.
   const contextKey = useMemo(
     () => `${symbol}:${timeframe}:${replayMode}:${replayAnchorTimeMs}`,
     [replayAnchorTimeMs, replayMode, symbol, timeframe]
@@ -71,9 +81,13 @@ export function useCandleWorkspaceData(
     futureRequestControllerRef.current = null;
     futurePrefetchRef.current = null;
 
+    const contextRevision = ++contextRevisionRef.current;
     const controller = new AbortController();
     mainRequestRef.current = controller;
     contextKeyRef.current = contextKey;
+    // Do not briefly render the previous interval's candles under the new
+    // interval. That would make the chart retain an unrelated logical range.
+    setCandles([]);
     setLoading(true);
     setIsLoadingEarlier(false);
     setError(null);
@@ -84,7 +98,7 @@ export function useCandleWorkspaceData(
         ? fetchChartCandles(
             symbol,
             timeframe,
-            Math.floor(Date.now() / 60_000) * 60_000,
+            chartAnchorTimeMs ?? Math.floor(Date.now() / 60_000) * 60_000,
             controller.signal
           )
         : fetchReplayCandles(
@@ -97,7 +111,12 @@ export function useCandleWorkspaceData(
 
     void request
       .then((data) => {
-        if (controller.signal.aborted) return;
+        if (
+          controller.signal.aborted ||
+          contextRevisionRef.current !== contextRevision
+        ) {
+          return;
+        }
         setCandles(data);
         if (data.length === 0) {
           setOfflineWarning(
@@ -106,7 +125,12 @@ export function useCandleWorkspaceData(
         }
       })
       .catch((requestError) => {
-        if (controller.signal.aborted) return;
+        if (
+          controller.signal.aborted ||
+          contextRevisionRef.current !== contextRevision
+        ) {
+          return;
+        }
         setError(
           requestError instanceof Error
             ? requestError.message
@@ -114,7 +138,12 @@ export function useCandleWorkspaceData(
         );
       })
       .finally(() => {
-        if (!controller.signal.aborted) setLoading(false);
+        if (
+          !controller.signal.aborted &&
+          contextRevisionRef.current === contextRevision
+        ) {
+          setLoading(false);
+        }
       });
 
     return () => {
@@ -136,6 +165,7 @@ export function useCandleWorkspaceData(
 
     const controller = new AbortController();
     const requestContextKey = contextKeyRef.current;
+    const requestContextRevision = contextRevisionRef.current;
     const earliestTimestamp = candles[0].timestampMs;
     earlierRequestRef.current = controller;
     setIsLoadingEarlier(true);
@@ -150,7 +180,8 @@ export function useCandleWorkspaceData(
       .then((earlierCandles) => {
         if (
           controller.signal.aborted ||
-          contextKeyRef.current !== requestContextKey
+          contextKeyRef.current !== requestContextKey ||
+          contextRevisionRef.current !== requestContextRevision
         ) {
           return;
         }
@@ -177,6 +208,7 @@ export function useCandleWorkspaceData(
 
     const latestTimestamp = candles[candles.length - 1].timestampMs;
     const requestContextKey = contextKeyRef.current;
+    const requestContextRevision = contextRevisionRef.current;
     const controller = new AbortController();
     futureRequestControllerRef.current = controller;
     const request = fetchLaterCandles(
@@ -188,7 +220,26 @@ export function useCandleWorkspaceData(
       controller.signal
     )
       .then((laterCandles) => {
-        if (contextKeyRef.current !== requestContextKey) return -1;
+        if (
+          controller.signal.aborted ||
+          contextKeyRef.current !== requestContextKey ||
+          contextRevisionRef.current !== requestContextRevision
+        ) {
+          return -1;
+        }
+        const firstLaterCandle = laterCandles[0];
+        const maxAllowedGapMs = TIMEFRAME_SECONDS_MAP[timeframe] * 8_000;
+        if (
+          firstLaterCandle &&
+          firstLaterCandle.timestampMs - latestTimestamp > maxAllowedGapMs
+        ) {
+          console.warn(
+            '拒绝合并与当前回放不连续的后续 K 线:',
+            latestTimestamp,
+            firstLaterCandle.timestampMs
+          );
+          return -2;
+        }
         setCandles((current) =>
           mergeCandles(current, laterCandles, 'after')
         );

@@ -24,6 +24,25 @@ function initialWorkspaceTab(): WorkspaceTab {
   return tab === 'review' || tab === 'bitlang' ? tab : 'learning';
 }
 
+function initialVideoReviewContext(): VideoReviewContext | null {
+  const params = new URLSearchParams(window.location.search);
+  const videoId = params.get('videoId');
+  const title = params.get('videoTitle');
+  const symbol = params.get('symbol');
+  const anchorTimeMs = Number(params.get('anchorTimeMs'));
+  if (
+    params.get('tab') !== 'review' ||
+    !videoId ||
+    !title ||
+    !symbol ||
+    !Number.isFinite(anchorTimeMs) ||
+    anchorTimeMs <= 0
+  ) {
+    return null;
+  }
+  return { mode: 'video', videoId, title, symbol, anchorTimeMs };
+}
+
 function initialThemeMode(): ThemeMode {
   try {
     const savedTheme =
@@ -44,7 +63,8 @@ export function AppShell() {
   const [error, setError] = useState<string | null>(null);
   const [themeMode, setThemeMode] = useState<ThemeMode>(initialThemeMode);
 
-  const [videoReviewContext, setVideoReviewContext] = useState<VideoReviewContext | null>(null);
+  const [videoReviewContext, setVideoReviewContext] =
+    useState<VideoReviewContext | null>(initialVideoReviewContext);
 
   const checkConnection = async () => {
     setLoading(true);
@@ -84,6 +104,40 @@ export function AppShell() {
     window.history.replaceState(null, '', url);
   }, []);
 
+  const openReviewWindow = useCallback((context?: VideoReviewContext) => {
+    const url = new URL(window.location.href);
+    url.searchParams.set('tab', 'review');
+    if (context) {
+      url.searchParams.set('videoId', context.videoId);
+      url.searchParams.set('videoTitle', context.title);
+      url.searchParams.set('symbol', context.symbol);
+      url.searchParams.set('anchorTimeMs', String(context.anchorTimeMs));
+    } else {
+      url.searchParams.delete('videoId');
+      url.searchParams.delete('videoTitle');
+      url.searchParams.delete('symbol');
+      url.searchParams.delete('anchorTimeMs');
+    }
+
+    const popup = window.open(
+      url.toString(),
+      'tiabtc-review',
+      'popup=yes,width=1440,height=960'
+    );
+    if (popup) {
+      try {
+        popup.focus();
+      } catch {
+        // Focus may fail across browsers; the window is still opened.
+      }
+      return;
+    }
+
+    // Popup blocked: fall back to the in-page review workspace.
+    setVideoReviewContext(context ?? null);
+    navigateToTab('review');
+  }, [navigateToTab]);
+
   const handleOpenVideoReview = (video: VideoItem) => {
     const anchorTimeMs = parseVideoPublishedTimeMs(video.date, video.time);
     const ctx: VideoReviewContext = {
@@ -93,83 +147,52 @@ export function AppShell() {
       symbol: 'BTCUSDT',
       anchorTimeMs,
     };
-    setVideoReviewContext(ctx);
-    navigateToTab('review');
+    openReviewWindow(ctx);
   };
 
   return (
     <div className="app-shell">
       <header className="app-header">
         <div className="app-title">
-          <Activity size={20} color="var(--accent-blue)" />
-          <span>TiaBTC Workspace</span>
+          <span className="app-title-mark" aria-hidden="true">
+            <Activity size={16} />
+          </span>
+          <span className="app-title-text">TiaBTC Workspace</span>
 
-          {/* Top Navigation Tabs */}
-          <div style={{ display: 'flex', gap: '4px', marginLeft: '24px' }}>
+          <nav className="app-nav" aria-label="工作台导航">
             <button
+              type="button"
+              className={`app-nav-btn ${activeTab === 'learning' ? 'active' : ''}`}
               onClick={() => navigateToTab('learning')}
-              style={{
-                background: activeTab === 'learning' ? 'var(--accent-blue)' : 'var(--bg-dark-700)',
-                color: activeTab === 'learning' ? '#fff' : 'var(--text-secondary)',
-                border: 'none',
-                borderRadius: 'var(--radius-sm)',
-                padding: '4px 12px',
-                fontSize: '12px',
-                fontWeight: 600,
-                cursor: 'pointer',
-                display: 'inline-flex',
-                alignItems: 'center',
-                gap: '6px',
-              }}
             >
               <BookOpen size={14} />
               <span>顺序学习</span>
             </button>
 
             <button
-              onClick={() => navigateToTab('review')}
-              style={{
-                background: activeTab === 'review' ? 'var(--accent-blue)' : 'var(--bg-dark-700)',
-                color: activeTab === 'review' ? '#fff' : 'var(--text-secondary)',
-                border: 'none',
-                borderRadius: 'var(--radius-sm)',
-                padding: '4px 12px',
-                fontSize: '12px',
-                fontWeight: 600,
-                cursor: 'pointer',
-                display: 'inline-flex',
-                alignItems: 'center',
-                gap: '6px',
-              }}
+              type="button"
+              className={`app-nav-btn ${activeTab === 'review' ? 'active' : ''}`}
+              onClick={() => openReviewWindow()}
             >
               <BarChart2 size={14} />
               <span>行情复盘</span>
             </button>
 
             <button
+              type="button"
+              className={`app-nav-btn ${activeTab === 'bitlang' ? 'active' : ''}`}
               onClick={() => navigateToTab('bitlang')}
-              style={{
-                background: activeTab === 'bitlang' ? 'var(--accent-blue)' : 'var(--bg-dark-700)',
-                color: activeTab === 'bitlang' ? '#fff' : 'var(--text-secondary)',
-                border: 'none',
-                borderRadius: 'var(--radius-sm)',
-                padding: '4px 12px',
-                fontSize: '12px',
-                fontWeight: 600,
-                cursor: 'pointer',
-                display: 'inline-flex',
-                alignItems: 'center',
-                gap: '6px',
-              }}
             >
               <ListChecks size={14} />
               <span>bit浪浪实盘分析</span>
             </button>
-          </div>
+          </nav>
         </div>
 
-        <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+        <div className="app-header-actions">
           <button
+            type="button"
+            className="app-icon-btn"
             onClick={() =>
               setThemeMode((current) =>
                 current === 'dark' ? 'light' : 'dark'
@@ -179,18 +202,6 @@ export function AppShell() {
             aria-label={
               themeMode === 'dark' ? '切换到亮色主题' : '切换到暗色主题'
             }
-            style={{
-              width: '30px',
-              height: '30px',
-              background: 'var(--bg-dark-700)',
-              border: '1px solid var(--border-color)',
-              borderRadius: 'var(--radius-sm)',
-              color: 'var(--text-secondary)',
-              cursor: 'pointer',
-              display: 'inline-flex',
-              alignItems: 'center',
-              justifyContent: 'center',
-            }}
           >
             {themeMode === 'dark' ? <Sun size={15} /> : <Moon size={15} />}
           </button>
@@ -211,16 +222,11 @@ export function AppShell() {
             </span>
           </div>
           <button
+            type="button"
+            className="app-icon-btn ghost"
             onClick={checkConnection}
             title="刷新连接"
-            style={{
-              background: 'none',
-              border: 'none',
-              color: 'var(--text-secondary)',
-              cursor: 'pointer',
-              display: 'flex',
-              alignItems: 'center',
-            }}
+            aria-label="刷新连接"
           >
             <RefreshCw size={14} className={loading ? 'spin' : ''} />
           </button>
@@ -229,11 +235,7 @@ export function AppShell() {
 
       <main className="app-body">
         {activeTab === 'learning' ? (
-          <LearningWorkspace
-            onOpenVideoReview={handleOpenVideoReview}
-            onOpenReview={() => navigateToTab('review')}
-            onOpenBitlang={() => navigateToTab('bitlang')}
-          />
+          <LearningWorkspace onOpenVideoReview={handleOpenVideoReview} />
         ) : activeTab === 'review' ? (
           <ChartWorkspace
             initialVideoContext={videoReviewContext}

@@ -403,7 +403,11 @@ export function BitlangTradeWorkspace({
                     type="button"
                     key={item}
                     className={item === timeframe ? 'active' : ''}
-                    onClick={() => setTimeframe(item)}
+                    onClick={() => {
+                      if (item === timeframe) return;
+                      setTimeframe(item);
+                      setFocusRevision((revision) => revision + 1);
+                    }}
                   >
                     {timeframeLabel(item)}
                   </button>
