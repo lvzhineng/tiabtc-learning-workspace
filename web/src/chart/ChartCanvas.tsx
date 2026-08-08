@@ -80,6 +80,27 @@ function findNearestCandle(
     : right;
 }
 
+/** Place the focus bar near 80% of the viewport, leaving ~20% room on the right. */
+const FOCUS_VIEWPORT_RATIO = 0.8;
+
+function clampVisibleSpan(span: number): number {
+  if (!Number.isFinite(span) || span < 10) return 120;
+  return Math.min(200, Math.max(30, span));
+}
+
+function logicalRangeForFocus(
+  focusIndex: number,
+  visibleSpan: number,
+  anchorRatio = FOCUS_VIEWPORT_RATIO
+): { from: number; to: number } {
+  const span = clampVisibleSpan(visibleSpan);
+  const ratio = Math.min(0.95, Math.max(0.5, anchorRatio));
+  return {
+    from: focusIndex - span * ratio,
+    to: focusIndex + span * (1 - ratio),
+  };
+}
+
 function chartThemeColors(themeMode: 'dark' | 'light') {
   const isLight = themeMode === 'light';
   return {
@@ -242,7 +263,9 @@ export function ChartCanvas({
             utcTimestampToTimestampMs(time),
             intervalRef.current
           ),
-        rightOffset: 12,
+        // Padding is controlled by logicalRangeForFocus (~20% right of the
+        // focus/live tip). A fixed rightOffset would push the 80% anchor left.
+        rightOffset: 0,
         barSpacing: 6,
         shiftVisibleRangeOnNewBar: false,
       },
@@ -445,21 +468,19 @@ export function ChartCanvas({
       if (!range) return;
       const span = range.to - range.from;
       if (Number.isFinite(span) && span >= 10) {
-        lastVisibleSpanRef.current = Math.min(200, Math.max(30, span));
+        lastVisibleSpanRef.current = clampVisibleSpan(span);
       }
     };
 
     const applyRightAlignedViewport = (barCount: number) => {
-      const visibleSpan = lastVisibleSpanRef.current;
-      const rightPadding = 12;
-      chart.timeScale().setVisibleLogicalRange({
-        from: barCount - visibleSpan + rightPadding,
-        to: barCount - 1 + rightPadding,
-      });
+      // Live tip: keep the newest bar at the same ~80% anchor as replay focus.
+      chart.timeScale().setVisibleLogicalRange(
+        logicalRangeForFocus(barCount - 1, lastVisibleSpanRef.current)
+      );
     };
 
     const applyFocusTimeViewport = (
-      barCount: number,
+      _barCount: number,
       targetTimeMs: number
     ) => {
       let focusIndex = 0;
@@ -471,17 +492,11 @@ export function ChartCanvas({
           nearestDistanceMs = distanceMs;
         }
       }
-      const visibleSpan = lastVisibleSpanRef.current;
-      const rightPadding = 12;
-      // Near the tip: keep live right-align instead of pinning an early bar.
-      if (focusIndex >= barCount - 3) {
-        applyRightAlignedViewport(barCount);
-        return focusIndex;
-      }
-      chart.timeScale().setVisibleLogicalRange({
-        from: focusIndex - visibleSpan + rightPadding,
-        to: focusIndex + rightPadding,
-      });
+      // Replay cut-in / explicit focus must stay at ~80% even when the focused
+      // candle is also the last visible bar (future candles are masked).
+      chart.timeScale().setVisibleLogicalRange(
+        logicalRangeForFocus(focusIndex, lastVisibleSpanRef.current)
+      );
       return focusIndex;
     };
 
@@ -690,23 +705,13 @@ export function ChartCanvas({
     if (currentRange) {
       const span = currentRange.to - currentRange.from;
       if (Number.isFinite(span) && span >= 10) {
-        lastVisibleSpanRef.current = Math.min(200, Math.max(30, span));
+        lastVisibleSpanRef.current = clampVisibleSpan(span);
       }
     }
-    const visibleSpan = lastVisibleSpanRef.current;
-    const rightPadding = 12;
     const frame = window.requestAnimationFrame(() => {
-      if (focusIndex >= candles.length - 3) {
-        chart.timeScale().setVisibleLogicalRange({
-          from: candles.length - visibleSpan + rightPadding,
-          to: candles.length - 1 + rightPadding,
-        });
-      } else {
-        chart.timeScale().setVisibleLogicalRange({
-          from: focusIndex - visibleSpan + rightPadding,
-          to: focusIndex + rightPadding,
-        });
-      }
+      chart.timeScale().setVisibleLogicalRange(
+        logicalRangeForFocus(focusIndex, lastVisibleSpanRef.current)
+      );
       lastAppliedFocusKeyRef.current = focusKey;
     });
     return () => window.cancelAnimationFrame(frame);
