@@ -422,21 +422,24 @@ def latest_closed_candle_timestamp(interval, now_timestamp=None):
 
 
 def trailing_refresh_bar_count(interval):
-    # Incomplete daily/weekly bars are often cached once and then never updated,
-    # which creates fake open/close price gaps. Always refresh a short trailing window.
+    # Incomplete higher-timeframe bars are often cached once and then never
+    # updated, which creates fake open/close price gaps. Intraday bars are
+    # refreshed often enough by normal missing-range fetches.
     if interval == "W":
         return 4
     if interval == "D":
         return 14
-    if interval in {"240", "60"}:
-        return 8
-    return 5
+    if interval == "240":
+        return 6
+    return 0
 
 
 def live_trailing_window(interval, now_timestamp=None):
+    bar_count = trailing_refresh_bar_count(interval)
+    if bar_count <= 0:
+        return None
     now_timestamp = int(time.time() * 1000) if now_timestamp is None else now_timestamp
     interval_milliseconds = INTERVAL_MILLISECONDS[interval]
-    bar_count = trailing_refresh_bar_count(interval)
     open_ts = current_open_candle_timestamp(interval, now_timestamp)
     refresh_start = open_ts - interval_milliseconds * (bar_count - 1)
     refresh_end = open_ts + interval_milliseconds - 1
@@ -444,7 +447,10 @@ def live_trailing_window(interval, now_timestamp=None):
 
 
 def request_needs_trailing_refresh(interval, start_timestamp, end_timestamp):
-    refresh_start, refresh_end = live_trailing_window(interval)
+    window = live_trailing_window(interval)
+    if window is None:
+        return False
+    refresh_start, refresh_end = window
     return end_timestamp >= refresh_start and start_timestamp <= refresh_end
 
 
@@ -456,12 +462,18 @@ def refresh_trailing_candles(symbol, interval):
     if now_monotonic - last_refresh_at < TRAILING_REFRESH_COOLDOWN_SECONDS:
         return 0
 
-    refresh_start, refresh_end = live_trailing_window(interval)
+    window = live_trailing_window(interval)
+    if window is None:
+        return 0
+    refresh_start, refresh_end = window
     if refresh_end < refresh_start:
         return 0
 
-    with market_fetch_lock(symbol, interval):
-        # Re-check cooldown under the lock so concurrent callers share one fetch.
+    lock = market_fetch_lock(symbol, interval)
+    # Do not stall interactive chart requests: skip if another fetch is busy.
+    if not lock.acquire(blocking=False):
+        return 0
+    try:
         last_refresh_at = MARKET_TRAILING_REFRESH_AT.get(fetch_key, 0)
         if time.monotonic() - last_refresh_at < TRAILING_REFRESH_COOLDOWN_SECONDS:
             return 0
@@ -494,6 +506,8 @@ def refresh_trailing_candles(symbol, interval):
         except RuntimeError as error:
             MARKET_FETCH_FAILURES[fetch_key] = (time.monotonic(), str(error))
             return 0
+    finally:
+        lock.release()
 
 
 def schedule_trailing_refresh(symbol, interval, start_timestamp, end_timestamp):
