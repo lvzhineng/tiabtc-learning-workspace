@@ -94,6 +94,7 @@ export function PaperTradingPanel({
         </div>
         <button
           onClick={onClosePanel}
+          aria-label="关闭模拟交易面板"
           style={{ background: 'none', border: 'none', color: 'var(--text-muted)', cursor: 'pointer' }}
         >
           <X size={16} />
@@ -168,6 +169,7 @@ export function PaperTradingPanel({
           <span style={{ fontSize: '11px', color: 'var(--text-muted)', width: '48px' }}>开仓价</span>
           <input
             type="number"
+            aria-label="开仓价"
             step="any"
             value={entryPrice}
             onChange={(e) => setEntryPrice(e.target.value)}
@@ -180,6 +182,7 @@ export function PaperTradingPanel({
           <span style={{ fontSize: '11px', color: 'var(--accent-green)', width: '48px' }}>止盈位</span>
           <input
             type="number"
+            aria-label="止盈位"
             step="any"
             value={tpPrice}
             onChange={(e) => setTpPrice(e.target.value)}
@@ -192,6 +195,7 @@ export function PaperTradingPanel({
           <span style={{ fontSize: '11px', color: 'var(--accent-red)', width: '48px' }}>止损位</span>
           <input
             type="number"
+            aria-label="止损位"
             step="any"
             value={slPrice}
             onChange={(e) => setSlPrice(e.target.value)}

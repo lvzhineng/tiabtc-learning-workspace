@@ -36,7 +36,12 @@ type ConfigResponse = {
 };
 
 const CANDLE_CACHE_MAX_ENTRIES = 48;
-const candleCache = new Map<string, Candlestick[]>();
+const LIVE_CANDLE_CACHE_TTL_MS = 30_000;
+type CandleCacheEntry = {
+  candles: Candlestick[];
+  cachedAt: number;
+};
+const candleCache = new Map<string, CandleCacheEntry>();
 const candleRequests = new Map<string, Promise<Candlestick[]>>();
 
 function parseRawCandles(
@@ -79,8 +84,15 @@ function parseRawCandles(
 }
 
 function rememberCandles(key: string, candles: Candlestick[]): void {
+  // An empty response can mean offline cache miss or that the next live bar is
+  // not closed yet. Keeping it forever would hide data after either condition
+  // changes.
+  if (candles.length === 0) {
+    candleCache.delete(key);
+    return;
+  }
   candleCache.delete(key);
-  candleCache.set(key, candles);
+  candleCache.set(key, { candles, cachedAt: Date.now() });
   while (candleCache.size > CANDLE_CACHE_MAX_ENTRIES) {
     const oldestKey = candleCache.keys().next().value;
     if (typeof oldestKey !== 'string') break;
@@ -109,13 +121,17 @@ function requestCandles(
   path: string,
   symbol: string,
   interval: ReviewTimeframe,
-  signal?: AbortSignal
+  signal?: AbortSignal,
+  cacheTtlMs = Number.POSITIVE_INFINITY
 ): Promise<Candlestick[]> {
   const cached = candleCache.get(path);
-  if (cached) {
+  if (cached && Date.now() - cached.cachedAt <= cacheTtlMs) {
     candleCache.delete(path);
     candleCache.set(path, cached);
-    return waitForCandleRequest(Promise.resolve(cached), signal);
+    return waitForCandleRequest(Promise.resolve(cached.candles), signal);
+  }
+  if (cached) {
+    candleCache.delete(path);
   }
 
   let request = candleRequests.get(path);
@@ -169,7 +185,13 @@ export async function fetchChartCandles(
     interval,
     anchor: anchorTimeMs.toString(),
   });
-  return requestCandles(`/api/chart/candles?${params}`, symbol, interval, signal);
+  return requestCandles(
+    `/api/chart/candles?${params}`,
+    symbol,
+    interval,
+    signal,
+    LIVE_CANDLE_CACHE_TTL_MS
+  );
 }
 
 export async function fetchBitlangTradeCandles(
@@ -282,7 +304,13 @@ export async function fetchLaterCandles(
   if (cutoffMs) {
     params.set('cutoff', cutoffMs.toString());
   }
-  return requestCandles(`/api/chart/candles?${params}`, symbol, interval, signal);
+  return requestCandles(
+    `/api/chart/candles?${params}`,
+    symbol,
+    interval,
+    signal,
+    LIVE_CANDLE_CACHE_TTL_MS
+  );
 }
 
 export async function fetchReplayCandles(

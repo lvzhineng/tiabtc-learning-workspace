@@ -55,6 +55,7 @@ INTERVAL_MILLISECONDS = {
 FETCH_FAILURE_COOLDOWN_SECONDS = 60
 TRAILING_REFRESH_COOLDOWN_SECONDS = 90
 DATABASE_LOCK = threading.RLock()
+STATE_LOCK = threading.RLock()
 MARKET_FETCH_LOCKS_GUARD = threading.Lock()
 MARKET_FETCH_LOCKS = {}
 MARKET_FETCH_FAILURES = {}
@@ -64,7 +65,7 @@ MARKET_DATA_PROVIDER = CcxtBybitMarketDataProvider()
 MARKET_REFRESHING = set()
 
 
-def load_state():
+def _load_state_unlocked():
     if not STATE_FILE.exists():
         return {"records": {}}
     try:
@@ -75,10 +76,60 @@ def load_state():
         return {"records": {}}
 
 
-def write_state(state):
+def load_state():
+    with STATE_LOCK:
+        return _load_state_unlocked()
+
+
+def _write_state_unlocked(state):
     temporary_file = STATE_FILE.with_suffix(".json.tmp")
     temporary_file.write_text(json.dumps(state, ensure_ascii=False, indent=2), encoding="utf-8")
     os.replace(temporary_file, STATE_FILE)
+
+
+def write_state(state):
+    with STATE_LOCK:
+        _write_state_unlocked(state)
+
+
+def validate_learning_record(value):
+    if not isinstance(value, dict):
+        raise ValueError("记录必须是对象")
+    status = value.get("status", "unlearned")
+    note = value.get("note", "")
+    updated_at = value.get("updatedAt") or datetime.now().astimezone().isoformat()
+    if status not in VALID_STATUSES or not isinstance(note, str) or len(note) > 20000:
+        raise ValueError("学习记录格式无效")
+    if not isinstance(updated_at, str):
+        raise ValueError("学习记录更新时间格式无效")
+    try:
+        parsed_updated_at = datetime.fromisoformat(updated_at.replace("Z", "+00:00"))
+    except ValueError as error:
+        raise ValueError("学习记录更新时间格式无效") from error
+    if parsed_updated_at.utcoffset() is None:
+        raise ValueError("学习记录更新时间必须包含时区")
+    return {
+        "bookmarked": bool(value.get("bookmarked")),
+        "status": status,
+        "note": note,
+        "updatedAt": updated_at,
+    }
+
+
+def update_learning_state(video_id, value):
+    if not video_id or "/" in video_id or len(video_id) > 100:
+        raise ValueError("无效的视频 ID")
+    record = None if value is None else validate_learning_record(value)
+    # ThreadingHTTPServer can process updates for different videos at the same
+    # time. Keep the read-modify-replace sequence atomic so one request cannot
+    # overwrite another request's freshly saved record.
+    with STATE_LOCK:
+        state = _load_state_unlocked()
+        if record is None:
+            state["records"].pop(video_id, None)
+        else:
+            state["records"][video_id] = record
+        _write_state_unlocked(state)
 
 
 @contextmanager
@@ -1000,10 +1051,14 @@ def save_paper_trade(payload):
         raise ValueError("盈亏比必须在 0–100 之间")
     pnl_r = 0 if status == "OPEN" else rr_ratio if status == "WIN" else -1.0
     try:
-        datetime.fromisoformat(created_at.replace("Z", "+00:00"))
+        created_datetime = datetime.fromisoformat(created_at.replace("Z", "+00:00"))
+        if created_datetime.utcoffset() is None:
+            raise ValueError("模拟订单时间必须包含时区")
         if closed_at:
             closed_at = str(closed_at)
-            datetime.fromisoformat(closed_at.replace("Z", "+00:00"))
+            closed_datetime = datetime.fromisoformat(closed_at.replace("Z", "+00:00"))
+            if closed_datetime.utcoffset() is None:
+                raise ValueError("模拟订单时间必须包含时区")
     except ValueError as error:
         raise ValueError("模拟订单时间格式无效") from error
     if status == "OPEN":
@@ -1157,7 +1212,9 @@ class StudyHandler(BaseHTTPRequestHandler):
                     )
                 anchor = int(query.get("anchor", ["0"])[0])
                 return self.send_json(HTTPStatus.OK, load_chart_candles(symbol, interval, anchor))
-            except (ValueError, RuntimeError) as error:
+            except ValueError as error:
+                return self.send_json(HTTPStatus.BAD_REQUEST, {"error": str(error)})
+            except RuntimeError as error:
                 return self.send_json(HTTPStatus.BAD_GATEWAY, {"error": str(error)})
         if parsed.path == "/api/chart/drawings":
             try:
@@ -1210,19 +1267,12 @@ class StudyHandler(BaseHTTPRequestHandler):
         if not path.startswith("/api/state/"):
             return self.send_error(HTTPStatus.NOT_FOUND)
         video_id = unquote(path.removeprefix("/api/state/"))
-        if not video_id or "/" in video_id:
+        if not video_id or "/" in video_id or len(video_id) > 100:
             return self.send_error(HTTPStatus.BAD_REQUEST, "无效的视频 ID")
         try:
             length = int(self.headers.get("Content-Length", "0"))
             payload = json.loads(self.rfile.read(length).decode("utf-8")) if length else None
-            if payload is not None:
-                payload = self.validate_record(payload)
-            state = load_state()
-            if payload is None:
-                state["records"].pop(video_id, None)
-            else:
-                state["records"][video_id] = payload
-            write_state(state)
+            update_learning_state(video_id, payload)
         except (OSError, ValueError, json.JSONDecodeError) as error:
             return self.send_json(HTTPStatus.BAD_REQUEST, {"error": str(error)})
         return self.send_json(HTTPStatus.OK, {"ok": True})
@@ -1244,15 +1294,6 @@ class StudyHandler(BaseHTTPRequestHandler):
     def read_json_body(self):
         length = int(self.headers.get("Content-Length", "0"))
         return json.loads(self.rfile.read(length).decode("utf-8")) if length else {}
-
-    def validate_record(self, value):
-        if not isinstance(value, dict):
-            raise ValueError("记录必须是对象")
-        status = value.get("status", "unlearned")
-        note = value.get("note", "")
-        if status not in VALID_STATUSES or not isinstance(note, str) or len(note) > 20000:
-            raise ValueError("学习记录格式无效")
-        return {"bookmarked": bool(value.get("bookmarked")), "status": status, "note": note}
 
     def send_json(self, status, payload):
         content = json.dumps(payload, ensure_ascii=False).encode("utf-8")

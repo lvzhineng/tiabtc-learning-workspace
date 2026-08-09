@@ -80,6 +80,22 @@ function findNearestCandle(
     : right;
 }
 
+function candlesEqual(
+  left: Candlestick | undefined,
+  right: Candlestick | undefined
+): boolean {
+  return (
+    left !== undefined &&
+    right !== undefined &&
+    left.timestampMs === right.timestampMs &&
+    left.open === right.open &&
+    left.high === right.high &&
+    left.low === right.low &&
+    left.close === right.close &&
+    left.volume === right.volume
+  );
+}
+
 /** Place the focus bar near 80% of the viewport, leaving ~20% room on the right. */
 const FOCUS_VIEWPORT_RATIO = 0.8;
 
@@ -145,6 +161,7 @@ export function ChartCanvas({
   const prevBarsCountRef = useRef<number>(0);
   const prevFirstTimestampRef = useRef<number | null>(null);
   const prevLastTimestampRef = useRef<number | null>(null);
+  const prevCandlesRef = useRef<Candlestick[]>([]);
   const prevSeriesKeyRef = useRef<string>('');
   const pendingViewportResetRef = useRef(false);
   const lastVisibleSpanRef = useRef(120);
@@ -457,6 +474,7 @@ export function ChartCanvas({
       prevBarsCountRef.current = 0;
       prevFirstTimestampRef.current = null;
       prevLastTimestampRef.current = null;
+      prevCandlesRef.current = [];
       // Remember that the next non-empty setData must set a viewport. The first
       // render after a symbol/interval switch often arrives with candles=[], which
       // would otherwise consume isSeriesContextChange and leave LWC on the left.
@@ -508,17 +526,23 @@ export function ChartCanvas({
       prevBarsCountRef.current = 0;
       prevFirstTimestampRef.current = null;
       prevLastTimestampRef.current = null;
+      prevCandlesRef.current = [];
       return;
     }
 
     const firstCandle = candles[0];
     const lastCandle = candles[candles.length - 1];
+    const previousCandles = prevCandlesRef.current;
     const canAppendIncrementally =
       prevBarsCountRef.current > 0 &&
       candles.length > prevBarsCountRef.current &&
       firstCandle.timestampMs === prevFirstTimestampRef.current &&
       candles[prevBarsCountRef.current - 1]?.timestampMs ===
-        prevLastTimestampRef.current;
+        prevLastTimestampRef.current &&
+      previousCandles.length === prevBarsCountRef.current &&
+      previousCandles.every((previous, index) =>
+        candlesEqual(previous, candles[index])
+      );
 
     if (canAppendIncrementally) {
       const visibleRangeBeforeAppend =
@@ -545,6 +569,7 @@ export function ChartCanvas({
       }
       prevBarsCountRef.current = candles.length;
       prevLastTimestampRef.current = lastCandle.timestampMs;
+      prevCandlesRef.current = candles;
       return;
     }
 
@@ -553,22 +578,32 @@ export function ChartCanvas({
       firstCandle.timestampMs === prevFirstTimestampRef.current &&
       lastCandle.timestampMs === prevLastTimestampRef.current
     ) {
-      series.update({
-        time: timestampMsToUtcTimestamp(lastCandle.timestampMs),
-        open: lastCandle.open,
-        high: lastCandle.high,
-        low: lastCandle.low,
-        close: lastCandle.close,
-      });
-      volumeSeries?.update({
-        time: timestampMsToUtcTimestamp(lastCandle.timestampMs),
-        value: lastCandle.volume,
-        color:
-          lastCandle.close >= lastCandle.open
-            ? 'rgba(8, 153, 129, 0.42)'
-            : 'rgba(242, 54, 69, 0.42)',
-      });
-      return;
+      if (previousCandles === candles) return;
+      const historicalBarsUnchanged = previousCandles
+        .slice(0, -1)
+        .every((previous, index) => candlesEqual(previous, candles[index]));
+      if (historicalBarsUnchanged) {
+        const previousLastCandle = previousCandles[previousCandles.length - 1];
+        if (!previousLastCandle || !candlesEqual(previousLastCandle, lastCandle)) {
+          series.update({
+            time: timestampMsToUtcTimestamp(lastCandle.timestampMs),
+            open: lastCandle.open,
+            high: lastCandle.high,
+            low: lastCandle.low,
+            close: lastCandle.close,
+          });
+          volumeSeries?.update({
+            time: timestampMsToUtcTimestamp(lastCandle.timestampMs),
+            value: lastCandle.volume,
+            color:
+              lastCandle.close >= lastCandle.open
+                ? 'rgba(8, 153, 129, 0.42)'
+                : 'rgba(242, 54, 69, 0.42)',
+          });
+        }
+        prevCandlesRef.current = candles;
+        return;
+      }
     }
 
     // Full replacement is reserved for prepend, rewind, context switches,
@@ -626,11 +661,17 @@ export function ChartCanvas({
         from: prevLogicalRange.from + addedCount,
         to: prevLogicalRange.to + addedCount,
       });
+    } else if (prevLogicalRange) {
+      // A trailing refresh can revise several already-cached D/W/4h bars
+      // without changing the time range. Full setData is required for those
+      // historical bars, but the user's viewport should not move.
+      chart.timeScale().setVisibleLogicalRange(prevLogicalRange);
     }
 
     prevBarsCountRef.current = sortedData.length;
     prevFirstTimestampRef.current = firstTimestamp;
     prevLastTimestampRef.current = lastCandle.timestampMs;
+    prevCandlesRef.current = candles;
   }, [candles, focusRevision, interval, symbol]);
 
   // Keep the replay cut-in candle visible after future candles are masked.

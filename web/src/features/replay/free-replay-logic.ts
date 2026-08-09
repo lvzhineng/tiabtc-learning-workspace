@@ -122,20 +122,31 @@ export function shouldPrefetchFuture(
 
 export function formatDateTimeLocalInput(dateMs: number): string {
   const date = new Date(dateMs);
-  const pad = (n: number) => String(n).padStart(2, '0');
-  const year = date.getFullYear();
-  const month = pad(date.getMonth() + 1);
-  const day = pad(date.getDate());
-  const hours = pad(date.getHours());
-  const minutes = pad(date.getMinutes());
-
-  return `${year}-${month}-${day}T${hours}:${minutes}`;
+  const parts = new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'Asia/Shanghai',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    hourCycle: 'h23',
+  }).formatToParts(date);
+  const get = (type: string) =>
+    parts.find((part) => part.type === type)?.value ?? '00';
+  return `${get('year')}-${get('month')}-${get('day')}T${get('hour')}:${get('minute')}`;
 }
 
 export function parseDateTimeInput(inputStr: string): number {
   const trimmed = inputStr.trim();
   if (!trimmed) return Date.now();
-  const parsed = Date.parse(trimmed);
+  // datetime-local has no timezone. The review domain is explicitly fixed to
+  // Asia/Shanghai, independent of the machine or browser timezone.
+  const hasTimezone = /([zZ]|[+-]\d{2}:?\d{2})$/.test(trimmed);
+  const hasSeconds = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}/.test(trimmed);
+  const shanghaiTime = hasSeconds
+    ? `${trimmed}+08:00`
+    : `${trimmed}:00+08:00`;
+  const parsed = Date.parse(hasTimezone ? trimmed : shanghaiTime);
   if (!Number.isNaN(parsed)) return parsed;
   return Date.now();
 }
