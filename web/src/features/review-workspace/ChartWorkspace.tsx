@@ -1,4 +1,4 @@
-import { useEffect, useState, useCallback, useMemo } from 'react';
+import { useEffect, useState, useCallback, useMemo, useRef } from 'react';
 import type { ReviewTimeframe } from '@/domain/timeframe';
 import { TIMEFRAME_DISPLAY_MAP } from '@/domain/timeframe';
 import { timeframeMs } from '@/chart/chart-time';
@@ -6,6 +6,7 @@ import type { Candlestick } from '@/domain/candle';
 import {
   fetchSymbols,
   addCustomSymbol,
+  type PerpetualSymbolSearchItem,
 } from '@/api/market-api';
 import { ChartCanvas } from '@/chart/ChartCanvas';
 import { computeReadoutInfo, type ReadoutInfo } from '@/chart/candlestick-readout';
@@ -29,16 +30,60 @@ import { useCandleWorkspaceData } from './useCandleWorkspaceData';
 import { useDrawingWorkspace } from './useDrawingWorkspace';
 import { usePaperTrading } from './usePaperTrading';
 import { ChartReadoutBar } from './ChartReadoutBar';
+import { PerpetualSymbolSearchDialog } from './PerpetualSymbolSearchDialog';
 import {
   AlertCircle,
-  Plus,
+  ChevronDown,
   RefreshCw,
+  Search,
   Video,
   Target,
 } from 'lucide-react';
 import '@/styles/review-workspace.css';
 
 const TIMEFRAMES: ReviewTimeframe[] = ['1', '5', '15', '60', '240', 'D', 'W'];
+const REVIEW_LOCATION_STORAGE_KEY = 'tiabtc-review-location-v1';
+const MIN_REVIEW_TIMESTAMP_MS = 1_500_000_000_000;
+
+type StoredReviewLocation = {
+  timeframe: ReviewTimeframe;
+  timestampMs: number;
+};
+
+function loadStoredReviewLocation(): StoredReviewLocation | null {
+  try {
+    const raw = JSON.parse(
+      window.localStorage.getItem(REVIEW_LOCATION_STORAGE_KEY) || 'null'
+    ) as Partial<StoredReviewLocation> | null;
+    const timeframe = raw?.timeframe;
+    const timestampMs = Number(raw?.timestampMs);
+    if (
+      !TIMEFRAMES.includes(timeframe as ReviewTimeframe) ||
+      !Number.isFinite(timestampMs) ||
+      timestampMs < MIN_REVIEW_TIMESTAMP_MS ||
+      timestampMs > Date.now()
+    ) {
+      return null;
+    }
+    return {
+      timeframe: timeframe as ReviewTimeframe,
+      timestampMs: Math.round(timestampMs),
+    };
+  } catch {
+    return null;
+  }
+}
+
+function saveStoredReviewLocation(location: StoredReviewLocation): void {
+  try {
+    window.localStorage.setItem(
+      REVIEW_LOCATION_STORAGE_KEY,
+      JSON.stringify(location)
+    );
+  } catch {
+    // Review still works when browser storage is unavailable.
+  }
+}
 
 interface ChartWorkspaceProps {
   initialVideoContext?: VideoReviewContext | null;
@@ -49,20 +94,71 @@ export function ChartWorkspace({
   initialVideoContext,
   themeMode = 'dark',
 }: ChartWorkspaceProps) {
+  const [initialLocation] = useState<StoredReviewLocation | null>(
+    loadStoredReviewLocation
+  );
+  const restoredTimestampMs = initialVideoContext
+    ? null
+    : initialLocation?.timestampMs ?? null;
   const [symbols, setSymbols] = useState<string[]>(['BTCUSDT']);
   const [activeSymbol, setActiveSymbol] = useState<string>(
     initialVideoContext?.symbol || 'BTCUSDT'
   );
-  const [activeTimeframe, setActiveTimeframe] = useState<ReviewTimeframe>('60');
+  const [activeTimeframe, setActiveTimeframe] = useState<ReviewTimeframe>(
+    initialLocation?.timeframe || '60'
+  );
   const [isLogScale, setIsLogScale] = useState<boolean>(false);
-  const [chartFocusTimeMs, setChartFocusTimeMs] = useState<number | null>(null);
+  const [chartFocusTimeMs, setChartFocusTimeMs] = useState<number | null>(
+    restoredTimestampMs
+  );
   const [timeframeSwitchAnchorTimeMs, setTimeframeSwitchAnchorTimeMs] =
-    useState<number | null>(null);
+    useState<number | null>(restoredTimestampMs);
+  const lastPositionTimeMsRef = useRef<number | null>(
+    restoredTimestampMs
+  );
+  const pendingLocationRef = useRef<StoredReviewLocation | null>(null);
+  const persistLocationTimerRef = useRef<number | null>(null);
+
+  const flushStoredReviewLocation = useCallback(() => {
+    if (persistLocationTimerRef.current !== null) {
+      window.clearTimeout(persistLocationTimerRef.current);
+      persistLocationTimerRef.current = null;
+    }
+    if (pendingLocationRef.current) {
+      saveStoredReviewLocation(pendingLocationRef.current);
+      pendingLocationRef.current = null;
+    }
+  }, []);
+
+  const scheduleStoredReviewLocation = useCallback(
+    (timeframe: ReviewTimeframe, timestampMs: number) => {
+      if (!Number.isFinite(timestampMs) || timestampMs <= 0) return;
+      pendingLocationRef.current = {
+        timeframe,
+        timestampMs: Math.round(timestampMs),
+      };
+      if (persistLocationTimerRef.current !== null) {
+        window.clearTimeout(persistLocationTimerRef.current);
+      }
+      persistLocationTimerRef.current = window.setTimeout(
+        flushStoredReviewLocation,
+        250
+      );
+    },
+    [flushStoredReviewLocation]
+  );
+
+  useEffect(() => {
+    window.addEventListener('pagehide', flushStoredReviewLocation);
+    return () => {
+      window.removeEventListener('pagehide', flushStoredReviewLocation);
+      flushStoredReviewLocation();
+    };
+  }, [flushStoredReviewLocation]);
 
   const [hoveredCandle, setHoveredCandle] = useState<Candlestick | null>(null);
 
-  const [newSymbolInput, setNewSymbolInput] = useState<string>('');
-  const [showAddSymbol, setShowAddSymbol] = useState<boolean>(false);
+  const [showSymbolSearch, setShowSymbolSearch] = useState<boolean>(false);
 
   // Paper Trading State
   const [showPaperPanel, setShowPaperPanel] = useState<boolean>(false);
@@ -82,6 +178,20 @@ export function ChartWorkspace({
     }
     return { status: 'idle' };
   });
+
+  useEffect(() => {
+    if (replayState.status === 'idle') return;
+    lastPositionTimeMsRef.current = replayState.cursorTimeMs;
+    scheduleStoredReviewLocation(activeTimeframe, replayState.cursorTimeMs);
+  }, [activeTimeframe, replayState, scheduleStoredReviewLocation]);
+
+  const handleViewportAnchorChange = useCallback(
+    (timestampMs: number) => {
+      lastPositionTimeMsRef.current = timestampMs;
+      scheduleStoredReviewLocation(activeTimeframe, timestampMs);
+    },
+    [activeTimeframe, scheduleStoredReviewLocation]
+  );
 
   const {
     candles,
@@ -153,16 +263,22 @@ export function ChartWorkspace({
       // Do not use hoveredCandle: crosshair hover would pin mid-history bars to
       // the right edge and shove the live tip off-screen after a timeframe switch.
       const anchorTimeMs =
-        drawingAnchorTimeMs ?? replayAnchorTimeMs ?? chartFocusTimeMs ?? null;
+        drawingAnchorTimeMs ??
+        replayAnchorTimeMs ??
+        lastPositionTimeMsRef.current ??
+        chartFocusTimeMs ??
+        null;
       setTimeframeSwitchAnchorTimeMs(anchorTimeMs);
       setChartFocusTimeMs(anchorTimeMs);
       setActiveTimeframe(nextTimeframe);
+      scheduleStoredReviewLocation(nextTimeframe, anchorTimeMs ?? Date.now());
     },
     [
       activeTimeframe,
       chartFocusTimeMs,
       drawings,
       replayState,
+      scheduleStoredReviewLocation,
       selectedDrawingId,
     ]
   );
@@ -170,11 +286,28 @@ export function ChartWorkspace({
   const handleSymbolChange = useCallback(
     (nextSymbol: string) => {
       if (nextSymbol === activeSymbol) return;
-      setTimeframeSwitchAnchorTimeMs(null);
-      setChartFocusTimeMs(null);
+      const replayAnchorTimeMs =
+        replayState.status === 'idle' ? null : replayState.cursorTimeMs;
+      const anchorTimeMs =
+        replayAnchorTimeMs ??
+        lastPositionTimeMsRef.current ??
+        chartFocusTimeMs ??
+        null;
+      setTimeframeSwitchAnchorTimeMs(anchorTimeMs);
+      setChartFocusTimeMs(anchorTimeMs);
+      lastPositionTimeMsRef.current = anchorTimeMs;
+      if (anchorTimeMs !== null) {
+        scheduleStoredReviewLocation(activeTimeframe, anchorTimeMs);
+      }
       setActiveSymbol(nextSymbol);
     },
-    [activeSymbol]
+    [
+      activeSymbol,
+      activeTimeframe,
+      chartFocusTimeMs,
+      replayState,
+      scheduleStoredReviewLocation,
+    ]
   );
 
   // Sync initialVideoContext if passed from parent
@@ -198,9 +331,9 @@ export function ChartWorkspace({
       .then((list) => {
         if (list && list.length > 0) {
           setSymbols(list);
-          if (!list.includes(activeSymbol)) {
-            setActiveSymbol(list[0]);
-          }
+          setActiveSymbol((current) =>
+            list.includes(current) ? current : list[0]
+          );
         }
       })
       .catch((err) => {
@@ -358,6 +491,7 @@ export function ChartWorkspace({
       if (prev.status === 'idle') return prev;
       return {
         ...prev,
+        status: prev.status === 'completed' ? 'paused' : prev.status,
         cursorTimeMs: prevCursorMs,
       };
     });
@@ -378,38 +512,54 @@ export function ChartWorkspace({
     });
   }, []);
 
-  // Timer Effect for Playing Replay
+  const handleNextBarRef = useRef(handleNextBar);
+  useEffect(() => {
+    handleNextBarRef.current = handleNextBar;
+  }, [handleNextBar]);
+  const replaySpeed =
+    replayState.status === 'idle' ? 1 : replayState.speed;
+
+  // Keep one stable timer per speed instead of recreating it for every cursor
+  // update during high-speed replay.
   useEffect(() => {
     if (replayState.status !== 'playing') return;
 
-    const speed = replayState.speed;
-    const intervalMs = Math.max(100, Math.floor(1000 / speed));
+    const intervalMs = Math.max(100, Math.floor(1000 / replaySpeed));
     const timer = setInterval(() => {
-      handleNextBar();
+      handleNextBarRef.current();
     }, intervalMs);
 
     return () => {
       clearInterval(timer);
     };
-  }, [replayState, handleNextBar]);
+  }, [replaySpeed, replayState.status]);
 
-  const handleAddSymbol = async () => {
-    if (!newSymbolInput.trim()) return;
-    const clean = newSymbolInput.trim().toUpperCase();
-    try {
-      const addedSymbol = await addCustomSymbol(clean);
+  const handleSelectSymbol = useCallback(
+    async (item: PerpetualSymbolSearchItem) => {
+      const alreadyAdded = item.added || symbols.includes(item.symbol);
+      const selectedSymbol = alreadyAdded
+        ? item.symbol
+        : await addCustomSymbol(item.symbol);
       setSymbols((current) =>
-        current.includes(addedSymbol)
+        current.includes(selectedSymbol)
           ? current
-          : [...current, addedSymbol]
+          : [...current, selectedSymbol]
       );
-      handleSymbolChange(addedSymbol);
-      setNewSymbolInput('');
-      setShowAddSymbol(false);
-    } catch (err) {
-      alert(err instanceof Error ? err.message : '添加 Symbol 失败');
-    }
-  };
+      handleSymbolChange(selectedSymbol);
+    },
+    [handleSymbolChange, symbols]
+  );
+
+  useEffect(() => {
+    const handleOpenSearchShortcut = (event: KeyboardEvent) => {
+      if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'k') {
+        event.preventDefault();
+        setShowSymbolSearch(true);
+      }
+    };
+    window.addEventListener('keydown', handleOpenSearchShortcut);
+    return () => window.removeEventListener('keydown', handleOpenSearchShortcut);
+  }, []);
 
   // Build System Markers for Video Review
   const videoReplayContext =
@@ -489,6 +639,15 @@ export function ChartWorkspace({
 
   return (
     <div className="review-workspace">
+      {showSymbolSearch && (
+        <PerpetualSymbolSearchDialog
+          activeSymbol={activeSymbol}
+          savedSymbols={symbols}
+          onClose={() => setShowSymbolSearch(false)}
+          onSelectSymbol={handleSelectSymbol}
+        />
+      )}
+
       <DraggableDrawingToolbar
         activeTool={activeTool}
         magnetEnabled={magnetEnabled}
@@ -528,42 +687,18 @@ export function ChartWorkspace({
 
       <div className="review-toolbar">
         <div className="review-toolbar-left">
-          <select
-            className="review-symbol-select"
-            value={activeSymbol}
-            onChange={(e) => handleSymbolChange(e.target.value)}
+          <button
+            type="button"
+            className="review-symbol-trigger"
+            onClick={() => setShowSymbolSearch(true)}
+            aria-haspopup="dialog"
+            aria-expanded={showSymbolSearch}
+            title="搜索永续合约 (Ctrl+K)"
           >
-            {symbols.map((sym) => (
-              <option key={sym} value={sym}>
-                {sym}
-              </option>
-            ))}
-          </select>
-
-          {showAddSymbol ? (
-            <div className="review-add-symbol">
-              <input
-                type="text"
-                value={newSymbolInput}
-                onChange={(e) => setNewSymbolInput(e.target.value)}
-                placeholder="例如: ETHUSDT"
-                onKeyDown={(e) => e.key === 'Enter' && handleAddSymbol()}
-              />
-              <button type="button" className="ui-btn ui-btn-primary" onClick={handleAddSymbol}>
-                确定
-              </button>
-            </div>
-          ) : (
-            <button
-              type="button"
-              className="ui-btn"
-              onClick={() => setShowAddSymbol(true)}
-              title="添加自定义 Symbol"
-              aria-label="添加自定义 Symbol"
-            >
-              <Plus size={14} />
-            </button>
-          )}
+            <Search size={14} />
+            <span>{activeSymbol}</span>
+            <ChevronDown size={13} />
+          </button>
 
           <div className="ui-divider-v" />
 
@@ -661,6 +796,7 @@ export function ChartWorkspace({
           systemMarkers={systemMarkers}
           onCrosshairMove={setHoveredCandle}
           onDoubleClickTime={handleDoubleClickTime}
+          onViewportAnchorChange={handleViewportAnchorChange}
           onLoadEarlier={handleLoadEarlier}
           isLoadingEarlier={isLoadingEarlier}
           drawings={drawings}

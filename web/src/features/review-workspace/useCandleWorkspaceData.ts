@@ -29,6 +29,17 @@ function mergeCandles(
   direction: 'before' | 'after'
 ): Candlestick[] {
   if (incoming.length === 0) return current;
+  if (current.length === 0) return incoming;
+  const currentFirst = current[0].timestampMs;
+  const currentLast = current[current.length - 1].timestampMs;
+  const incomingFirst = incoming[0].timestampMs;
+  const incomingLast = incoming[incoming.length - 1].timestampMs;
+  if (direction === 'after' && incomingFirst > currentLast) {
+    return [...current, ...incoming];
+  }
+  if (direction === 'before' && incomingLast < currentFirst) {
+    return [...incoming, ...current];
+  }
   const existingTimestamps = new Set(
     current.map((candle) => candle.timestampMs)
   );
@@ -110,19 +121,20 @@ export function useCandleWorkspaceData(
           );
 
     void request
-      .then((data) => {
+      .then((batch) => {
         if (
           controller.signal.aborted ||
           contextRevisionRef.current !== contextRevision
         ) {
           return;
         }
-        setCandles(data);
-        if (data.length === 0) {
-          setOfflineWarning(
-            `符号 ${symbol} (${TIMEFRAME_DISPLAY_MAP[timeframe]}) 暂无本地缓存数据。`
-          );
-        }
+        setCandles(batch.candles);
+        setOfflineWarning(
+          batch.warning ||
+            (batch.candles.length === 0
+              ? `符号 ${symbol} (${TIMEFRAME_DISPLAY_MAP[timeframe]}) 暂无本地缓存数据。`
+              : null)
+        );
       })
       .catch((requestError) => {
         if (
@@ -169,6 +181,7 @@ export function useCandleWorkspaceData(
     const earliestTimestamp = candles[0].timestampMs;
     earlierRequestRef.current = controller;
     setIsLoadingEarlier(true);
+    setError(null);
 
     void fetchEarlierCandles(
       symbol,
@@ -177,7 +190,7 @@ export function useCandleWorkspaceData(
       1000,
       controller.signal
     )
-      .then((earlierCandles) => {
+      .then((batch) => {
         if (
           controller.signal.aborted ||
           contextKeyRef.current !== requestContextKey ||
@@ -186,11 +199,20 @@ export function useCandleWorkspaceData(
           return;
         }
         setCandles((current) =>
-          mergeCandles(current, earlierCandles, 'before')
+          mergeCandles(current, batch.candles, 'before')
         );
+        if (batch.warning) setOfflineWarning(batch.warning);
+        setError(null);
       })
       .catch((requestError) => {
         if (!controller.signal.aborted) {
+          setError(
+            `${
+              requestError instanceof Error
+                ? requestError.message
+                : '加载更早 K 线失败'
+            }。请向左拖动图表重试。`
+          );
           console.warn('扩展加载更早 K 线失败:', requestError);
         }
       })
@@ -211,6 +233,7 @@ export function useCandleWorkspaceData(
     const requestContextRevision = contextRevisionRef.current;
     const controller = new AbortController();
     futureRequestControllerRef.current = controller;
+    setError(null);
     const request = fetchLaterCandles(
       symbol,
       timeframe,
@@ -219,7 +242,7 @@ export function useCandleWorkspaceData(
       undefined,
       controller.signal
     )
-      .then((laterCandles) => {
+      .then((batch) => {
         if (
           controller.signal.aborted ||
           contextKeyRef.current !== requestContextKey ||
@@ -227,12 +250,15 @@ export function useCandleWorkspaceData(
         ) {
           return -1;
         }
-        const firstLaterCandle = laterCandles[0];
+        const firstLaterCandle = batch.candles[0];
         const maxAllowedGapMs = TIMEFRAME_SECONDS_MAP[timeframe] * 8_000;
         if (
           firstLaterCandle &&
           firstLaterCandle.timestampMs - latestTimestamp > maxAllowedGapMs
         ) {
+          setError(
+            '后续 K 线与当前回放不连续，已暂停播放。请点击播放或下一根重试。'
+          );
           console.warn(
             '拒绝合并与当前回放不连续的后续 K 线:',
             latestTimestamp,
@@ -241,12 +267,21 @@ export function useCandleWorkspaceData(
           return -2;
         }
         setCandles((current) =>
-          mergeCandles(current, laterCandles, 'after')
+          mergeCandles(current, batch.candles, 'after')
         );
-        return laterCandles.length;
+        if (batch.warning) setOfflineWarning(batch.warning);
+        setError(null);
+        return batch.candles.length;
       })
       .catch((requestError) => {
         if (controller.signal.aborted) return -1;
+        setError(
+          `${
+            requestError instanceof Error
+              ? requestError.message
+              : '加载后续 K 线失败'
+          }。已暂停播放，请点击播放或下一根重试。`
+        );
         console.warn('预取未来数据失败:', requestError);
         return -2;
       })

@@ -23,6 +23,7 @@ DATABASE_FILE = DEFAULT_DATABASE_FILE
 SEED_DATABASE_FILE = ROOT / "data" / "tiabtc-review-seed.sqlite"
 HOST = "127.0.0.1"
 PORT = 8765
+API_VERSION = 10
 VALID_STATUSES = {"unlearned", "learning", "learned"}
 VALID_SYMBOLS = {"BTCUSDT", "ETHUSDT", "SOLUSDT", "BNBUSDT", "DOGEUSDT", "XRPUSDT"}
 VALID_INTERVALS = {"1", "5", "15", "60", "240", "D", "W"}
@@ -60,6 +61,7 @@ MARKET_FETCH_LOCKS_GUARD = threading.Lock()
 MARKET_FETCH_LOCKS = {}
 MARKET_FETCH_FAILURES = {}
 MARKET_TRAILING_REFRESH_AT = {}
+MARKET_TRAILING_REFRESH_BOUNDARY = {}
 MARKET_TRAILING_REFRESHING = set()
 MARKET_DATA_PROVIDER = CcxtBybitMarketDataProvider()
 MARKET_REFRESHING = set()
@@ -447,6 +449,10 @@ def schedule_candle_refresh(symbol, interval, start_timestamp, end_timestamp):
                     MARKET_FETCH_FAILURES.pop(fetch_key, None)
                 except RuntimeError as error:
                     MARKET_FETCH_FAILURES[fetch_key] = (time.monotonic(), str(error))
+                    print(
+                        f"[market] background-refresh {symbol} {interval} failed: {error}",
+                        flush=True,
+                    )
         finally:
             with MARKET_FETCH_LOCKS_GUARD:
                 MARKET_REFRESHING.discard(fetch_key)
@@ -473,16 +479,31 @@ def latest_closed_candle_timestamp(interval, now_timestamp=None):
 
 
 def trailing_refresh_bar_count(interval):
-    # Incomplete higher-timeframe bars are often cached once and then never
-    # updated, which creates fake open/close price gaps. Intraday bars are
-    # refreshed often enough by normal missing-range fetches.
+    # Any interval can be cached while its newest bar is still open. Refresh a
+    # small tail after every newly closed boundary so replay never reuses that
+    # partial snapshot as a final candle.
     if interval == "W":
         return 4
     if interval == "D":
         return 14
     if interval == "240":
         return 6
-    return 0
+    return 3
+
+
+def trailing_refresh_is_fresh(
+    fetch_key,
+    interval,
+    now_monotonic=None,
+    now_timestamp=None,
+):
+    now_monotonic = time.monotonic() if now_monotonic is None else now_monotonic
+    latest_closed = latest_closed_candle_timestamp(interval, now_timestamp)
+    return (
+        MARKET_TRAILING_REFRESH_BOUNDARY.get(fetch_key) == latest_closed
+        and now_monotonic - MARKET_TRAILING_REFRESH_AT.get(fetch_key, 0)
+        < TRAILING_REFRESH_COOLDOWN_SECONDS
+    )
 
 
 def live_trailing_window(interval, now_timestamp=None):
@@ -505,15 +526,25 @@ def request_needs_trailing_refresh(interval, start_timestamp, end_timestamp):
     return end_timestamp >= refresh_start and start_timestamp <= refresh_end
 
 
-def refresh_trailing_candles(symbol, interval):
+def refresh_trailing_candles(
+    symbol,
+    interval,
+    wait_for_lock=False,
+    raise_on_error=False,
+):
     """Force-upsert recent live candles even when the cache range looks covered."""
     fetch_key = (symbol, interval)
+    now_timestamp = int(time.time() * 1000)
     now_monotonic = time.monotonic()
-    last_refresh_at = MARKET_TRAILING_REFRESH_AT.get(fetch_key, 0)
-    if now_monotonic - last_refresh_at < TRAILING_REFRESH_COOLDOWN_SECONDS:
+    if trailing_refresh_is_fresh(
+        fetch_key,
+        interval,
+        now_monotonic,
+        now_timestamp,
+    ):
         return 0
 
-    window = live_trailing_window(interval)
+    window = live_trailing_window(interval, now_timestamp)
     if window is None:
         return 0
     refresh_start, refresh_end = window
@@ -521,15 +552,17 @@ def refresh_trailing_candles(symbol, interval):
         return 0
 
     lock = market_fetch_lock(symbol, interval)
-    # Do not stall interactive chart requests: skip if another fetch is busy.
-    if not lock.acquire(blocking=False):
+    # Background refreshes stay non-blocking. Replay/live requests that require
+    # the current tail wait for the in-flight fetch instead of returning stale data.
+    if not lock.acquire(blocking=wait_for_lock):
         return 0
     try:
-        last_refresh_at = MARKET_TRAILING_REFRESH_AT.get(fetch_key, 0)
-        if time.monotonic() - last_refresh_at < TRAILING_REFRESH_COOLDOWN_SECONDS:
+        if trailing_refresh_is_fresh(fetch_key, interval):
             return 0
         failed_at, failed_message = MARKET_FETCH_FAILURES.get(fetch_key, (0, ""))
         if failed_message and time.monotonic() - failed_at < FETCH_FAILURE_COOLDOWN_SECONDS:
+            if raise_on_error:
+                raise RuntimeError(f"{failed_message}（稍后再试，避免重复等待）")
             return 0
         try:
             fetched = fetch_market_candles(
@@ -548,6 +581,9 @@ def refresh_trailing_candles(symbol, interval):
                 )
             MARKET_FETCH_FAILURES.pop(fetch_key, None)
             MARKET_TRAILING_REFRESH_AT[fetch_key] = time.monotonic()
+            MARKET_TRAILING_REFRESH_BOUNDARY[fetch_key] = (
+                latest_closed_candle_timestamp(interval, now_timestamp)
+            )
             print(
                 f"[market] trailing-refresh {symbol} {interval} "
                 f"bars={len(fetched)} window={trailing_refresh_bar_count(interval)}",
@@ -556,6 +592,12 @@ def refresh_trailing_candles(symbol, interval):
             return len(fetched)
         except RuntimeError as error:
             MARKET_FETCH_FAILURES[fetch_key] = (time.monotonic(), str(error))
+            print(
+                f"[market] trailing-refresh {symbol} {interval} failed: {error}",
+                flush=True,
+            )
+            if raise_on_error:
+                raise
             return 0
     finally:
         lock.release()
@@ -567,8 +609,7 @@ def schedule_trailing_refresh(symbol, interval, start_timestamp, end_timestamp):
         return
     fetch_key = (symbol, interval)
     now_monotonic = time.monotonic()
-    last_refresh_at = MARKET_TRAILING_REFRESH_AT.get(fetch_key, 0)
-    if now_monotonic - last_refresh_at < TRAILING_REFRESH_COOLDOWN_SECONDS:
+    if trailing_refresh_is_fresh(fetch_key, interval, now_monotonic):
         return
     with MARKET_FETCH_LOCKS_GUARD:
         if fetch_key in MARKET_TRAILING_REFRESHING:
@@ -589,13 +630,27 @@ def schedule_trailing_refresh(symbol, interval, start_timestamp, end_timestamp):
     ).start()
 
 
-def load_candle_range(symbol, interval, start_timestamp, end_timestamp, offline=None):
+def load_candle_range(
+    symbol,
+    interval,
+    start_timestamp,
+    end_timestamp,
+    offline=None,
+    wait_for_refresh=False,
+    require_complete=False,
+):
     source = "sqlite"
     warning = ""
     offline = get_offline_mode() if offline is None else offline
     covered = cached_range_contains(symbol, interval, start_timestamp, end_timestamp)
     candles = list_candles(symbol, interval, start_timestamp, end_timestamp)
-    if not covered and not offline and candles:
+    if (
+        not covered
+        and not offline
+        and candles
+        and not wait_for_refresh
+        and not require_complete
+    ):
         schedule_candle_refresh(symbol, interval, start_timestamp, end_timestamp)
         schedule_trailing_refresh(symbol, interval, start_timestamp, end_timestamp)
         return candles, source, warning
@@ -661,12 +716,38 @@ def load_candle_range(symbol, interval, start_timestamp, end_timestamp, offline=
                 start_timestamp,
                 end_timestamp,
             )
-    elif covered and not offline:
-        schedule_trailing_refresh(symbol, interval, start_timestamp, end_timestamp)
+    if (
+        not offline
+        and not warning
+        and request_needs_trailing_refresh(
+            interval,
+            start_timestamp,
+            end_timestamp,
+        )
+    ):
+        if wait_for_refresh or require_complete:
+            refreshed_count = refresh_trailing_candles(
+                symbol,
+                interval,
+                wait_for_lock=True,
+                raise_on_error=require_complete,
+            )
+            if refreshed_count > 0:
+                source = "bybit"
+            failed_message = MARKET_FETCH_FAILURES.get((symbol, interval), (0, ""))[1]
+            if failed_message and not require_complete:
+                warning = failed_message
+        else:
+            schedule_trailing_refresh(
+                symbol,
+                interval,
+                start_timestamp,
+                end_timestamp,
+            )
     candles = list_candles(symbol, interval, start_timestamp, end_timestamp)
     if offline and not covered:
         warning = "仅本地模式：该时间范围的缓存不完整"
-    if not candles and warning:
+    if warning and (require_complete or not candles):
         raise RuntimeError(warning)
     return candles, source, warning
 
@@ -678,7 +759,13 @@ def load_chart_candles(symbol, interval, anchor_timestamp):
     effective_cutoff = anchor_timestamp
     start_timestamp = anchor_timestamp - INTERVAL_MILLISECONDS[interval] * 500
     loaded_cutoff = effective_cutoff
-    candles, source, warning = load_candle_range(symbol, interval, start_timestamp, loaded_cutoff)
+    candles, source, warning = load_candle_range(
+        symbol,
+        interval,
+        start_timestamp,
+        loaded_cutoff,
+        wait_for_refresh=True,
+    )
     return {
         "candles": candles,
         "anchor": anchor_timestamp,
@@ -758,7 +845,13 @@ def load_replay_candles(symbol, interval, cursor_timestamp, limit):
     latest_closed_timestamp = latest_closed_candle_timestamp(interval, now_timestamp)
     start_timestamp = cursor_timestamp - interval_milliseconds * 500
     end_timestamp = min(latest_closed_timestamp, cursor_timestamp + interval_milliseconds * limit)
-    candles, source, warning = load_candle_range(symbol, interval, start_timestamp, end_timestamp)
+    candles, source, warning = load_candle_range(
+        symbol,
+        interval,
+        start_timestamp,
+        end_timestamp,
+        require_complete=True,
+    )
     candles = [
         candle for candle in candles
         if int(candle["timestamp"]) + interval_milliseconds <= now_timestamp
@@ -790,7 +883,13 @@ def load_later_candles(symbol, interval, after_timestamp, limit, cutoff_timestam
     end_timestamp = min(target_end, after_timestamp + interval_milliseconds * limit)
     if start_timestamp > end_timestamp:
         return {"candles": [], "source": "sqlite", "warning": "", "hasMore": False}
-    candles, source, warning = load_candle_range(symbol, interval, start_timestamp, end_timestamp)
+    candles, source, warning = load_candle_range(
+        symbol,
+        interval,
+        start_timestamp,
+        end_timestamp,
+        require_complete=True,
+    )
     candles = [
         candle for candle in candles
         if int(candle["timestamp"]) > after_timestamp
@@ -975,6 +1074,78 @@ def get_all_symbols():
     return preset
 
 
+def _symbol_search_match_key(symbol, base, query):
+    if query == symbol:
+        rank = 0
+    elif query == base:
+        rank = 1
+    elif symbol.startswith(query):
+        rank = 2
+    elif base.startswith(query):
+        rank = 3
+    elif query in symbol:
+        rank = 4
+    else:
+        return None
+    return rank, len(symbol), symbol
+
+
+def search_perpetual_symbols(query_value, limit=20):
+    raw_query = str(query_value or "").strip()
+    if len(raw_query) > 50:
+        raise ValueError("搜索内容过长")
+    if not isinstance(limit, int) or limit < 1 or limit > 50:
+        raise ValueError("搜索结果数量必须在 1 到 50 之间")
+
+    query = re.sub(r"[^A-Z0-9]", "", raw_query.upper())
+    if not query:
+        return {"symbols": [], "offlineMode": get_offline_mode()}
+
+    saved_symbols = get_all_symbols()
+    saved_by_symbol = {item["symbol"]: item for item in saved_symbols}
+    matches_by_symbol = {}
+    warning = None
+    offline_mode = get_offline_mode()
+
+    if not offline_mode:
+        try:
+            for market in MARKET_DATA_PROVIDER.search_usdt_perpetual_markets(query, limit):
+                symbol = market["symbol"]
+                matches_by_symbol[symbol] = {
+                    **market,
+                    "added": symbol in saved_by_symbol,
+                }
+        except RuntimeError as error:
+            warning = str(error)
+
+    for item in saved_symbols:
+        symbol = item["symbol"]
+        base = symbol[:-4]
+        if _symbol_search_match_key(symbol, base, query) is None:
+            continue
+        matches_by_symbol[symbol] = {
+            "symbol": symbol,
+            "base": base,
+            "quote": "USDT",
+            "name": item["name"],
+            "added": True,
+        }
+
+    matches = list(matches_by_symbol.values())
+    matches.sort(
+        key=lambda item: _symbol_search_match_key(
+            item["symbol"], item["base"], query
+        )
+    )
+    payload = {
+        "symbols": matches[:limit],
+        "offlineMode": offline_mode,
+    }
+    if warning:
+        payload["warning"] = warning
+    return payload
+
+
 def add_custom_symbol(symbol_str):
     symbol = str(symbol_str or "").strip().upper()
     if not re.match(r"^[A-Z0-9]{3,15}USDT$", symbol):
@@ -983,7 +1154,7 @@ def add_custom_symbol(symbol_str):
     start_ts = now_ts - 86_400_000 * 2
     try:
         candles = fetch_market_candles(symbol, "60", start_ts, now_ts)
-    except Exception as err:
+    except RuntimeError as err:
         raise ValueError(f"校验该合约失败：{err}")
     if not candles:
         raise ValueError("交易所未返回该合约的 K 线，请检查合约代码")
@@ -1127,7 +1298,7 @@ class StudyHandler(BaseHTTPRequestHandler):
                 HTTPStatus.OK,
                 {
                     "service": "tiabtc-learning-workspace",
-                    "version": 8,
+                    "version": API_VERSION,
                     "capabilities": [
                         "learning",
                         "marketReplay",
@@ -1138,9 +1309,19 @@ class StudyHandler(BaseHTTPRequestHandler):
                         "gapAwareMarketCache",
                         "apiOnlyBackend",
                         "warmCcxtMarkets",
+                        "perpetualSymbolSearch",
                     ],
                 },
             )
+        if parsed.path == "/api/symbols/search":
+            try:
+                limit = int(query.get("limit", ["20"])[0])
+                return self.send_json(
+                    HTTPStatus.OK,
+                    search_perpetual_symbols(query.get("q", [""])[0], limit),
+                )
+            except ValueError as error:
+                return self.send_json(HTTPStatus.BAD_REQUEST, {"error": str(error)})
         if parsed.path == "/api/symbols":
             self.send_json(HTTPStatus.OK, {"symbols": get_all_symbols()})
             return

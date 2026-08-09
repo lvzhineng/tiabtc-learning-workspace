@@ -1,3 +1,4 @@
+import os
 import sqlite3
 import tempfile
 import unittest
@@ -120,6 +121,159 @@ class DrawingStorageTests(unittest.TestCase):
         finally:
             study_server.fetch_market_candles = original_fetch
 
+    def test_complete_range_raises_when_online_refresh_fails_with_stale_candles(self):
+        with study_server.database() as connection:
+            connection.execute(
+                "INSERT INTO market_candles VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                ("BTCUSDT", "60", 1000, 100, 101, 99, 100.5, 12),
+            )
+        study_server.MARKET_FETCH_FAILURES.pop(("BTCUSDT", "60"), None)
+
+        with mock.patch.object(
+            study_server,
+            "fetch_market_candles",
+            side_effect=RuntimeError("Bybit 暂时不可用"),
+        ):
+            with self.assertRaisesRegex(RuntimeError, "Bybit 暂时不可用"):
+                study_server.load_candle_range(
+                    "BTCUSDT",
+                    "60",
+                    1000,
+                    3_601_000,
+                    offline=False,
+                    require_complete=True,
+                )
+
+        study_server.MARKET_FETCH_FAILURES.pop(("BTCUSDT", "60"), None)
+
+    def test_complete_live_tail_surfaces_refresh_failure(self):
+        with study_server.database() as connection:
+            connection.execute(
+                "INSERT INTO market_candles VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                ("BTCUSDT", "60", 1000, 100, 101, 99, 100.5, 12),
+            )
+            connection.execute(
+                "INSERT INTO market_cache_ranges VALUES (?, ?, ?, ?, ?)",
+                ("BTCUSDT", "60", 1000, 2000, "now"),
+            )
+
+        with (
+            mock.patch.object(
+                study_server,
+                "request_needs_trailing_refresh",
+                return_value=True,
+            ),
+            mock.patch.object(
+                study_server,
+                "refresh_trailing_candles",
+                side_effect=RuntimeError("尾部刷新失败"),
+            ) as refresh_tail,
+        ):
+            with self.assertRaisesRegex(RuntimeError, "尾部刷新失败"):
+                study_server.load_candle_range(
+                    "BTCUSDT",
+                    "60",
+                    1000,
+                    2000,
+                    offline=False,
+                    require_complete=True,
+                )
+
+        self.assertTrue(refresh_tail.call_args.kwargs["wait_for_lock"])
+        self.assertTrue(refresh_tail.call_args.kwargs["raise_on_error"])
+
+    def test_market_catalog_only_contains_active_linear_usdt_perpetuals(self):
+        markets = {
+            "btc-swap": {
+                "id": "BTCUSDT", "base": "BTC", "quote": "USDT", "settle": "USDT",
+                "swap": True, "linear": True, "active": True,
+            },
+            "eth-spot": {
+                "id": "ETHUSDT", "base": "ETH", "quote": "USDT", "settle": None,
+                "swap": False, "linear": None, "active": True,
+            },
+            "btc-future": {
+                "id": "BTCUSDT-260925", "base": "BTC", "quote": "USDT", "settle": "USDT",
+                "swap": False, "linear": True, "active": True,
+            },
+            "btc-usdc": {
+                "id": "BTCPERP", "base": "BTC", "quote": "USDC", "settle": "USDC",
+                "swap": True, "linear": True, "active": True,
+            },
+            "old-swap": {
+                "id": "OLDUSDT", "base": "OLD", "quote": "USDT", "settle": "USDT",
+                "swap": True, "linear": True, "active": False,
+            },
+        }
+        catalog = study_server.MARKET_DATA_PROVIDER._build_perpetual_catalog(markets)
+        self.assertEqual([item["symbol"] for item in catalog], ["BTCUSDT"])
+
+    def test_market_provider_uses_system_proxy_when_environment_has_none(self):
+        provider_class = type(study_server.MARKET_DATA_PROVIDER)
+        with (
+            mock.patch.dict(os.environ, {}, clear=True),
+            mock.patch(
+                "market_data_provider.getproxies",
+                return_value={"https": "http://127.0.0.1:7890"},
+            ),
+        ):
+            provider = provider_class()
+
+        self.assertEqual(provider.exchange.httpsProxy, "http://127.0.0.1:7890")
+
+    def test_trailing_refresh_expires_when_a_new_candle_closes(self):
+        fetch_key = ("BTCUSDT", "60")
+        interval_ms = study_server.INTERVAL_MILLISECONDS["60"]
+        now = 1_786_268_536_566
+        boundary = study_server.latest_closed_candle_timestamp("60", now)
+        study_server.MARKET_TRAILING_REFRESH_AT[fetch_key] = 100
+        study_server.MARKET_TRAILING_REFRESH_BOUNDARY[fetch_key] = boundary
+        try:
+            self.assertTrue(
+                study_server.trailing_refresh_is_fresh(
+                    fetch_key,
+                    "60",
+                    now_monotonic=101,
+                    now_timestamp=now,
+                )
+            )
+            self.assertFalse(
+                study_server.trailing_refresh_is_fresh(
+                    fetch_key,
+                    "60",
+                    now_monotonic=101,
+                    now_timestamp=now + interval_ms,
+                )
+            )
+            for interval in study_server.VALID_INTERVALS:
+                self.assertGreater(
+                    study_server.trailing_refresh_bar_count(interval),
+                    0,
+                )
+        finally:
+            study_server.MARKET_TRAILING_REFRESH_AT.pop(fetch_key, None)
+            study_server.MARKET_TRAILING_REFRESH_BOUNDARY.pop(fetch_key, None)
+
+    def test_symbol_search_merges_saved_and_recommended_perpetuals(self):
+        recommendation = {
+            "symbol": "1000PEPEUSDT",
+            "base": "1000PEPE",
+            "quote": "USDT",
+            "name": "1000PEPE/USDT 永续",
+        }
+        with (
+            mock.patch.object(study_server, "get_offline_mode", return_value=False),
+            mock.patch.object(
+                study_server.MARKET_DATA_PROVIDER,
+                "search_usdt_perpetual_markets",
+                return_value=[recommendation],
+            ),
+        ):
+            payload = study_server.search_perpetual_symbols("pepe", 20)
+
+        self.assertEqual([item["symbol"] for item in payload["symbols"]], ["1000PEPEUSDT"])
+        self.assertFalse(payload["symbols"][0]["added"])
+
     def test_video_chart_stops_exactly_at_publish_time(self):
         anchor = 1_704_067_200_000
         now = 1_800_000_000_000
@@ -135,6 +289,73 @@ class DrawingStorageTests(unittest.TestCase):
         self.assertFalse(payload["hasMoreLater"])
         self.assertNotIn("futureDays", payload)
         self.assertEqual(load_range.call_args.args[3], anchor)
+        self.assertTrue(load_range.call_args.kwargs["wait_for_refresh"])
+
+    def test_replay_requires_complete_range_and_excludes_open_candle(self):
+        now = 1_786_268_536_566
+        interval_ms = study_server.INTERVAL_MILLISECONDS["60"]
+        latest_closed = study_server.latest_closed_candle_timestamp("60", now)
+        current_open = latest_closed + interval_ms
+        candles = [
+            {
+                "timestamp": latest_closed,
+                "open": 100,
+                "high": 101,
+                "low": 99,
+                "close": 100.5,
+                "volume": 10,
+            },
+            {
+                "timestamp": current_open,
+                "open": 100.5,
+                "high": 102,
+                "low": 100,
+                "close": 101,
+                "volume": 5,
+            },
+        ]
+        with (
+            mock.patch.object(study_server.time, "time", return_value=now / 1000),
+            mock.patch.object(
+                study_server,
+                "load_candle_range",
+                return_value=(candles, "bybit", ""),
+            ) as load_range,
+        ):
+            payload = study_server.load_replay_candles(
+                "BTCUSDT",
+                "60",
+                latest_closed,
+                500,
+            )
+
+        self.assertTrue(load_range.call_args.kwargs["require_complete"])
+        self.assertEqual(payload["effectiveCutoff"], latest_closed)
+        self.assertEqual(
+            [candle["timestamp"] for candle in payload["candles"]],
+            [latest_closed],
+        )
+
+        with (
+            mock.patch.object(study_server.time, "time", return_value=now / 1000),
+            mock.patch.object(
+                study_server,
+                "load_candle_range",
+                return_value=(candles, "bybit", ""),
+            ) as later_range,
+        ):
+            later_payload = study_server.load_later_candles(
+                "BTCUSDT",
+                "60",
+                latest_closed - interval_ms,
+                100,
+            )
+
+        self.assertTrue(later_range.call_args.kwargs["require_complete"])
+        self.assertEqual(
+            [candle["timestamp"] for candle in later_payload["candles"]],
+            [latest_closed],
+        )
 
     def test_rejects_unknown_system_and_wrong_point_count(self):
         invalid_drawings = [

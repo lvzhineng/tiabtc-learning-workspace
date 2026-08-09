@@ -2,6 +2,8 @@ import math
 import os
 import re
 import threading
+import time
+from urllib.request import getproxies
 
 import ccxt
 
@@ -15,6 +17,7 @@ CCXT_TIMEFRAMES = {
     "D": "1d",
     "W": "1w",
 }
+MARKET_CATALOG_TTL_SECONDS = 30 * 60
 
 
 class CcxtBybitMarketDataProvider:
@@ -24,6 +27,7 @@ class CcxtBybitMarketDataProvider:
             "timeout": timeout_milliseconds,
             "options": {
                 "defaultType": "swap",
+                "fetchMarkets": {"types": ["linear"]},
                 "maxRetriesOnFailure": 3,
                 "maxRetriesOnFailureDelay": 500,
             },
@@ -34,18 +38,138 @@ class CcxtBybitMarketDataProvider:
             or os.environ.get("HTTP_PROXY")
             or os.environ.get("http_proxy")
         )
+        if not proxy:
+            system_proxies = getproxies()
+            proxy = system_proxies.get("https") or system_proxies.get("http")
         if proxy:
             config["httpsProxy"] = proxy
 
         self.exchange = ccxt.bybit(config)
         self.request_lock = threading.RLock()
+        self._catalog_state_lock = threading.Lock()
+        self._perpetual_catalog = []
+        self._perpetual_catalog_loaded_at = 0.0
+        self._catalog_refreshing = False
+        self._catalog_refresh_attempted_at = 0.0
 
-    def warm_up(self):
+    @staticmethod
+    def _build_perpetual_catalog(markets):
+        catalog_by_symbol = {}
+        for market in (markets or {}).values():
+            if (
+                not market.get("swap")
+                or market.get("linear") is not True
+                or str(market.get("quote") or "").upper() != "USDT"
+                or str(market.get("settle") or "").upper() != "USDT"
+                or market.get("active") is False
+            ):
+                continue
+
+            symbol = str(market.get("id") or "").strip().upper()
+            base = str(market.get("base") or "").strip().upper()
+            if not re.fullmatch(r"[A-Z0-9]{3,15}USDT", symbol):
+                continue
+            if not base or symbol != f"{base}USDT":
+                continue
+            catalog_by_symbol[symbol] = {
+                "symbol": symbol,
+                "base": base,
+                "quote": "USDT",
+                "name": f"{base}/USDT 永续",
+            }
+        return sorted(catalog_by_symbol.values(), key=lambda item: item["symbol"])
+
+    @staticmethod
+    def _market_match_key(item, query):
+        symbol = item["symbol"]
+        base = item["base"]
+        if query == symbol:
+            rank = 0
+        elif query == base:
+            rank = 1
+        elif symbol.startswith(query):
+            rank = 2
+        elif base.startswith(query):
+            rank = 3
+        elif query in symbol:
+            rank = 4
+        else:
+            return None
+        return rank, len(symbol), symbol
+
+    def _refresh_perpetual_catalog(self, reserved=False):
+        if not reserved:
+            with self._catalog_state_lock:
+                if self._catalog_refreshing:
+                    return
+                self._catalog_refreshing = True
+                self._catalog_refresh_attempted_at = time.monotonic()
         try:
             with self.request_lock:
-                self.exchange.load_markets()
+                markets = self.exchange.load_markets(
+                    reload=bool(self.exchange.markets)
+                )
+            catalog = self._build_perpetual_catalog(markets)
+            with self._catalog_state_lock:
+                self._perpetual_catalog = catalog
+                self._perpetual_catalog_loaded_at = time.monotonic()
         except (ccxt.BaseError, OSError, TimeoutError, ConnectionError) as error:
             raise RuntimeError(f"CCXT Bybit 市场信息预热失败：{error}") from error
+        finally:
+            with self._catalog_state_lock:
+                self._catalog_refreshing = False
+
+    def _schedule_catalog_refresh(self):
+        now = time.monotonic()
+        with self._catalog_state_lock:
+            if (
+                self._catalog_refreshing
+                or now - self._catalog_refresh_attempted_at < 60
+            ):
+                return
+            self._catalog_refreshing = True
+            self._catalog_refresh_attempted_at = now
+
+        def refresh():
+            try:
+                self._refresh_perpetual_catalog(reserved=True)
+            except RuntimeError:
+                # Search returns the saved-symbol fallback while the catalog is
+                # unavailable. The next search may retry after the cooldown.
+                pass
+
+        threading.Thread(
+            target=refresh,
+            name="ccxt-market-catalog-refresh",
+            daemon=True,
+        ).start()
+
+    def warm_up(self):
+        self._refresh_perpetual_catalog()
+
+    def search_usdt_perpetual_markets(self, query, limit=20):
+        normalized_query = re.sub(r"[^A-Z0-9]", "", str(query or "").upper())
+        if not normalized_query:
+            return []
+        with self._catalog_state_lock:
+            catalog = list(self._perpetual_catalog)
+            catalog_is_stale = (
+                not catalog
+                or time.monotonic() - self._perpetual_catalog_loaded_at
+                >= MARKET_CATALOG_TTL_SECONDS
+            )
+        if catalog_is_stale:
+            self._schedule_catalog_refresh()
+        if not catalog:
+            raise RuntimeError("Bybit 永续合约目录正在加载，请稍后重试")
+
+        matches = []
+        for item in catalog:
+            match_key = self._market_match_key(item, normalized_query)
+            if match_key is not None:
+                matches.append((match_key, item))
+        matches.sort(key=lambda entry: entry[0])
+        return [dict(item) for _key, item in matches[:limit]]
 
     @staticmethod
     def to_ccxt_symbol(symbol):

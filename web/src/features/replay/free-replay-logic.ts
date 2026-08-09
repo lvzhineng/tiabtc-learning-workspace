@@ -136,9 +136,9 @@ export function formatDateTimeLocalInput(dateMs: number): string {
   return `${get('year')}-${get('month')}-${get('day')}T${get('hour')}:${get('minute')}`;
 }
 
-export function parseDateTimeInput(inputStr: string): number {
+export function parseDateTimeInput(inputStr: string): number | null {
   const trimmed = inputStr.trim();
-  if (!trimmed) return Date.now();
+  if (!trimmed) return null;
   // datetime-local has no timezone. The review domain is explicitly fixed to
   // Asia/Shanghai, independent of the machine or browser timezone.
   const hasTimezone = /([zZ]|[+-]\d{2}:?\d{2})$/.test(trimmed);
@@ -148,5 +148,5 @@ export function parseDateTimeInput(inputStr: string): number {
     : `${trimmed}:00+08:00`;
   const parsed = Date.parse(hasTimezone ? trimmed : shanghaiTime);
   if (!Number.isNaN(parsed)) return parsed;
-  return Date.now();
+  return null;
 }

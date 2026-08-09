@@ -44,6 +44,7 @@ interface ChartCanvasProps {
   systemMarkers?: SeriesMarker<UTCTimestamp>[];
   onCrosshairMove?: (candle: Candlestick | null) => void;
   onDoubleClickTime?: (timestampMs: number) => void;
+  onViewportAnchorChange?: (timestampMs: number) => void;
   onLoadEarlier?: () => void;
   isLoadingEarlier?: boolean;
   onLoadLater?: () => void;
@@ -59,11 +60,11 @@ interface ChartCanvasProps {
   showVolume?: boolean;
 }
 
-function findNearestCandle(
+function findNearestCandleIndex(
   candles: Candlestick[],
   targetTimeMs: number
-): Candlestick | null {
-  if (candles.length === 0) return null;
+): number {
+  if (candles.length === 0) return -1;
   let low = 0;
   let high = candles.length - 1;
   while (low < high) {
@@ -76,8 +77,16 @@ function findNearestCandle(
   return left &&
     Math.abs(left.timestampMs - targetTimeMs) <=
       Math.abs(right.timestampMs - targetTimeMs)
-    ? left
-    : right;
+    ? low - 1
+    : low;
+}
+
+function findNearestCandle(
+  candles: Candlestick[],
+  targetTimeMs: number
+): Candlestick | null {
+  const index = findNearestCandleIndex(candles, targetTimeMs);
+  return index >= 0 ? candles[index] : null;
 }
 
 function candlesEqual(
@@ -140,6 +149,7 @@ export function ChartCanvas({
   systemMarkers = [],
   onCrosshairMove,
   onDoubleClickTime,
+  onViewportAnchorChange,
   onLoadEarlier,
   isLoadingEarlier = false,
   onLoadLater,
@@ -173,10 +183,12 @@ export function ChartCanvas({
   const onLoadLaterRef = useRef(onLoadLater);
   const onSelectDrawingRef = useRef(onSelectDrawing);
   const onDoubleClickTimeRef = useRef(onDoubleClickTime);
+  const onViewportAnchorChangeRef = useRef(onViewportAnchorChange);
   const activeDrawingToolRef = useRef(activeDrawingTool);
   const selectedDrawingIdRef = useRef(selectedDrawingId);
   const intervalRef = useRef(interval);
   const lastAppliedFocusKeyRef = useRef<string | null>(null);
+  const lastNotifiedViewportAnchorRef = useRef<number | null>(null);
   const focusTimeMsRef = useRef(focusTimeMs);
   const focusRangeMsRef = useRef(focusRangeMs);
   const [chartReady, setChartReady] = useState(false);
@@ -215,6 +227,10 @@ export function ChartCanvas({
   useEffect(() => {
     onDoubleClickTimeRef.current = onDoubleClickTime;
   }, [onDoubleClickTime]);
+
+  useEffect(() => {
+    onViewportAnchorChangeRef.current = onViewportAnchorChange;
+  }, [onViewportAnchorChange]);
 
   useEffect(() => {
     activeDrawingToolRef.current = activeDrawingTool;
@@ -346,6 +362,33 @@ export function ChartCanvas({
 
     // Logical range change for autoloading earlier candles
     chart.timeScale().subscribeVisibleLogicalRangeChange((logicalRange) => {
+      if (logicalRange) {
+        const visibleSpan = logicalRange.to - logicalRange.from;
+        const currentCandles = candlesRef.current;
+        if (
+          Number.isFinite(visibleSpan) &&
+          visibleSpan > 0 &&
+          currentCandles.length > 0
+        ) {
+          const anchorIndex = Math.min(
+            currentCandles.length - 1,
+            Math.max(
+              0,
+              Math.round(
+                logicalRange.from + visibleSpan * FOCUS_VIEWPORT_RATIO
+              )
+            )
+          );
+          const anchorTimeMs = currentCandles[anchorIndex]?.timestampMs;
+          if (
+            anchorTimeMs !== undefined &&
+            anchorTimeMs !== lastNotifiedViewportAnchorRef.current
+          ) {
+            lastNotifiedViewportAnchorRef.current = anchorTimeMs;
+            onViewportAnchorChangeRef.current?.(anchorTimeMs);
+          }
+        }
+      }
       if (
         onLoadEarlierRef.current &&
         !isFetchingEarlierRef.current &&
@@ -475,6 +518,7 @@ export function ChartCanvas({
       prevFirstTimestampRef.current = null;
       prevLastTimestampRef.current = null;
       prevCandlesRef.current = [];
+      lastNotifiedViewportAnchorRef.current = null;
       // Remember that the next non-empty setData must set a viewport. The first
       // render after a symbol/interval switch often arrives with candles=[], which
       // would otherwise consume isSeriesContextChange and leave LWC on the left.
@@ -501,15 +545,10 @@ export function ChartCanvas({
       _barCount: number,
       targetTimeMs: number
     ) => {
-      let focusIndex = 0;
-      let nearestDistanceMs = Number.POSITIVE_INFINITY;
-      for (let index = 0; index < candles.length; index += 1) {
-        const distanceMs = Math.abs(candles[index].timestampMs - targetTimeMs);
-        if (distanceMs < nearestDistanceMs) {
-          focusIndex = index;
-          nearestDistanceMs = distanceMs;
-        }
-      }
+      const focusIndex = Math.max(
+        0,
+        findNearestCandleIndex(candles, targetTimeMs)
+      );
       // Replay cut-in / explicit focus must stay at ~80% even when the focused
       // candle is also the last visible bar (future candles are masked).
       chart.timeScale().setVisibleLogicalRange(
@@ -540,14 +579,19 @@ export function ChartCanvas({
       candles[prevBarsCountRef.current - 1]?.timestampMs ===
         prevLastTimestampRef.current &&
       previousCandles.length === prevBarsCountRef.current &&
-      previousCandles.every((previous, index) =>
-        candlesEqual(previous, candles[index])
-      );
+      previousCandles[0] === candles[0] &&
+      previousCandles[previousCandles.length - 1] ===
+        candles[previousCandles.length - 1];
 
     if (canAppendIncrementally) {
       const visibleRangeBeforeAppend =
         chart.timeScale().getVisibleLogicalRange();
-      for (const candle of candles.slice(prevBarsCountRef.current)) {
+      for (
+        let index = prevBarsCountRef.current;
+        index < candles.length;
+        index += 1
+      ) {
+        const candle = candles[index];
         series.update({
           time: timestampMsToUtcTimestamp(candle.timestampMs),
           open: candle.open,
@@ -732,15 +776,10 @@ export function ChartCanvas({
     }
 
     const resolvedFocusTimeMs = focusTimeMs ?? candles[0].timestampMs;
-    let focusIndex = 0;
-    let nearestDistanceMs = Number.POSITIVE_INFINITY;
-    candles.forEach((candle, index) => {
-      const distanceMs = Math.abs(candle.timestampMs - resolvedFocusTimeMs);
-      if (distanceMs < nearestDistanceMs) {
-        focusIndex = index;
-        nearestDistanceMs = distanceMs;
-      }
-    });
+    const focusIndex = Math.max(
+      0,
+      findNearestCandleIndex(candles, resolvedFocusTimeMs)
+    );
 
     const currentRange = chart.timeScale().getVisibleLogicalRange();
     if (currentRange) {

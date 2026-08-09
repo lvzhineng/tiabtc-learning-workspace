@@ -9,6 +9,7 @@ $workspaceRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
 $webRoot = Join-Path $workspaceRoot "web"
 $runtimeRoot = Join-Path $workspaceRoot ".run"
 $backendUrl = "http://127.0.0.1:8765/api/health"
+$expectedBackendVersion = '"version": 10'
 $frontendBaseUrl = "http://127.0.0.1:3000/"
 $frontendUrl = if ($Page -eq "review") {
     "${frontendBaseUrl}?tab=review"
@@ -140,7 +141,7 @@ $backendProcess = $null
 $frontendProcess = $null
 
 try {
-    if (Test-Endpoint -Uri $backendUrl -ExpectedText "warmCcxtMarkets") {
+    if (Test-Endpoint -Uri $backendUrl -ExpectedText $expectedBackendVersion) {
         Write-Host "后端已经运行，直接复用 8765 端口。" -ForegroundColor DarkGray
     } else {
         Stop-StaleWorkspaceBackend
@@ -153,7 +154,7 @@ try {
             -RedirectStandardOutput (Join-Path $runtimeRoot "backend.out.log") `
             -RedirectStandardError (Join-Path $runtimeRoot "backend.err.log") `
             -PassThru
-        Wait-Endpoint -Uri $backendUrl -ExpectedText "warmCcxtMarkets"
+        Wait-Endpoint -Uri $backendUrl -ExpectedText $expectedBackendVersion
     }
 
     if (Test-Endpoint -Uri $frontendBaseUrl -ExpectedText "TiaBTC Workspace") {

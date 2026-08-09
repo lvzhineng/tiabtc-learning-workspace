@@ -94,6 +94,17 @@ function mergeCandles(
   incoming: Candlestick[]
 ): Candlestick[] {
   if (!incoming.length) return current;
+  if (!current.length) return incoming;
+  if (
+    incoming[incoming.length - 1].timestampMs < current[0].timestampMs
+  ) {
+    return [...incoming, ...current];
+  }
+  if (
+    incoming[0].timestampMs > current[current.length - 1].timestampMs
+  ) {
+    return [...current, ...incoming];
+  }
   const merged = new Map(
     current.map((candle) => [candle.timestampMs, candle])
   );
@@ -496,16 +507,19 @@ function BitlangTradeChart({
       exitTimeMs,
       controller.signal
     )
-      .then((nextCandles) => {
+      .then((batch) => {
         if (
           controller.signal.aborted ||
           contextKeyRef.current !== chartContextKey
         ) {
           return;
         }
-        setCandles(nextCandles);
+        setCandles(batch.candles);
         setLoadedContextKey(chartContextKey);
-        if (!nextCandles.length) setError('Bybit 未返回该时间范围的 K 线');
+        setError(
+          batch.warning ||
+            (!batch.candles.length ? 'Bybit 未返回该时间范围的 K 线' : null)
+        );
       })
       .catch((cause) => {
         if (controller.signal.aborted) return;
@@ -541,16 +555,20 @@ function BitlangTradeChart({
       500,
       controller.signal
     )
-      .then((incoming) => {
+      .then((batch) => {
         if (
           !controller.signal.aborted &&
           contextKeyRef.current === requestContextKey
         ) {
-          setCandles((current) => mergeCandles(current, incoming));
+          setCandles((current) => mergeCandles(current, batch.candles));
+          setError(batch.warning);
         }
       })
       .catch((cause) => {
         if (!controller.signal.aborted) {
+          setError(
+            cause instanceof Error ? cause.message : '加载更早 K 线失败'
+          );
           console.warn('Bit浪浪更早 K 线加载失败:', cause);
         }
       })
@@ -582,16 +600,20 @@ function BitlangTradeChart({
       500,
       controller.signal
     )
-      .then((incoming) => {
+      .then((batch) => {
         if (
           !controller.signal.aborted &&
           contextKeyRef.current === requestContextKey
         ) {
-          setCandles((current) => mergeCandles(current, incoming));
+          setCandles((current) => mergeCandles(current, batch.candles));
+          setError(batch.warning);
         }
       })
       .catch((cause) => {
         if (!controller.signal.aborted) {
+          setError(
+            cause instanceof Error ? cause.message : '加载更晚 K 线失败'
+          );
           console.warn('Bit浪浪更晚 K 线加载失败:', cause);
         }
       })

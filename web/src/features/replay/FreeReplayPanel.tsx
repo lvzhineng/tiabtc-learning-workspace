@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import type { ReplayState } from './replay-state';
 import { formatDateTimeLocalInput, parseDateTimeInput } from './free-replay-logic';
 import { formatChartTime } from '@/chart/chart-time';
@@ -44,7 +44,9 @@ export function FreeReplayPanel({
   const [startTimeInput, setStartTimeInput] = useState<string>(
     formatDateTimeLocalInput(defaultStartTimeMs)
   );
+  const [startTimeError, setStartTimeError] = useState<string | null>(null);
   const [showModal, setShowModal] = useState<boolean>(false);
+  const startTimeInputRef = useRef<HTMLInputElement>(null);
 
   // Keyboard Shortcuts Listener
   useEffect(() => {
@@ -79,7 +81,10 @@ export function FreeReplayPanel({
     return (
       <>
         <button
-          onClick={() => setShowModal(true)}
+          onClick={() => {
+            setStartTimeError(null);
+            setShowModal(true);
+          }}
           style={{
             background: 'var(--bg-dark-700)',
             color: 'var(--accent-orange)',
@@ -154,10 +159,14 @@ export function FreeReplayPanel({
                   回放起点时间 (Start Time)
                 </label>
                 <input
+                  ref={startTimeInputRef}
                   type="datetime-local"
                   value={startTimeInput}
                   max={formatDateTimeLocalInput(Date.now())}
-                  onChange={(e) => setStartTimeInput(e.target.value)}
+                  onChange={(e) => {
+                    setStartTimeInput(e.target.value);
+                    setStartTimeError(null);
+                  }}
                   style={{
                     width: '100%',
                     background: 'var(--bg-dark-700)',
@@ -169,6 +178,18 @@ export function FreeReplayPanel({
                     outline: 'none',
                   }}
                 />
+                {startTimeError && (
+                  <div
+                    role="alert"
+                    style={{
+                      marginTop: '7px',
+                      color: 'var(--accent-red)',
+                      fontSize: '12px',
+                    }}
+                  >
+                    {startTimeError}
+                  </div>
+                )}
               </div>
 
               <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '10px' }}>
@@ -187,9 +208,18 @@ export function FreeReplayPanel({
                 </button>
                 <button
                   onClick={() => {
-                    const parsedMs = parseDateTimeInput(startTimeInput);
+                    // Read the current DOM value as well as React state. This
+                    // closes the small window where a user clears the input
+                    // and immediately submits before the state update commits.
+                    const inputValue =
+                      startTimeInputRef.current?.value ?? startTimeInput;
+                    const parsedMs = parseDateTimeInput(inputValue);
+                    if (parsedMs === null) {
+                      setStartTimeError('请选择有效的回放起点时间');
+                      return;
+                    }
                     if (parsedMs > Date.now()) {
-                      alert('回放起点不能晚于当前时间');
+                      setStartTimeError('回放起点不能晚于当前时间');
                       return;
                     }
                     onStartReplay(activeSymbol, parsedMs);

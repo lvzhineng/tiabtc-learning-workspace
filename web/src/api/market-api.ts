@@ -31,6 +31,23 @@ type SymbolsResponse = {
   symbols: RawSymbol[];
 };
 
+export type PerpetualSymbolSearchItem = RawSymbol & {
+  base: string;
+  quote: 'USDT';
+  added: boolean;
+};
+
+export type PerpetualSymbolSearchResponse = {
+  symbols: PerpetualSymbolSearchItem[];
+  offlineMode: boolean;
+  warning?: string;
+};
+
+export type CandleBatch = {
+  candles: Candlestick[];
+  warning: string | null;
+};
+
 type ConfigResponse = {
   offlineMode: boolean;
 };
@@ -38,11 +55,11 @@ type ConfigResponse = {
 const CANDLE_CACHE_MAX_ENTRIES = 48;
 const LIVE_CANDLE_CACHE_TTL_MS = 30_000;
 type CandleCacheEntry = {
-  candles: Candlestick[];
+  batch: CandleBatch;
   cachedAt: number;
 };
 const candleCache = new Map<string, CandleCacheEntry>();
-const candleRequests = new Map<string, Promise<Candlestick[]>>();
+const candleRequests = new Map<string, Promise<CandleBatch>>();
 
 function parseRawCandles(
   response: RawCandleResponse,
@@ -83,16 +100,16 @@ function parseRawCandles(
   ).sort((left, right) => left.timestampMs - right.timestampMs);
 }
 
-function rememberCandles(key: string, candles: Candlestick[]): void {
+function rememberCandles(key: string, batch: CandleBatch): void {
   // An empty response can mean offline cache miss or that the next live bar is
   // not closed yet. Keeping it forever would hide data after either condition
   // changes.
-  if (candles.length === 0) {
+  if (batch.candles.length === 0 || batch.warning) {
     candleCache.delete(key);
     return;
   }
   candleCache.delete(key);
-  candleCache.set(key, { candles, cachedAt: Date.now() });
+  candleCache.set(key, { batch, cachedAt: Date.now() });
   while (candleCache.size > CANDLE_CACHE_MAX_ENTRIES) {
     const oldestKey = candleCache.keys().next().value;
     if (typeof oldestKey !== 'string') break;
@@ -101,9 +118,9 @@ function rememberCandles(key: string, candles: Candlestick[]): void {
 }
 
 function waitForCandleRequest(
-  request: Promise<Candlestick[]>,
+  request: Promise<CandleBatch>,
   signal?: AbortSignal
-): Promise<Candlestick[]> {
+): Promise<CandleBatch> {
   if (!signal) return request;
   if (signal.aborted) {
     return Promise.reject(new DOMException('请求已取消', 'AbortError'));
@@ -123,12 +140,12 @@ function requestCandles(
   interval: ReviewTimeframe,
   signal?: AbortSignal,
   cacheTtlMs = Number.POSITIVE_INFINITY
-): Promise<Candlestick[]> {
+): Promise<CandleBatch> {
   const cached = candleCache.get(path);
   if (cached && Date.now() - cached.cachedAt <= cacheTtlMs) {
     candleCache.delete(path);
     candleCache.set(path, cached);
-    return waitForCandleRequest(Promise.resolve(cached.candles), signal);
+    return waitForCandleRequest(Promise.resolve(cached.batch), signal);
   }
   if (cached) {
     candleCache.delete(path);
@@ -138,9 +155,15 @@ function requestCandles(
   if (!request) {
     request = requestJson<RawCandleResponse>(path)
       .then((data) => {
-        const candles = parseRawCandles(data, symbol, interval);
-        rememberCandles(path, candles);
-        return candles;
+        const batch = {
+          candles: parseRawCandles(data, symbol, interval),
+          warning:
+            typeof data.warning === 'string' && data.warning.trim()
+              ? data.warning.trim()
+              : null,
+        } satisfies CandleBatch;
+        rememberCandles(path, batch);
+        return batch;
       })
       .finally(() => {
         candleRequests.delete(path);
@@ -163,6 +186,21 @@ export async function addCustomSymbol(symbol: string): Promise<string> {
   return data.symbol;
 }
 
+export async function searchPerpetualSymbols(
+  query: string,
+  signal?: AbortSignal,
+  limit = 20
+): Promise<PerpetualSymbolSearchResponse> {
+  const params = new URLSearchParams({
+    q: query,
+    limit: limit.toString(),
+  });
+  return requestJson<PerpetualSymbolSearchResponse>(
+    `/api/symbols/search?${params}`,
+    { signal }
+  );
+}
+
 export async function fetchChartConfig(): Promise<ConfigResponse> {
   return requestJson<ConfigResponse>('/api/chart/config');
 }
@@ -179,7 +217,7 @@ export async function fetchChartCandles(
   interval: ReviewTimeframe,
   anchorTimeMs: number,
   signal?: AbortSignal
-): Promise<Candlestick[]> {
+): Promise<CandleBatch> {
   const params = new URLSearchParams({
     symbol,
     interval,
@@ -200,7 +238,7 @@ export async function fetchBitlangTradeCandles(
   entryTimeMs: number,
   exitTimeMs: number,
   signal?: AbortSignal
-): Promise<Candlestick[]> {
+): Promise<CandleBatch> {
   const params = new URLSearchParams({
     symbol,
     interval,
@@ -221,14 +259,14 @@ export async function fetchBitlangEarlierCandles(
   beforeMs: number,
   limit = 500,
   signal?: AbortSignal
-): Promise<Candlestick[]> {
+): Promise<CandleBatch> {
   const intervalMs = TIMEFRAME_SECONDS_MAP[interval] * 1000;
   const exitTimeMs = beforeMs - intervalMs;
   const entryTimeMs = Math.max(
     1_230_768_000_000,
     exitTimeMs - intervalMs * limit
   );
-  if (entryTimeMs >= exitTimeMs) return [];
+  if (entryTimeMs >= exitTimeMs) return { candles: [], warning: null };
   const params = new URLSearchParams({
     symbol,
     interval,
@@ -249,14 +287,14 @@ export async function fetchBitlangLaterCandles(
   afterMs: number,
   limit = 500,
   signal?: AbortSignal
-): Promise<Candlestick[]> {
+): Promise<CandleBatch> {
   const intervalMs = TIMEFRAME_SECONDS_MAP[interval] * 1000;
   const entryTimeMs = afterMs + intervalMs;
   const exitTimeMs = Math.min(
     Date.now(),
     entryTimeMs + intervalMs * limit
   );
-  if (entryTimeMs >= exitTimeMs) return [];
+  if (entryTimeMs >= exitTimeMs) return { candles: [], warning: null };
   const params = new URLSearchParams({
     symbol,
     interval,
@@ -277,7 +315,7 @@ export async function fetchEarlierCandles(
   beforeMs: number,
   limit = 1000,
   signal?: AbortSignal
-): Promise<Candlestick[]> {
+): Promise<CandleBatch> {
   const params = new URLSearchParams({
     symbol,
     interval,
@@ -294,7 +332,7 @@ export async function fetchLaterCandles(
   limit = 1000,
   cutoffMs?: number,
   signal?: AbortSignal
-): Promise<Candlestick[]> {
+): Promise<CandleBatch> {
   const params = new URLSearchParams({
     symbol,
     interval,
@@ -319,12 +357,20 @@ export async function fetchReplayCandles(
   replayCursorMs: number,
   limit = 1000,
   signal?: AbortSignal
-): Promise<Candlestick[]> {
+): Promise<CandleBatch> {
   const params = new URLSearchParams({
     symbol,
     interval,
     replayCursor: replayCursorMs.toString(),
     limit: limit.toString(),
   });
-  return requestCandles(`/api/chart/candles?${params}`, symbol, interval, signal);
+  // A replay window can include the live tail. Do not retain a partial response
+  // forever when a background market refresh was still catching up.
+  return requestCandles(
+    `/api/chart/candles?${params}`,
+    symbol,
+    interval,
+    signal,
+    LIVE_CANDLE_CACHE_TTL_MS
+  );
 }
