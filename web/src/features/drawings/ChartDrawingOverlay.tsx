@@ -84,6 +84,19 @@ function drawingId(): string {
   return `drawing_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
 }
 
+// The native crosshair cursor can become nearly white on Windows and disappear
+// over the light chart background. A dark core with a white outline remains
+// visible over candles, grid lines, and both application themes.
+const DRAWING_CURSOR_SVG =
+  '<svg xmlns="http://www.w3.org/2000/svg" width="25" height="25" viewBox="0 0 25 25">' +
+  '<path d="M12.5 1v8m0 7v8M1 12.5h8m7 0h8" fill="none" stroke="#fff" stroke-width="4" stroke-linecap="round"/>' +
+  '<path d="M12.5 1v8m0 7v8M1 12.5h8m7 0h8" fill="none" stroke="#0f172a" stroke-width="2" stroke-linecap="round"/>' +
+  '<circle cx="12.5" cy="12.5" r="2.25" fill="#fff" stroke="#0f172a" stroke-width="1.5"/>' +
+  '</svg>';
+const DRAWING_CURSOR = `url("data:image/svg+xml,${encodeURIComponent(
+  DRAWING_CURSOR_SVG
+)}") 12 12, crosshair`;
+
 function findNearestCandle(
   candles: Candlestick[],
   timestampMs: number
@@ -533,7 +546,7 @@ export function ChartDrawingOverlay({
         width: '100%',
         height: '100%',
         zIndex: 4,
-        cursor: activeTool === 'select' ? 'default' : 'crosshair',
+        cursor: activeTool === 'select' ? 'default' : DRAWING_CURSOR,
         pointerEvents: 'none',
       }}
     >
