@@ -5,6 +5,7 @@ import {
   useMemo,
   useRef,
   useState,
+  type MouseEvent as ReactMouseEvent,
   type PointerEvent as ReactPointerEvent,
 } from 'react';
 import type { IChartApi, ISeriesApi } from 'lightweight-charts';
@@ -326,6 +327,9 @@ export function ChartDrawingOverlay({
   const handleBackgroundPointerDown = (
     event: ReactPointerEvent<SVGRectElement>
   ) => {
+    // Only the primary button may place anchors or change selection. Let the
+    // secondary button continue to the browser/chart context-menu behavior.
+    if (event.button !== 0) return;
     if (activeTool === 'select') {
       onSelectDrawing(null);
       return;
@@ -360,6 +364,7 @@ export function ChartDrawingOverlay({
     drawing: DrawingToolState,
     pointIndex: number | null = null
   ) => {
+    if (event.button !== 0) return;
     event.preventDefault();
     event.stopPropagation();
     onSelectDrawing(drawing.id);
@@ -498,6 +503,20 @@ export function ChartDrawingOverlay({
     }
   };
 
+  const handleContextMenu = (
+    event: ReactMouseEvent<SVGSVGElement>
+  ) => {
+    if (activeTool === 'select') return;
+    // In drawing mode, right-click is an explicit cancel action: discard an
+    // unfinished draft and return to the selection pointer without saving.
+    event.preventDefault();
+    event.stopPropagation();
+    setDraftPoints([]);
+    setHoverPoint(null);
+    setDrag(null);
+    onDrawingComplete();
+  };
+
   const toCoordinate = useCallback((point: DrawingPoint) => {
     const x = timestampToChartCoordinate(
       chart,
@@ -540,6 +559,7 @@ export function ChartDrawingOverlay({
       onPointerMove={handlePointerMove}
       onPointerUp={finishPointerInteraction}
       onPointerCancel={finishPointerInteraction}
+      onContextMenu={handleContextMenu}
       style={{
         position: 'absolute',
         inset: 0,
