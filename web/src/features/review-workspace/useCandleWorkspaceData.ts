@@ -115,7 +115,11 @@ export function useCandleWorkspaceData(
         : fetchReplayCandles(
             symbol,
             timeframe,
-            replayState.startTimeMs,
+            // A symbol/timeframe switch must reload around the current replay
+            // position. Reloading around startTimeMs can leave a long-running
+            // replay cursor beyond the fixed initial window until playback
+            // triggers a later-candle prefetch.
+            replayState.cursorTimeMs,
             500,
             controller.signal
           );
