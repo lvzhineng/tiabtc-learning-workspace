@@ -52,6 +52,30 @@ export function IconFibRetracement(props: IconProps) {
   );
 }
 
+export function IconHalfRetracement(props: IconProps) {
+  return (
+    <DrawingIcon {...props}>
+      <line x1="5" y1="7" x2="23" y2="7" {...stroke} />
+      <line x1="5" y1="14" x2="23" y2="14" {...stroke} />
+      <line x1="5" y1="21" x2="23" y2="21" {...stroke} />
+      <text
+        x="14"
+        y="12"
+        textAnchor="middle"
+        fontSize="6"
+        fontWeight="600"
+        fill={ICON_COLOR}
+      >
+        0.5
+      </text>
+      <circle cx="5" cy="7" r="1.6" fill="#fff" stroke={ICON_COLOR} strokeWidth="1.1" />
+      <circle cx="23" cy="7" r="1.6" fill="#fff" stroke={ICON_COLOR} strokeWidth="1.1" />
+      <circle cx="5" cy="21" r="1.6" fill="#fff" stroke={ICON_COLOR} strokeWidth="1.1" />
+      <circle cx="23" cy="21" r="1.6" fill="#fff" stroke={ICON_COLOR} strokeWidth="1.1" />
+    </DrawingIcon>
+  );
+}
+
 export function IconShortPosition(props: IconProps) {
   return (
     <DrawingIcon {...props}>

@@ -1,6 +1,9 @@
 import type { PersistedDrawing } from '@/domain/drawing';
 import type { DrawingToolState, DrawingPoint } from './drawing-types';
 
+const HALF_RETRACEMENT_TOOL_TYPE = 'half-retracement';
+const HALF_RETRACEMENT_VARIANT = 'half';
+
 const SERVER_TOOL_TYPES: Record<string, string> = {
   'short-position': 'ShortPosition',
   'long-position': 'LongPosition',
@@ -22,6 +25,7 @@ const UI_TOOL_TYPES = Object.fromEntries(
 );
 
 export function toServerToolType(toolType: string): string {
+  if (toolType === HALF_RETRACEMENT_TOOL_TYPE) return 'FibRetracement';
   return SERVER_TOOL_TYPES[toolType] || toolType;
 }
 
@@ -47,13 +51,18 @@ export function deserializeDrawing(
       price: Number(point.price),
     };
   });
+  const isHalfRetracement =
+    persisted.toolType === 'FibRetracement' &&
+    persisted.options.retracementVariant === HALF_RETRACEMENT_VARIANT;
 
   return {
     id: persisted.id,
     videoId: persisted.videoId,
     symbol: persisted.symbol,
     interval: persisted.interval,
-    toolType: toUiToolType(persisted.toolType),
+    toolType: isHalfRetracement
+      ? HALF_RETRACEMENT_TOOL_TYPE
+      : toUiToolType(persisted.toolType),
     points,
     text: String(persisted.options.text || ''),
     locked: Boolean(
@@ -71,6 +80,7 @@ export function deserializeDrawing(
 export function serializeDrawing(
   state: DrawingToolState
 ): PersistedDrawing {
+  const isHalfRetracement = state.toolType === HALF_RETRACEMENT_TOOL_TYPE;
   const {
     text: _oldText,
     locked: _oldLocked,
@@ -91,6 +101,9 @@ export function serializeDrawing(
     })),
     options: {
       ...extraOptions,
+      ...(isHalfRetracement
+        ? { retracementVariant: HALF_RETRACEMENT_VARIANT }
+        : {}),
       text: state.text || '',
       locked: Boolean(state.locked),
       editable: !state.locked,

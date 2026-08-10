@@ -333,7 +333,10 @@ export function ChartDrawingOverlay({
       locked: false,
       color: '#2962ff',
       lineWidth: 2,
-      extra: {},
+      extra:
+        activeTool === 'half-retracement'
+          ? { retracementVariant: 'half' }
+          : {},
     };
     setDraftPoints([]);
     setHoverPoint(null);
@@ -697,8 +700,9 @@ const DrawingGeometry = memo(function DrawingGeometry({
     geometry = (
       <line x1={first.x} y1={0} x2={first.x} y2="100%" {...common} />
     );
-  } else if (type === 'FibRetracement') {
-    const levels = [0, 0.618, 0.66, 1];
+  } else if (type === 'FibRetracement' || type === 'half-retracement') {
+    const levels =
+      type === 'half-retracement' ? [0, 0.5, 1] : [0, 0.618, 0.66, 1];
     geometry = (
       <>
         {levels.map((level) => {

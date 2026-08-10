@@ -14,6 +14,7 @@ export type LegacyToolType =
   | 'ShortPosition';
 
 export type EnhancedToolType =
+  | 'half-retracement'
   | 'date-price-range'
   | 'path'
   | 'text-annotation'
@@ -50,6 +51,7 @@ export const ANCHOR_COUNTS: Record<string, number> = {
   HorizontalRay: 1,
   VerticalLine: 1,
   FibRetracement: 2,
+  'half-retracement': 2,
   ExtendedLine: 2,
   Arrow: 2,
   Rectangle: 2,
