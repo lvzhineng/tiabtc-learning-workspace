@@ -61,6 +61,8 @@ interface ChartCanvasProps {
   showVolume?: boolean;
   /** Soft vertical bands for US regular session (NYSE 09:30–16:00). */
   showUsSessionBands?: boolean;
+  /** Warm vertical bands for the weekend in America/New_York. */
+  showWeekendBands?: boolean;
 }
 
 function findNearestCandleIndex(
@@ -167,6 +169,7 @@ export function ChartCanvas({
   onDrawingComplete = () => {},
   showVolume = false,
   showUsSessionBands = false,
+  showWeekendBands = false,
 }: ChartCanvasProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const chartRef = useRef<IChartApi | null>(null);
@@ -832,12 +835,14 @@ export function ChartCanvas({
       />
       {chartReady &&
         chartRef.current &&
-        showUsSessionBands && (
+        (showUsSessionBands || showWeekendBands) && (
           <UsSessionBandsOverlay
             chart={chartRef.current}
             candles={candles}
             interval={interval}
             themeMode={themeMode}
+            showUsSessionBands={showUsSessionBands}
+            showWeekendBands={showWeekendBands}
           />
         )}
       {chartReady && chartRef.current && seriesRef.current && (

@@ -2,6 +2,7 @@
 export const US_SESSION_TIME_ZONE = 'America/New_York';
 export const US_SESSION_OPEN = { hour: 9, minute: 30 } as const;
 export const US_SESSION_CLOSE = { hour: 16, minute: 0 } as const;
+export const WEEKEND_TIME_ZONE = US_SESSION_TIME_ZONE;
 
 export type UsSessionBand = {
   fromMs: number;
@@ -159,6 +160,63 @@ export function listUsRegularSessions(
         bands.push({
           fromMs: Math.max(openMs, rangeFromMs),
           toMs: Math.min(closeMs, rangeToMs),
+        });
+      }
+    }
+
+    const next = new Date(Date.UTC(year, month - 1, day + 1));
+    year = next.getUTCFullYear();
+    month = next.getUTCMonth() + 1;
+    day = next.getUTCDate();
+  }
+
+  return bands;
+}
+
+/** List Saturday 00:00 through Monday 00:00 bands in America/New_York. */
+export function listWeekendSessions(
+  rangeFromMs: number,
+  rangeToMs: number
+): UsSessionBand[] {
+  if (!(rangeToMs > rangeFromMs)) return [];
+
+  const startParts = getZonedParts(
+    rangeFromMs - 3 * 24 * 60 * 60 * 1000,
+    WEEKEND_TIME_ZONE
+  );
+  let year = startParts.year;
+  let month = startParts.month;
+  let day = startParts.day;
+
+  const bands: UsSessionBand[] = [];
+  const hardStop = rangeToMs + 24 * 60 * 60 * 1000;
+
+  for (let guard = 0; guard < 4000; guard += 1) {
+    const dayStartMs = zonedWallTimeToUtcMs(
+      WEEKEND_TIME_ZONE,
+      year,
+      month,
+      day,
+      0,
+      0
+    );
+    if (dayStartMs > hardStop) break;
+
+    const weekday = getZonedParts(dayStartMs, WEEKEND_TIME_ZONE).weekday;
+    if (weekday === 'Sat') {
+      const monday = new Date(Date.UTC(year, month - 1, day + 2));
+      const weekendEndMs = zonedWallTimeToUtcMs(
+        WEEKEND_TIME_ZONE,
+        monday.getUTCFullYear(),
+        monday.getUTCMonth() + 1,
+        monday.getUTCDate(),
+        0,
+        0
+      );
+      if (weekendEndMs >= rangeFromMs && dayStartMs <= rangeToMs) {
+        bands.push({
+          fromMs: Math.max(dayStartMs, rangeFromMs),
+          toMs: Math.min(weekendEndMs, rangeToMs),
         });
       }
     }
