@@ -7,6 +7,7 @@ import {
   utcTimestampToTimestampMs,
 } from '@/chart/chart-time';
 import {
+  listWeekendSessions,
   listUsRegularSessions,
   type UsSessionBand,
 } from '@/chart/us-session';
@@ -25,12 +26,20 @@ type Props = {
   candles: Candlestick[];
   interval: ReviewTimeframe;
   themeMode: 'dark' | 'light';
+  showUsSessionBands: boolean;
+  showWeekendBands: boolean;
 };
 
-function fillColor(themeMode: 'dark' | 'light'): string {
+function usSessionFillColor(themeMode: 'dark' | 'light'): string {
   return themeMode === 'light'
     ? 'rgba(37, 99, 235, 0.07)'
     : 'rgba(96, 165, 250, 0.11)';
+}
+
+function weekendFillColor(themeMode: 'dark' | 'light'): string {
+  return themeMode === 'light'
+    ? 'rgba(245, 158, 11, 0.10)'
+    : 'rgba(251, 191, 36, 0.13)';
 }
 
 function timestampToChartCoordinate(
@@ -79,13 +88,14 @@ type SessionBandCache = {
 const DAY_MS = 24 * 60 * 60 * 1000;
 
 function buildSessionBandCache(
-  visible: { fromMs: number; toMs: number }
+  visible: { fromMs: number; toMs: number },
+  listBands: (fromMs: number, toMs: number) => UsSessionBand[]
 ): SessionBandCache {
   const visibleSpanMs = Math.max(DAY_MS, visible.toMs - visible.fromMs);
   const paddingMs = Math.max(7 * DAY_MS, visibleSpanMs);
   const fromMs = visible.fromMs - paddingMs;
   const toMs = visible.toMs + paddingMs;
-  const bands = listUsRegularSessions(fromMs, toMs);
+  const bands = listBands(fromMs, toMs);
 
   return { fromMs, toMs, bands };
 }
@@ -121,16 +131,22 @@ export function UsSessionBandsOverlay({
   candles,
   interval,
   themeMode,
+  showUsSessionBands,
+  showWeekendBands,
 }: Props) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const candlesRef = useRef(candles);
   const themeModeRef = useRef(themeMode);
   const intervalRef = useRef(interval);
+  const showUsSessionBandsRef = useRef(showUsSessionBands);
+  const showWeekendBandsRef = useRef(showWeekendBands);
   const schedulePaintRef = useRef<(() => void) | null>(null);
 
   candlesRef.current = candles;
   themeModeRef.current = themeMode;
   intervalRef.current = interval;
+  showUsSessionBandsRef.current = showUsSessionBands;
+  showWeekendBandsRef.current = showWeekendBands;
 
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -138,7 +154,8 @@ export function UsSessionBandsOverlay({
 
     let disposed = false;
     let frame: number | null = null;
-    let sessionBandCache: SessionBandCache | null = null;
+    let usSessionBandCache: SessionBandCache | null = null;
+    let weekendBandCache: SessionBandCache | null = null;
     const timeScale = chart.timeScale();
     const host = canvas.parentElement;
     let cssWidth = host?.clientWidth ?? chart.chartElement().clientWidth;
@@ -181,37 +198,63 @@ export function UsSessionBandsOverlay({
       const visible = visibleTimeRangeMs(chart, currentCandles);
       if (!visible) return;
 
-      if (
-        !sessionBandCache ||
-        visible.fromMs < sessionBandCache.fromMs ||
-        visible.toMs > sessionBandCache.toMs
-      ) {
-        sessionBandCache = buildSessionBandCache(visible);
-      }
-      const bands = sessionBandCache.bands;
-      if (bands.length === 0) return;
-
-      ctx.fillStyle = fillColor(themeModeRef.current);
       const scaleWidth = timeScale.width();
-      for (const band of bands) {
-        if (band.toMs < visible.fromMs || band.fromMs > visible.toMs) continue;
-        const left = timestampToChartCoordinate(
-          chart,
-          currentCandles,
-          band.fromMs
-        );
-        const right = timestampToChartCoordinate(
-          chart,
-          currentCandles,
-          band.toMs
-        );
-        if (left === null || right === null) continue;
+      const paintBands = (bands: UsSessionBand[], color: string) => {
+        ctx.fillStyle = color;
+        for (const band of bands) {
+          if (band.toMs < visible.fromMs || band.fromMs > visible.toMs) continue;
+          const left = timestampToChartCoordinate(
+            chart,
+            currentCandles,
+            band.fromMs
+          );
+          const right = timestampToChartCoordinate(
+            chart,
+            currentCandles,
+            band.toMs
+          );
+          if (left === null || right === null) continue;
 
-        const x = Math.min(left, right);
-        const width = Math.abs(right - left);
-        if (!(width > 0.5)) continue;
-        if (x + width < 0 || x > scaleWidth) continue;
-        ctx.fillRect(x, 0, width, cssHeight);
+          const x = Math.min(left, right);
+          const width = Math.abs(right - left);
+          if (!(width > 0.5)) continue;
+          if (x + width < 0 || x > scaleWidth) continue;
+          ctx.fillRect(x, 0, width, cssHeight);
+        }
+      };
+
+      if (showUsSessionBandsRef.current) {
+        if (
+          !usSessionBandCache ||
+          visible.fromMs < usSessionBandCache.fromMs ||
+          visible.toMs > usSessionBandCache.toMs
+        ) {
+          usSessionBandCache = buildSessionBandCache(
+            visible,
+            listUsRegularSessions
+          );
+        }
+        paintBands(
+          usSessionBandCache.bands,
+          usSessionFillColor(themeModeRef.current)
+        );
+      }
+
+      if (showWeekendBandsRef.current) {
+        if (
+          !weekendBandCache ||
+          visible.fromMs < weekendBandCache.fromMs ||
+          visible.toMs > weekendBandCache.toMs
+        ) {
+          weekendBandCache = buildSessionBandCache(
+            visible,
+            listWeekendSessions
+          );
+        }
+        paintBands(
+          weekendBandCache.bands,
+          weekendFillColor(themeModeRef.current)
+        );
       }
     };
 
@@ -251,16 +294,15 @@ export function UsSessionBandsOverlay({
 
   useEffect(() => {
     schedulePaintRef.current?.();
-  }, [candles, themeMode, interval]);
+  }, [candles, themeMode, interval, showUsSessionBands, showWeekendBands]);
 
-  if (!SESSION_BAND_TIMEFRAMES.has(interval)) {
-    return null;
-  }
-
+  // Keep the canvas mounted across D/W switches. The paint routine clears it
+  // for unsupported intervals, then the same subscriptions can repaint it
+  // immediately when the user returns to an intraday timeframe.
   return (
     <canvas
       ref={canvasRef}
-      className="us-session-bands-overlay"
+      className="session-bands-overlay"
       aria-hidden
       style={{
         position: 'absolute',

@@ -109,6 +109,7 @@ export function ChartWorkspace({
   );
   const [isLogScale, setIsLogScale] = useState<boolean>(false);
   const [showUsSessionBands, setShowUsSessionBands] = useState(false);
+  const [showWeekendBands, setShowWeekendBands] = useState(false);
   const [chartFocusTimeMs, setChartFocusTimeMs] = useState<number | null>(
     restoredTimestampMs
   );
@@ -755,6 +756,16 @@ export function ChartWorkspace({
 
           <button
             type="button"
+            className={`ui-btn ${showWeekendBands ? 'ui-btn-active' : ''}`}
+            onClick={() => setShowWeekendBands((enabled) => !enabled)}
+            title="标注美盘周末（纽约周六 00:00–周一 00:00，自动适配夏令时）"
+            aria-pressed={showWeekendBands}
+          >
+            周末时段
+          </button>
+
+          <button
+            type="button"
             className={`ui-btn ${isLogScale ? 'ui-btn-active' : ''}`}
             onClick={() => setIsLogScale(!isLogScale)}
           >
@@ -820,6 +831,7 @@ export function ChartWorkspace({
           onDrawingComplete={() => setActiveTool('select')}
           showVolume
           showUsSessionBands={showUsSessionBands}
+          showWeekendBands={showWeekendBands}
         />
       </div>
     </div>

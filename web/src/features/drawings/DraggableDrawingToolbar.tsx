@@ -8,6 +8,7 @@ import {
   IconClear,
   IconDatePriceRange,
   IconFibRetracement,
+  IconHalfRetracement,
   IconHorizontalRay,
   IconLock,
   IconLongPosition,
@@ -54,6 +55,7 @@ const QUICK_TOOLS: Array<{
 }> = [
   { tool: 'TrendLine', title: '趋势线 (Alt+T)', Icon: IconTrendLine },
   { tool: 'FibRetracement', title: '斐波那契回撤', Icon: IconFibRetracement },
+  { tool: 'half-retracement', title: '0.5 回撤', Icon: IconHalfRetracement },
   { tool: 'ShortPosition', title: '空头仓位', Icon: IconShortPosition },
   { tool: 'LongPosition', title: '多头仓位', Icon: IconLongPosition },
   {
