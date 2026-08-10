@@ -16,6 +16,7 @@ import {
   coordinateToChartTimestampMs,
   timestampMsToUtcTimestamp,
 } from '@/chart/chart-time';
+import { formatPrice } from '@/chart/candlestick-readout';
 import type {
   ActiveToolType,
   DrawingPoint,
@@ -97,6 +98,23 @@ const DRAWING_CURSOR_SVG =
 const DRAWING_CURSOR = `url("data:image/svg+xml,${encodeURIComponent(
   DRAWING_CURSOR_SVG
 )}") 12 12, crosshair`;
+
+function formatRangeDuration(durationMs: number): string {
+  const totalMinutes = Math.max(0, Math.round(durationMs / 60_000));
+  const days = Math.floor(totalMinutes / (24 * 60));
+  const hours = Math.floor((totalMinutes % (24 * 60)) / 60);
+  const minutes = totalMinutes % 60;
+  const parts: string[] = [];
+  if (days > 0) parts.push(`${days}天`);
+  if (hours > 0) parts.push(`${hours}小时`);
+  if (minutes > 0 || parts.length === 0) parts.push(`${minutes}分钟`);
+  return parts.join(' ');
+}
+
+function formatSignedPrice(value: number): string {
+  const sign = value > 0 ? '+' : value < 0 ? '-' : '';
+  return `${sign}${formatPrice(Math.abs(value))}`;
+}
 
 function findNearestCandle(
   candles: Candlestick[],
@@ -739,10 +757,78 @@ const DrawingGeometry = memo(function DrawingGeometry({
         strokeWidth={selected ? width + 1 : width}
       />
     );
+  } else if (type === 'date-price-range' || type === 'DatePriceRange') {
+    const left = Math.min(first.x, second.x);
+    const top = Math.min(first.y, second.y);
+    const boxWidth = Math.max(1, Math.abs(second.x - first.x));
+    const boxHeight = Math.max(1, Math.abs(second.y - first.y));
+    const fromPoint = drawing.points[0];
+    const toPoint = drawing.points[1] || fromPoint;
+    const priceChange = toPoint.price - fromPoint.price;
+    const priceChangePercent = fromPoint.price
+      ? (priceChange / fromPoint.price) * 100
+      : 0;
+    const timeSpanMs = Math.abs(toPoint.timestampMs - fromPoint.timestampMs);
+    const intervalMs = TIMEFRAME_SECONDS_MAP[drawing.interval] * 1000;
+    const barCount = Math.max(0, Math.round(timeSpanMs / intervalMs));
+    const rangeColor = priceChange >= 0 ? '#089981' : '#f23645';
+    const priceSign = priceChangePercent > 0 ? '+' : '';
+    const priceLabel = `${formatSignedPrice(priceChange)} (${priceSign}${priceChangePercent.toFixed(
+      2
+    )}%)`;
+    const timeLabel = `${barCount} 根K · ${formatRangeDuration(timeSpanMs)}`;
+    const labelWidth = Math.max(
+      132,
+      Math.min(220, Math.max(priceLabel.length, timeLabel.length) * 7 + 12)
+    );
+    const labelX = left + 6;
+    const labelY = top + 6;
+    geometry = (
+      <>
+        <rect
+          x={left}
+          y={top}
+          width={boxWidth}
+          height={boxHeight}
+          fill={rangeColor}
+          fillOpacity={0.12}
+          stroke={selected ? '#facc15' : rangeColor}
+          strokeWidth={selected ? width + 1 : width}
+        />
+        <g pointerEvents="none">
+          <rect
+            x={labelX}
+            y={labelY}
+            width={labelWidth}
+            height={34}
+            rx={3}
+            fill={rangeColor}
+            fillOpacity={0.9}
+          />
+          <text
+            x={labelX + 6}
+            y={labelY + 13}
+            fill="#ffffff"
+            fontSize={11}
+            fontWeight={600}
+            stroke="none"
+          >
+            {priceLabel}
+          </text>
+          <text
+            x={labelX + 6}
+            y={labelY + 27}
+            fill="#ffffff"
+            fontSize={10}
+            stroke="none"
+          >
+            {timeLabel}
+          </text>
+        </g>
+      </>
+    );
   } else if (
     type === 'Rectangle' ||
-    type === 'date-price-range' ||
-    type === 'DatePriceRange' ||
     type === 'fixed-range-volume-profile' ||
     type === 'FixedRangeVolumeProfile'
   ) {

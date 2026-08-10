@@ -108,6 +108,7 @@ export function ChartWorkspace({
     initialLocation?.timeframe || '60'
   );
   const [isLogScale, setIsLogScale] = useState<boolean>(false);
+  const [showUsSessionBands, setShowUsSessionBands] = useState(false);
   const [chartFocusTimeMs, setChartFocusTimeMs] = useState<number | null>(
     restoredTimestampMs
   );
@@ -744,6 +745,16 @@ export function ChartWorkspace({
 
           <button
             type="button"
+            className={`ui-btn ${showUsSessionBands ? 'ui-btn-active' : ''}`}
+            onClick={() => setShowUsSessionBands((enabled) => !enabled)}
+            title="标注美股常规交易时段（纽约 09:30–16:00）"
+            aria-pressed={showUsSessionBands}
+          >
+            美盘时段
+          </button>
+
+          <button
+            type="button"
             className={`ui-btn ${isLogScale ? 'ui-btn-active' : ''}`}
             onClick={() => setIsLogScale(!isLogScale)}
           >
@@ -808,6 +819,7 @@ export function ChartWorkspace({
           onSaveDrawing={handleSaveDrawingState}
           onDrawingComplete={() => setActiveTool('select')}
           showVolume
+          showUsSessionBands={showUsSessionBands}
         />
       </div>
     </div>

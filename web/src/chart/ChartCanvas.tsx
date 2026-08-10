@@ -31,6 +31,7 @@ import type {
   DrawingToolState,
 } from '@/features/drawings/drawing-types';
 import { ChartDrawingOverlay } from '@/features/drawings/ChartDrawingOverlay';
+import { UsSessionBandsOverlay } from '@/chart/UsSessionBandsOverlay';
 
 interface ChartCanvasProps {
   candles: Candlestick[];
@@ -58,6 +59,8 @@ interface ChartCanvasProps {
   onSaveDrawing?: (drawing: DrawingToolState) => void | Promise<void>;
   onDrawingComplete?: () => void;
   showVolume?: boolean;
+  /** Soft vertical bands for US regular session (NYSE 09:30–16:00). */
+  showUsSessionBands?: boolean;
 }
 
 function findNearestCandleIndex(
@@ -163,6 +166,7 @@ export function ChartCanvas({
   onSaveDrawing = () => {},
   onDrawingComplete = () => {},
   showVolume = false,
+  showUsSessionBands = false,
 }: ChartCanvasProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const chartRef = useRef<IChartApi | null>(null);
@@ -826,6 +830,16 @@ export function ChartCanvas({
           inset: 0,
         }}
       />
+      {chartReady &&
+        chartRef.current &&
+        showUsSessionBands && (
+          <UsSessionBandsOverlay
+            chart={chartRef.current}
+            candles={candles}
+            interval={interval}
+            themeMode={themeMode}
+          />
+        )}
       {chartReady && chartRef.current && seriesRef.current && (
         <ChartDrawingOverlay
           chart={chartRef.current}
