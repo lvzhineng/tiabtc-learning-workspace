@@ -154,25 +154,31 @@ function timestampToChartCoordinate(
     else high = middle;
   }
 
-  const rightIndex = Math.min(
+  let rightIndex = Math.min(
     candles.length - 1,
     Math.max(1, low)
   );
-  const leftIndex = rightIndex - 1;
-  const leftCandle = candles[leftIndex];
-  const rightCandle = candles[rightIndex];
-  const leftCoordinate = chart.timeScale().timeToCoordinate(
-    timestampMsToUtcTimestamp(leftCandle.timestampMs)
-  );
-  const rightCoordinate = chart.timeScale().timeToCoordinate(
-    timestampMsToUtcTimestamp(rightCandle.timestampMs)
-  );
-  if (leftCoordinate === null || rightCoordinate === null) return null;
-
-  const timeSpan = rightCandle.timestampMs - leftCandle.timestampMs;
-  if (timeSpan <= 0) return leftCoordinate;
-  const ratio = (timestampMs - leftCandle.timestampMs) / timeSpan;
-  return leftCoordinate + (rightCoordinate - leftCoordinate) * ratio;
+  // React can render the newly revealed candle one frame before Lightweight
+  // Charts applies the matching series update. Walk back to the latest pair
+  // that already has coordinates instead of briefly hiding future geometry.
+  while (rightIndex > 0) {
+    const leftCandle = candles[rightIndex - 1];
+    const rightCandle = candles[rightIndex];
+    const leftCoordinate = chart.timeScale().timeToCoordinate(
+      timestampMsToUtcTimestamp(leftCandle.timestampMs)
+    );
+    const rightCoordinate = chart.timeScale().timeToCoordinate(
+      timestampMsToUtcTimestamp(rightCandle.timestampMs)
+    );
+    if (leftCoordinate !== null && rightCoordinate !== null) {
+      const timeSpan = rightCandle.timestampMs - leftCandle.timestampMs;
+      if (timeSpan <= 0) return leftCoordinate;
+      const ratio = (timestampMs - leftCandle.timestampMs) / timeSpan;
+      return leftCoordinate + (rightCoordinate - leftCoordinate) * ratio;
+    }
+    rightIndex -= 1;
+  }
+  return null;
 }
 
 export function ChartDrawingOverlay({

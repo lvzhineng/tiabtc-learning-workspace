@@ -391,6 +391,38 @@ export function ChartWorkspace({
     });
   };
 
+  const handleStartReplayFromCurrentPosition = useCallback(() => {
+    if (loading || candles.length === 0) return;
+
+    const firstCandleTimeMs = candles[0].timestampMs;
+    const lastCandleTimeMs = candles[candles.length - 1].timestampMs;
+    const requestedAnchorTimeMs =
+      lastPositionTimeMsRef.current ?? chartFocusTimeMs ?? lastCandleTimeMs;
+    const anchorTimeMs = Math.min(
+      lastCandleTimeMs,
+      Math.max(firstCandleTimeMs, requestedAnchorTimeMs)
+    );
+    const nextCursorTimeMs = getNextCursorTimeMs(
+      candles,
+      anchorTimeMs,
+      activeTimeframe
+    );
+
+    setChartFocusTimeMs(anchorTimeMs);
+    setReplayState({
+      status: 'paused',
+      context: {
+        mode: 'free',
+        symbol: activeSymbol,
+        anchorTimeMs,
+      },
+      startTimeMs: anchorTimeMs,
+      progressTimeMs: nextCursorTimeMs,
+      cursorTimeMs: nextCursorTimeMs,
+      speed: 1,
+    });
+  }, [activeSymbol, activeTimeframe, candles, chartFocusTimeMs, loading]);
+
   const handleStopReplay = () => {
     setChartFocusTimeMs(null);
     setReplayState({ status: 'idle' });
@@ -597,6 +629,19 @@ export function ChartWorkspace({
         : candles,
     [activeTimeframe, candles, replayCursorTimeMs]
   );
+  const replayVisibleDrawings = useMemo(
+    () =>
+      replayCursorTimeMs === null
+        ? drawings
+        : drawings.filter(
+            (drawing) =>
+              drawing.points.length === 0 ||
+              drawing.points.every(
+                (point) => point.timestampMs <= replayCursorTimeMs
+              )
+          ),
+    [drawings, replayCursorTimeMs]
+  );
 
   const displayCandle =
     hoveredCandle || (visibleCandles.length > 0 ? visibleCandles[visibleCandles.length - 1] : null);
@@ -724,6 +769,7 @@ export function ChartWorkspace({
             activeSymbol={activeSymbol}
             activeTimeframe={activeTimeframe}
             onStartReplay={handleStartReplay}
+            onStartFromCurrentPosition={handleStartReplayFromCurrentPosition}
             onStopReplay={handleStopReplay}
             onNextBar={handleNextBar}
             onPrevBar={handlePrevBar}
@@ -821,7 +867,7 @@ export function ChartWorkspace({
           onViewportAnchorChange={handleViewportAnchorChange}
           onLoadEarlier={handleLoadEarlier}
           isLoadingEarlier={isLoadingEarlier}
-          drawings={drawings}
+          drawings={replayVisibleDrawings}
           activeDrawingTool={activeTool}
           selectedDrawingId={selectedDrawingId}
           magnetEnabled={magnetEnabled}

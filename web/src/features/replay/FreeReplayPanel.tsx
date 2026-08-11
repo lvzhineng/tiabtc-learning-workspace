@@ -19,6 +19,7 @@ interface FreeReplayPanelProps {
   activeSymbol: string;
   activeTimeframe: ReviewTimeframe;
   onStartReplay: (symbol: string, startTimeMs: number) => void;
+  onStartFromCurrentPosition: () => void;
   onStopReplay: () => void;
   onNextBar: () => void;
   onPrevBar: () => void;
@@ -33,6 +34,7 @@ export function FreeReplayPanel({
   activeSymbol,
   activeTimeframe,
   onStartReplay,
+  onStartFromCurrentPosition,
   onStopReplay,
   onNextBar,
   onPrevBar,
@@ -50,8 +52,6 @@ export function FreeReplayPanel({
 
   // Keyboard Shortcuts Listener
   useEffect(() => {
-    if (replayState.status === 'idle') return;
-
     const handleKeyDown = (e: KeyboardEvent) => {
       const target = e.target as HTMLElement | null;
       if (
@@ -62,12 +62,18 @@ export function FreeReplayPanel({
       }
 
       if (e.key === 'ArrowLeft') {
+        if (replayState.status === 'idle') return;
         e.preventDefault();
         onPrevBar();
       } else if (e.key === 'ArrowRight') {
         e.preventDefault();
-        onNextBar();
+        if (replayState.status === 'idle') {
+          onStartFromCurrentPosition();
+        } else {
+          onNextBar();
+        }
       } else if (e.key === ' ') {
+        if (replayState.status === 'idle') return;
         e.preventDefault();
         onTogglePlay();
       }
@@ -75,7 +81,13 @@ export function FreeReplayPanel({
 
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [replayState.status, onNextBar, onPrevBar, onTogglePlay]);
+  }, [
+    replayState.status,
+    onNextBar,
+    onPrevBar,
+    onStartFromCurrentPosition,
+    onTogglePlay,
+  ]);
 
   if (replayState.status === 'idle') {
     return (
