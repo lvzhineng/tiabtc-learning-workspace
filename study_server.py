@@ -1,3 +1,4 @@
+import gzip
 import json
 import math
 import re
@@ -389,7 +390,17 @@ def list_candles(symbol, interval, start_timestamp, end_timestamp):
                ORDER BY timestamp ASC""",
             (symbol, interval, start_timestamp, end_timestamp),
         ).fetchall()
-    return [dict(row) for row in rows]
+    return [
+        {
+            "timestamp": row[0],
+            "open": row[1],
+            "high": row[2],
+            "low": row[3],
+            "close": row[4],
+            "volume": row[5],
+        }
+        for row in rows
+    ]
 
 
 def market_fetch_lock(symbol, interval):
@@ -1478,6 +1489,17 @@ class StudyHandler(BaseHTTPRequestHandler):
 
     def send_json(self, status, payload):
         content = json.dumps(payload, ensure_ascii=False).encode("utf-8")
+        accept_encoding = self.headers.get("Accept-Encoding", "")
+        if "gzip" in accept_encoding and len(content) > 1024:
+            compressed = gzip.compress(content, compresslevel=6)
+            self.send_response(status)
+            self.send_header("Content-Type", "application/json; charset=utf-8")
+            self.send_header("Content-Encoding", "gzip")
+            self.send_header("Content-Length", str(len(compressed)))
+            self.end_headers()
+            self.wfile.write(compressed)
+            return
+
         self.send_response(status)
         self.send_header("Content-Type", "application/json; charset=utf-8")
         self.send_header("Content-Length", str(len(content)))

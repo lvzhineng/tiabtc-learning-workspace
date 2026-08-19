@@ -525,7 +525,7 @@ export function ChartDrawingOverlay({
       const completedPoints = draftPoints;
       setDraftPoints([]);
       if (completedPoints.length >= 2) {
-        saveNewDrawing(completedPoints);
+      saveNewDrawing(completedPoints);
       }
     }
   };
@@ -579,6 +579,15 @@ export function ChartDrawingOverlay({
         }
       : null;
 
+  const visibleRange = chart.timeScale().getVisibleRange();
+  const visibleTimeRange =
+    visibleRange && typeof visibleRange.from === 'number' && typeof visibleRange.to === 'number'
+      ? {
+          fromMs: visibleRange.from * 1000,
+          toMs: visibleRange.to * 1000,
+        }
+      : null;
+
   return (
     <svg
       ref={svgRef}
@@ -611,6 +620,7 @@ export function ChartDrawingOverlay({
           selected={drawing.id === selectedDrawingId}
           interactive={activeTool === 'select'}
           coordinateRevision={coordinateRevision}
+          visibleTimeRange={visibleTimeRange}
           toCoordinate={toCoordinate}
           onPointerDown={handleDrawingPointerDown}
         />
@@ -622,6 +632,7 @@ export function ChartDrawingOverlay({
           selected={false}
           interactive={false}
           coordinateRevision={coordinateRevision}
+          visibleTimeRange={visibleTimeRange}
           toCoordinate={toCoordinate}
           onPointerDown={() => {}}
         />
@@ -658,6 +669,7 @@ const DrawingGeometry = memo(function DrawingGeometry({
   selected,
   interactive,
   coordinateRevision,
+  visibleTimeRange,
   toCoordinate,
   onPointerDown,
 }: {
@@ -665,6 +677,7 @@ const DrawingGeometry = memo(function DrawingGeometry({
   selected: boolean;
   interactive: boolean;
   coordinateRevision: string;
+  visibleTimeRange: { fromMs: number; toMs: number } | null;
   toCoordinate: (point: DrawingPoint) => { x: number; y: number } | null;
   onPointerDown: (
     event: ReactPointerEvent<SVGElement>,
@@ -673,6 +686,28 @@ const DrawingGeometry = memo(function DrawingGeometry({
   ) => void;
 }) {
   void coordinateRevision;
+
+  const isInfiniteSpan =
+    drawing.toolType === 'HorizontalLine' ||
+    drawing.toolType === 'HorizontalRay' ||
+    drawing.toolType === 'Ray' ||
+    drawing.toolType === 'ExtendedLine';
+
+  if (!selected && !isInfiniteSpan && visibleTimeRange && drawing.points.length > 0) {
+    let minT = drawing.points[0].timestampMs;
+    let maxT = minT;
+    for (let i = 1; i < drawing.points.length; i++) {
+      const t = drawing.points[i].timestampMs;
+      if (t < minT) minT = t;
+      if (t > maxT) maxT = t;
+    }
+    const span = visibleTimeRange.toMs - visibleTimeRange.fromMs;
+    const buffer = Math.max(span * 0.5, 60_000);
+    if (maxT < visibleTimeRange.fromMs - buffer || minT > visibleTimeRange.toMs + buffer) {
+      return null;
+    }
+  }
+
   const points = drawing.points
     .map(toCoordinate)
     .filter((point): point is { x: number; y: number } => point !== null);
