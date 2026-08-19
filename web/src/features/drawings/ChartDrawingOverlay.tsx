@@ -23,6 +23,7 @@ import type {
   DrawingToolState,
 } from './drawing-types';
 import { ANCHOR_COUNTS } from './drawing-types';
+import { DrawingQuickActionBar } from './DrawingQuickActionBar';
 
 function isPositionTool(toolType: string): boolean {
   return (
@@ -69,6 +70,8 @@ type Props = {
   interval: ReviewTimeframe;
   onSelectDrawing: (id: string | null) => void;
   onSaveDrawing: (drawing: DrawingToolState) => void | Promise<void>;
+  onDeleteDrawing?: (id: string) => void;
+  onToggleLockDrawing?: (id: string) => void;
   onDrawingComplete: () => void;
 };
 
@@ -86,9 +89,6 @@ function drawingId(): string {
   return `drawing_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
 }
 
-// The native crosshair cursor can become nearly white on Windows and disappear
-// over the light chart background. A dark core with a white outline remains
-// visible over candles, grid lines, and both application themes.
 const DRAWING_CURSOR_SVG =
   '<svg xmlns="http://www.w3.org/2000/svg" width="25" height="25" viewBox="0 0 25 25">' +
   '<path d="M12.5 1v8m0 7v8M1 12.5h8m7 0h8" fill="none" stroke="#fff" stroke-width="4" stroke-linecap="round"/>' +
@@ -154,25 +154,28 @@ function timestampToChartCoordinate(
     else high = middle;
   }
 
-  const rightIndex = Math.min(
+  let rightIndex = Math.min(
     candles.length - 1,
     Math.max(1, low)
   );
-  const leftIndex = rightIndex - 1;
-  const leftCandle = candles[leftIndex];
-  const rightCandle = candles[rightIndex];
-  const leftCoordinate = chart.timeScale().timeToCoordinate(
-    timestampMsToUtcTimestamp(leftCandle.timestampMs)
-  );
-  const rightCoordinate = chart.timeScale().timeToCoordinate(
-    timestampMsToUtcTimestamp(rightCandle.timestampMs)
-  );
-  if (leftCoordinate === null || rightCoordinate === null) return null;
-
-  const timeSpan = rightCandle.timestampMs - leftCandle.timestampMs;
-  if (timeSpan <= 0) return leftCoordinate;
-  const ratio = (timestampMs - leftCandle.timestampMs) / timeSpan;
-  return leftCoordinate + (rightCoordinate - leftCoordinate) * ratio;
+  while (rightIndex > 0) {
+    const leftCandle = candles[rightIndex - 1];
+    const rightCandle = candles[rightIndex];
+    const leftCoordinate = chart.timeScale().timeToCoordinate(
+      timestampMsToUtcTimestamp(leftCandle.timestampMs)
+    );
+    const rightCoordinate = chart.timeScale().timeToCoordinate(
+      timestampMsToUtcTimestamp(rightCandle.timestampMs)
+    );
+    if (leftCoordinate !== null && rightCoordinate !== null) {
+      const timeSpan = rightCandle.timestampMs - leftCandle.timestampMs;
+      if (timeSpan <= 0) return leftCoordinate;
+      const ratio = (timestampMs - leftCandle.timestampMs) / timeSpan;
+      return leftCoordinate + (rightCoordinate - leftCoordinate) * ratio;
+    }
+    rightIndex -= 1;
+  }
+  return null;
 }
 
 export function ChartDrawingOverlay({
@@ -188,6 +191,8 @@ export function ChartDrawingOverlay({
   interval,
   onSelectDrawing,
   onSaveDrawing,
+  onDeleteDrawing,
+  onToggleLockDrawing,
   onDrawingComplete,
 }: Props) {
   const svgRef = useRef<SVGSVGElement>(null);
@@ -235,8 +240,6 @@ export function ChartDrawingOverlay({
     };
 
     timeScale.subscribeVisibleLogicalRangeChange(scheduleRedraw);
-    // Logical-range changes already cover pan/zoom; skip the duplicate
-    // time-range subscription to avoid double rAF scheduling.
     timeScale.subscribeSizeChange(scheduleRedraw);
     host?.addEventListener('pointerdown', handlePointerDown, true);
     host?.addEventListener('pointermove', handlePointerMove, true);
@@ -265,63 +268,66 @@ export function ChartDrawingOverlay({
     };
   }, [chart]);
 
-  useEffect(() => {
-    setDraftPoints([]);
-    setHoverPoint(null);
-  }, [activeTool, symbol, interval]);
+  const coordinateRevision = `${viewportRevision}`;
+  const isFreehandTool = activeTool === 'brush';
 
-  const displayedDrawings = useMemo(
-    () =>
-      drawings.map((drawing) =>
-        drag?.drawing.id === drawing.id ? drag.preview : drawing
-      ),
-    [drawings, drag]
+  const displayedDrawings = useMemo(() => {
+    if (!drag) return drawings;
+    return drawings.map((drawing) =>
+      drawing.id === drag.preview.id ? drag.preview : drawing
+    );
+  }, [drag, drawings]);
+
+  const snapPrice = useCallback(
+    (price: number, timestampMs: number) => {
+      if (!magnetEnabled || candlesRef.current.length === 0) return price;
+      const nearestCandle = findNearestCandle(candlesRef.current, timestampMs);
+      const candidates = [
+        nearestCandle.open,
+        nearestCandle.high,
+        nearestCandle.low,
+        nearestCandle.close,
+      ];
+      let best = price;
+      let minDiff = Number.POSITIVE_INFINITY;
+      for (const candidate of candidates) {
+        const diff = Math.abs(candidate - price);
+        if (diff < minDiff) {
+          minDiff = diff;
+          best = candidate;
+        }
+      }
+      return best;
+    },
+    [magnetEnabled]
   );
-  const lastCandle = candles[candles.length - 1];
-  const coordinateRevision = `${viewportRevision}:${candles.length}:${
-    lastCandle?.timestampMs || 0
-  }:${lastCandle?.close || 0}`;
-  const isFreehandTool =
-    activeTool === 'path' || activeTool === 'brush';
 
-  const eventToPoint = useCallback((event: {
-    clientX: number;
-    clientY: number;
-  }): DrawingPoint | null => {
-    const svg = svgRef.current;
-    if (!svg) return null;
-    const bounds = svg.getBoundingClientRect();
-    const x = event.clientX - bounds.left;
-    const y = event.clientY - bounds.top;
-    const timestampMs = coordinateToChartTimestampMs(
-      chart,
-      x,
-      candlesRef.current[candlesRef.current.length - 1]?.timestampMs,
-      interval
-    );
-    const price = series.coordinateToPrice(y);
-    if (timestampMs === null || price === null || !Number.isFinite(price)) {
-      return null;
-    }
-
-    const currentCandles = candlesRef.current;
-    if (!magnetEnabled || currentCandles.length === 0) {
+  const eventToPoint = useCallback(
+    (event: ReactPointerEvent<SVGElement>): DrawingPoint | null => {
+      const svg = svgRef.current;
+      if (!svg) return null;
+      const rect = svg.getBoundingClientRect();
+      const clientX = event.clientX - rect.left;
+      const clientY = event.clientY - rect.top;
+      const lastCandleTimeMs =
+        candlesRef.current.length > 0
+          ? candlesRef.current[candlesRef.current.length - 1].timestampMs
+          : undefined;
+      const timestampMs = coordinateToChartTimestampMs(
+        chart,
+        clientX,
+        lastCandleTimeMs,
+        interval
+      );
+      const rawPrice = series.coordinateToPrice(clientY);
+      if (timestampMs === null || rawPrice === null) return null;
+      const price = snapPrice(Number(rawPrice), timestampMs);
       return { timestampMs, price };
-    }
-
-    const nearest = findNearestCandle(currentCandles, timestampMs);
-    const prices = [nearest.open, nearest.high, nearest.low, nearest.close];
-    const nearestPrice = prices.reduce((best, candidate) =>
-      Math.abs(candidate - price) < Math.abs(best - price) ? candidate : best
-    );
-    return { timestampMs: nearest.timestampMs, price: nearestPrice };
-  }, [chart, interval, magnetEnabled, series]);
+    },
+    [chart, interval, series, snapPrice]
+  );
 
   const saveNewDrawing = (points: DrawingPoint[]) => {
-    const text =
-      activeTool === 'text-annotation'
-        ? window.prompt('请输入标注文字', '') || ''
-        : '';
     const drawing: DrawingToolState = {
       id: drawingId(),
       videoId,
@@ -329,8 +335,6 @@ export function ChartDrawingOverlay({
       interval,
       toolType: activeTool,
       points,
-      text,
-      locked: false,
       color: '#2962ff',
       lineWidth: 2,
       extra:
@@ -348,8 +352,6 @@ export function ChartDrawingOverlay({
   const handleBackgroundPointerDown = (
     event: ReactPointerEvent<SVGRectElement>
   ) => {
-    // Only the primary button may place anchors or change selection. Let the
-    // secondary button continue to the browser/chart context-menu behavior.
     if (event.button !== 0) return;
     if (activeTool === 'select') {
       onSelectDrawing(null);
@@ -365,7 +367,6 @@ export function ChartDrawingOverlay({
       return;
     }
 
-    // TradingView Long/Short: single click creates the full position box.
     if (isPositionTool(activeTool)) {
       saveNewDrawing(buildPositionPoints(point, activeTool, interval));
       return;
@@ -398,13 +399,17 @@ export function ChartDrawingOverlay({
 
   const handlePointerMove = (event: ReactPointerEvent<SVGSVGElement>) => {
     if (!drag) {
-      if (draftPoints.length === 0) return;
       const current = eventToPoint(event);
-      if (!current) return;
-      if (!isFreehandTool) {
-        setHoverPoint(current);
+      if (!current) {
+        setHoverPoint(null);
         return;
       }
+      if (activeTool !== 'select' && !isFreehandTool) {
+        setHoverPoint(current);
+      }
+      if (draftPoints.length === 0) return;
+      if (!isFreehandTool) return;
+
       const pointLimit = activeTool === 'brush' ? 1000 : 500;
       setDraftPoints((points) => {
         if (points.length >= pointLimit) return points;
@@ -440,10 +445,8 @@ export function ChartDrawingOverlay({
         : point
     );
 
-    // Keep position box edges aligned while dragging TP / SL / width.
     if (isPositionTool(toolType) && drag.pointIndex !== null && nextPoints.length >= 3) {
       if (drag.pointIndex === 0) {
-        // Entry: price only; keep left timestamp, preserve box width.
         const widthMs = Math.max(
           0,
           drag.drawing.points[1].timestampMs - drag.drawing.points[0].timestampMs
@@ -465,7 +468,6 @@ export function ChartDrawingOverlay({
           },
         ];
       } else if (drag.pointIndex === 1) {
-        // Target: adjust price + right edge width together.
         nextPoints = [
           nextPoints[0],
           {
@@ -484,7 +486,6 @@ export function ChartDrawingOverlay({
           },
         ];
       } else if (drag.pointIndex === 2) {
-        // Stop: adjust price; keep shared right edge with target.
         nextPoints = [
           nextPoints[0],
           {
@@ -528,8 +529,6 @@ export function ChartDrawingOverlay({
     event: ReactMouseEvent<SVGSVGElement>
   ) => {
     if (activeTool === 'select') return;
-    // In drawing mode, right-click is an explicit cancel action: discard an
-    // unfinished draft and return to the selection pointer without saving.
     event.preventDefault();
     event.stopPropagation();
     setDraftPoints([]);
@@ -573,77 +572,170 @@ export function ChartDrawingOverlay({
         }
       : null;
 
+  const visibleRange = chart.timeScale().getVisibleRange();
+  const visibleTimeRange =
+    visibleRange && typeof visibleRange.from === 'number' && typeof visibleRange.to === 'number'
+      ? {
+          fromMs: visibleRange.from * 1000,
+          toMs: visibleRange.to * 1000,
+        }
+      : null;
+
+  const selectedDrawing = useMemo(
+    () => displayedDrawings.find((d) => d.id === selectedDrawingId) || null,
+    [displayedDrawings, selectedDrawingId]
+  );
+
+  const quickBarPosition = useMemo(() => {
+    if (!selectedDrawing || activeTool !== 'select' || drag !== null) {
+      return null;
+    }
+    const points = selectedDrawing.points
+      .map(toCoordinate)
+      .filter((p): p is { x: number; y: number } => p !== null);
+    if (points.length === 0) return null;
+    const minX = Math.min(...points.map((p) => p.x));
+    const maxX = Math.max(...points.map((p) => p.x));
+    const minY = Math.min(...points.map((p) => p.y));
+    return { x: (minX + maxX) / 2, y: minY };
+  }, [activeTool, drag, selectedDrawing, toCoordinate]);
+
+  const hoverPointCoord = hoverPoint ? toCoordinate(hoverPoint) : null;
+
   return (
-    <svg
-      ref={svgRef}
-      className="chart-drawing-overlay"
-      onPointerMove={handlePointerMove}
-      onPointerUp={finishPointerInteraction}
-      onPointerCancel={finishPointerInteraction}
-      onContextMenu={handleContextMenu}
-      style={{
-        position: 'absolute',
-        inset: 0,
-        width: '100%',
-        height: '100%',
-        zIndex: 4,
-        cursor: activeTool === 'select' ? 'default' : DRAWING_CURSOR,
-        pointerEvents: 'none',
-      }}
-    >
-      <rect
-        width="100%"
-        height="100%"
-        fill="transparent"
-        pointerEvents={activeTool === 'select' ? 'none' : 'all'}
-        onPointerDown={handleBackgroundPointerDown}
-      />
-      {displayedDrawings.map((drawing) => (
-        <DrawingGeometry
-          key={drawing.id}
-          drawing={drawing}
-          selected={drawing.id === selectedDrawingId}
-          interactive={activeTool === 'select'}
-          coordinateRevision={coordinateRevision}
-          toCoordinate={toCoordinate}
-          onPointerDown={handleDrawingPointerDown}
+    <>
+      <svg
+        ref={svgRef}
+        className="chart-drawing-overlay"
+        onPointerMove={handlePointerMove}
+        onPointerLeave={() => setHoverPoint(null)}
+        onPointerUp={finishPointerInteraction}
+        onPointerCancel={finishPointerInteraction}
+        onContextMenu={handleContextMenu}
+        style={{
+          position: 'absolute',
+          inset: 0,
+          width: '100%',
+          height: '100%',
+          zIndex: 4,
+          cursor: activeTool === 'select' ? 'default' : DRAWING_CURSOR,
+          pointerEvents: 'none',
+        }}
+      >
+        <rect
+          width="100%"
+          height="100%"
+          fill="transparent"
+          pointerEvents={activeTool === 'select' ? 'none' : 'all'}
+          onPointerDown={handleBackgroundPointerDown}
         />
-      ))}
+        {displayedDrawings.map((drawing) => (
+          <DrawingGeometry
+            key={drawing.id}
+            drawing={drawing}
+            selected={drawing.id === selectedDrawingId}
+            interactive={activeTool === 'select'}
+            coordinateRevision={coordinateRevision}
+            visibleTimeRange={visibleTimeRange}
+            toCoordinate={toCoordinate}
+            onPointerDown={handleDrawingPointerDown}
+          />
+        ))}
 
-      {draftPreview && (
-        <DrawingGeometry
-          drawing={draftPreview}
-          selected={false}
-          interactive={false}
-          coordinateRevision={coordinateRevision}
-          toCoordinate={toCoordinate}
-          onPointerDown={() => {}}
+        {draftPreview && (
+          <DrawingGeometry
+            drawing={draftPreview}
+            selected={false}
+            interactive={false}
+            coordinateRevision={coordinateRevision}
+            visibleTimeRange={visibleTimeRange}
+            toCoordinate={toCoordinate}
+            onPointerDown={() => {}}
+          />
+        )}
+
+        {draftCoordinates.map((point, index) => (
+          <circle
+            key={`draft-${index}`}
+            cx={point.x}
+            cy={point.y}
+            r={4}
+            fill="#facc15"
+            stroke="#111827"
+            strokeWidth={1}
+            pointerEvents="none"
+          />
+        ))}
+        {draftCoordinates.length > 1 && (
+          <polyline
+            points={draftCoordinates.map((point) => `${point.x},${point.y}`).join(' ')}
+            fill="none"
+            stroke="#facc15"
+            strokeWidth={2}
+            strokeDasharray="5 4"
+            pointerEvents="none"
+          />
+        )}
+
+        {/* Real-time Magnet snapping cursor guide */}
+        {magnetEnabled && hoverPointCoord && (activeTool !== 'select' || drag !== null) && (
+          <g pointerEvents="none">
+            <circle
+              cx={hoverPointCoord.x}
+              cy={hoverPointCoord.y}
+              r={7}
+              fill="none"
+              stroke="#38bdf8"
+              strokeWidth={1.5}
+              strokeDasharray="2 2"
+            />
+            <circle
+              cx={hoverPointCoord.x}
+              cy={hoverPointCoord.y}
+              r={2.5}
+              fill="#38bdf8"
+            />
+            <line
+              x1={hoverPointCoord.x - 12}
+              y1={hoverPointCoord.y}
+              x2={hoverPointCoord.x + 12}
+              y2={hoverPointCoord.y}
+              stroke="#38bdf8"
+              strokeWidth={1}
+            />
+            <line
+              x1={hoverPointCoord.x}
+              y1={hoverPointCoord.y - 12}
+              x2={hoverPointCoord.x}
+              y2={hoverPointCoord.y + 12}
+              stroke="#38bdf8"
+              strokeWidth={1}
+            />
+          </g>
+        )}
+      </svg>
+
+      {/* Floating Quick Action Bar for selected drawing */}
+      {selectedDrawing && quickBarPosition && (
+        <DrawingQuickActionBar
+          drawing={selectedDrawing}
+          position={quickBarPosition}
+          onUpdateDrawing={(updated) => {
+            void onSaveDrawing(updated);
+          }}
+          onDeleteDrawing={() => {
+            if (onDeleteDrawing) {
+              onDeleteDrawing(selectedDrawing.id);
+            }
+          }}
+          onToggleLock={() => {
+            if (onToggleLockDrawing) {
+              onToggleLockDrawing(selectedDrawing.id);
+            }
+          }}
         />
       )}
-
-      {draftCoordinates.map((point, index) => (
-        <circle
-          key={`draft-${index}`}
-          cx={point.x}
-          cy={point.y}
-          r={4}
-          fill="#facc15"
-          stroke="#111827"
-          strokeWidth={1}
-          pointerEvents="none"
-        />
-      ))}
-      {draftCoordinates.length > 1 && (
-        <polyline
-          points={draftCoordinates.map((point) => `${point.x},${point.y}`).join(' ')}
-          fill="none"
-          stroke="#facc15"
-          strokeWidth={2}
-          strokeDasharray="5 4"
-          pointerEvents="none"
-        />
-      )}
-    </svg>
+    </>
   );
 }
 
@@ -652,6 +744,7 @@ const DrawingGeometry = memo(function DrawingGeometry({
   selected,
   interactive,
   coordinateRevision,
+  visibleTimeRange,
   toCoordinate,
   onPointerDown,
 }: {
@@ -659,6 +752,7 @@ const DrawingGeometry = memo(function DrawingGeometry({
   selected: boolean;
   interactive: boolean;
   coordinateRevision: string;
+  visibleTimeRange: { fromMs: number; toMs: number } | null;
   toCoordinate: (point: DrawingPoint) => { x: number; y: number } | null;
   onPointerDown: (
     event: ReactPointerEvent<SVGElement>,
@@ -667,6 +761,28 @@ const DrawingGeometry = memo(function DrawingGeometry({
   ) => void;
 }) {
   void coordinateRevision;
+
+  const isInfiniteSpan =
+    drawing.toolType === 'HorizontalLine' ||
+    drawing.toolType === 'HorizontalRay' ||
+    drawing.toolType === 'Ray' ||
+    drawing.toolType === 'ExtendedLine';
+
+  if (!selected && !isInfiniteSpan && visibleTimeRange && drawing.points.length > 0) {
+    let minT = drawing.points[0].timestampMs;
+    let maxT = minT;
+    for (let i = 1; i < drawing.points.length; i++) {
+      const t = drawing.points[i].timestampMs;
+      if (t < minT) minT = t;
+      if (t > maxT) maxT = t;
+    }
+    const span = visibleTimeRange.toMs - visibleTimeRange.fromMs;
+    const buffer = Math.max(span * 0.5, 60_000);
+    if (maxT < visibleTimeRange.fromMs - buffer || minT > visibleTimeRange.toMs + buffer) {
+      return null;
+    }
+  }
+
   const points = drawing.points
     .map(toCoordinate)
     .filter((point): point is { x: number; y: number } => point !== null);
@@ -677,11 +793,13 @@ const DrawingGeometry = memo(function DrawingGeometry({
   const first = points[0];
   const second = points[1] || first;
   const type = drawing.toolType;
+  const isDashed = drawing.extra?.lineStyle === 'dashed';
   const stroke = selected ? '#facc15' : color;
   const common = {
     fill: 'none',
     stroke,
     strokeWidth: selected ? width + 1 : width,
+    strokeDasharray: isDashed ? '6 4' : undefined,
     vectorEffect: 'non-scaling-stroke' as const,
   };
 
@@ -1024,20 +1142,29 @@ const DrawingGeometry = memo(function DrawingGeometry({
       {geometry}
       {selected &&
         points.map((point, index) => (
-          <circle
-            key={index}
-            cx={point.x}
-            cy={point.y}
-            r={4}
-            fill="#facc15"
-            stroke="#111827"
-            strokeWidth={1}
-            onPointerDown={(event) => {
-              event.stopPropagation();
-              onPointerDown(event, drawing, index);
-            }}
-            style={{ cursor: drawing.locked ? 'not-allowed' : 'grab' }}
-          />
+          <g key={index}>
+            <circle
+              cx={point.x}
+              cy={point.y}
+              r={10}
+              fill="transparent"
+              stroke="transparent"
+              onPointerDown={(event) => {
+                event.stopPropagation();
+                onPointerDown(event, drawing, index);
+              }}
+              style={{ cursor: drawing.locked ? 'not-allowed' : 'grab' }}
+            />
+            <circle
+              cx={point.x}
+              cy={point.y}
+              r={4}
+              fill="#facc15"
+              stroke="#111827"
+              strokeWidth={1}
+              pointerEvents="none"
+            />
+          </g>
         ))}
     </g>
   );

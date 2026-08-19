@@ -20,6 +20,7 @@ import {
 } from '@/features/replay/free-replay-logic';
 import { FreeReplayPanel } from '@/features/replay/FreeReplayPanel';
 import { DraggableDrawingToolbar } from '@/features/drawings/DraggableDrawingToolbar';
+import { DrawingObjectTreePanel } from '@/features/drawings/DrawingObjectTreePanel';
 import type { VideoReviewContext } from '@/domain/review-context';
 import { buildVideoPublishedMarker } from '@/chart/system-marker';
 import type { PositionToolParams } from '@/features/paper-trading/paper-trade-types';
@@ -229,6 +230,15 @@ export function ChartWorkspace({
     magnetEnabled,
     toggleMagnet,
     drawings,
+    allDrawings,
+    hideAllDrawings,
+    toggleHideAllDrawings,
+    hiddenDrawingIds,
+    toggleHideDrawing,
+    deleteDrawingById,
+    toggleLockDrawing,
+    isObjectTreeOpen,
+    toggleObjectTree,
     selectedDrawingId,
     setSelectedDrawingId,
     saveDrawingState: handleSaveDrawingState,
@@ -390,6 +400,38 @@ export function ChartWorkspace({
       speed: 1,
     });
   };
+
+  const handleStartReplayFromCurrentPosition = useCallback(() => {
+    if (loading || candles.length === 0) return;
+
+    const firstCandleTimeMs = candles[0].timestampMs;
+    const lastCandleTimeMs = candles[candles.length - 1].timestampMs;
+    const requestedAnchorTimeMs =
+      lastPositionTimeMsRef.current ?? chartFocusTimeMs ?? lastCandleTimeMs;
+    const anchorTimeMs = Math.min(
+      lastCandleTimeMs,
+      Math.max(firstCandleTimeMs, requestedAnchorTimeMs)
+    );
+    const nextCursorTimeMs = getNextCursorTimeMs(
+      candles,
+      anchorTimeMs,
+      activeTimeframe
+    );
+
+    setChartFocusTimeMs(anchorTimeMs);
+    setReplayState({
+      status: 'paused',
+      context: {
+        mode: 'free',
+        symbol: activeSymbol,
+        anchorTimeMs,
+      },
+      startTimeMs: anchorTimeMs,
+      progressTimeMs: nextCursorTimeMs,
+      cursorTimeMs: nextCursorTimeMs,
+      speed: 1,
+    });
+  }, [activeSymbol, activeTimeframe, candles, chartFocusTimeMs, loading]);
 
   const handleStopReplay = () => {
     setChartFocusTimeMs(null);
@@ -597,6 +639,19 @@ export function ChartWorkspace({
         : candles,
     [activeTimeframe, candles, replayCursorTimeMs]
   );
+  const replayVisibleDrawings = useMemo(
+    () =>
+      replayCursorTimeMs === null
+        ? drawings
+        : drawings.filter(
+            (drawing) =>
+              drawing.points.length === 0 ||
+              drawing.points.every(
+                (point) => point.timestampMs <= replayCursorTimeMs
+              )
+          ),
+    [drawings, replayCursorTimeMs]
+  );
 
   const displayCandle =
     hoveredCandle || (visibleCandles.length > 0 ? visibleCandles[visibleCandles.length - 1] : null);
@@ -656,8 +711,12 @@ export function ChartWorkspace({
         selectedDrawingId={selectedDrawingId}
         selectedLocked={selectedLocked}
         selectedPositionInfo={selectedPositionInfo}
+        hideAllDrawings={hideAllDrawings}
+        isObjectTreeOpen={isObjectTreeOpen}
         onSelectTool={setActiveTool}
         onToggleMagnet={toggleMagnet}
+        onToggleHideAllDrawings={toggleHideAllDrawings}
+        onToggleObjectTree={toggleObjectTree}
         onUndo={handleUndo}
         onRedo={handleRedo}
         onToggleLock={handleToggleLockSelected}
@@ -666,6 +725,20 @@ export function ChartWorkspace({
         onOpenPaperTrading={togglePaperPanel}
         onCreatePaperTradeFromPosition={handleCreateTradeFromPosition}
       />
+
+      {isObjectTreeOpen && (
+        <DrawingObjectTreePanel
+          drawings={allDrawings}
+          selectedDrawingId={selectedDrawingId}
+          hiddenDrawingIds={hiddenDrawingIds}
+          onSelectDrawing={setSelectedDrawingId}
+          onToggleHideDrawing={toggleHideDrawing}
+          onToggleLockDrawing={toggleLockDrawing}
+          onDeleteDrawing={deleteDrawingById}
+          onClearAllDrawings={handleClearAllDrawings}
+          onClose={toggleObjectTree}
+        />
+      )}
 
       {showPaperPanel && (
         <PaperTradingPanel
@@ -724,6 +797,7 @@ export function ChartWorkspace({
             activeSymbol={activeSymbol}
             activeTimeframe={activeTimeframe}
             onStartReplay={handleStartReplay}
+            onStartFromCurrentPosition={handleStartReplayFromCurrentPosition}
             onStopReplay={handleStopReplay}
             onNextBar={handleNextBar}
             onPrevBar={handlePrevBar}
@@ -821,13 +895,15 @@ export function ChartWorkspace({
           onViewportAnchorChange={handleViewportAnchorChange}
           onLoadEarlier={handleLoadEarlier}
           isLoadingEarlier={isLoadingEarlier}
-          drawings={drawings}
+          drawings={replayVisibleDrawings}
           activeDrawingTool={activeTool}
           selectedDrawingId={selectedDrawingId}
           magnetEnabled={magnetEnabled}
           drawingVideoId="__global__"
           onSelectDrawing={setSelectedDrawingId}
           onSaveDrawing={handleSaveDrawingState}
+          onDeleteDrawing={deleteDrawingById}
+          onToggleLockDrawing={toggleLockDrawing}
           onDrawingComplete={() => setActiveTool('select')}
           showVolume
           showUsSessionBands={showUsSessionBands}

@@ -66,38 +66,76 @@ function parseRawCandles(
   symbol: string,
   interval: ReviewTimeframe
 ): Candlestick[] {
-  if (!response.candles || !Array.isArray(response.candles)) {
+  const rawList = response.candles;
+  if (!rawList || !Array.isArray(rawList)) {
     return [];
   }
-  const normalized = response.candles
-    .map((raw) => ({
-      symbol,
-      interval,
-      timestampMs: Number(raw.timestamp),
-      open: Number(raw.open),
-      high: Number(raw.high),
-      low: Number(raw.low),
-      close: Number(raw.close),
-      volume: Number(raw.volume),
-    }))
-    .filter(
-      (candle) =>
-        Number.isFinite(candle.timestampMs) &&
-        Number.isFinite(candle.open) &&
-        Number.isFinite(candle.high) &&
-        Number.isFinite(candle.low) &&
-        Number.isFinite(candle.close) &&
-        Number.isFinite(candle.volume) &&
-        candle.timestampMs > 0 &&
-        candle.open > 0 &&
-        candle.high > 0 &&
-        candle.low > 0 &&
-        candle.close > 0 &&
-        candle.volume >= 0
-    );
-  return Array.from(
-    new Map(normalized.map((candle) => [candle.timestampMs, candle])).values()
-  ).sort((left, right) => left.timestampMs - right.timestampMs);
+
+  const result: Candlestick[] = [];
+  let prevTimestamp = -1;
+  let needsSort = false;
+
+  for (let i = 0; i < rawList.length; i++) {
+    const raw = rawList[i];
+    if (!raw) continue;
+
+    const timestampMs = Number(raw.timestamp);
+    const open = Number(raw.open);
+    const high = Number(raw.high);
+    const low = Number(raw.low);
+    const close = Number(raw.close);
+    const volume = Number(raw.volume);
+
+    if (
+      Number.isFinite(timestampMs) &&
+      Number.isFinite(open) &&
+      Number.isFinite(high) &&
+      Number.isFinite(low) &&
+      Number.isFinite(close) &&
+      Number.isFinite(volume) &&
+      timestampMs > 0 &&
+      open > 0 &&
+      high > 0 &&
+      low > 0 &&
+      close > 0 &&
+      volume >= 0
+    ) {
+      if (timestampMs === prevTimestamp) {
+        // Overwrite duplicate timestamp with later entry
+        result[result.length - 1] = {
+          symbol,
+          interval,
+          timestampMs,
+          open,
+          high,
+          low,
+          close,
+          volume,
+        };
+      } else {
+        if (timestampMs < prevTimestamp) {
+          needsSort = true;
+        }
+        result.push({
+          symbol,
+          interval,
+          timestampMs,
+          open,
+          high,
+          low,
+          close,
+          volume,
+        });
+        prevTimestamp = timestampMs;
+      }
+    }
+  }
+
+  if (needsSort) {
+    result.sort((left, right) => left.timestampMs - right.timestampMs);
+  }
+
+  return result;
 }
 
 function rememberCandles(key: string, batch: CandleBatch): void {

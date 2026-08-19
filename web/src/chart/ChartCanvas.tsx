@@ -49,6 +49,7 @@ interface ChartCanvasProps {
   onLoadEarlier?: () => void;
   isLoadingEarlier?: boolean;
   onLoadLater?: () => void;
+
   isLoadingLater?: boolean;
   drawings?: DrawingToolState[];
   activeDrawingTool?: ActiveToolType;
@@ -57,6 +58,8 @@ interface ChartCanvasProps {
   drawingVideoId?: string;
   onSelectDrawing?: (id: string | null) => void;
   onSaveDrawing?: (drawing: DrawingToolState) => void | Promise<void>;
+  onDeleteDrawing?: (id: string) => void;
+  onToggleLockDrawing?: (id: string) => void;
   onDrawingComplete?: () => void;
   showVolume?: boolean;
   /** Soft vertical bands for US regular session (NYSE 09:30–16:00). */
@@ -109,7 +112,6 @@ function candlesEqual(
     left.volume === right.volume
   );
 }
-
 /** Place the focus bar near 80% of the viewport, leaving ~20% room on the right. */
 const FOCUS_VIEWPORT_RATIO = 0.8;
 
@@ -166,6 +168,8 @@ export function ChartCanvas({
   drawingVideoId = '__global__',
   onSelectDrawing = () => {},
   onSaveDrawing = () => {},
+  onDeleteDrawing,
+  onToggleLockDrawing,
   onDrawingComplete = () => {},
   showVolume = false,
   showUsSessionBands = false,
@@ -859,6 +863,8 @@ export function ChartCanvas({
           interval={interval}
           onSelectDrawing={onSelectDrawing}
           onSaveDrawing={onSaveDrawing}
+          onDeleteDrawing={onDeleteDrawing}
+          onToggleLockDrawing={onToggleLockDrawing}
           onDrawingComplete={onDrawingComplete}
         />
       )}
