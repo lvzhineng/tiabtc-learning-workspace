@@ -30,12 +30,21 @@ type DrawingWorkspace = {
   magnetEnabled: boolean;
   toggleMagnet: () => void;
   drawings: DrawingToolState[];
+  allDrawings: DrawingToolState[];
   selectedDrawingId: string | null;
   setSelectedDrawingId: Dispatch<SetStateAction<string | null>>;
+  hiddenDrawingIds: Set<string>;
+  hideAllDrawings: boolean;
+  toggleHideAllDrawings: () => void;
+  toggleHideDrawing: (id: string) => void;
+  isObjectTreeOpen: boolean;
+  toggleObjectTree: () => void;
   saveDrawingState: (drawing: DrawingToolState) => Promise<void>;
   deleteSelectedDrawing: () => Promise<void>;
+  deleteDrawingById: (id: string) => Promise<void>;
   clearAllDrawings: () => Promise<void>;
   toggleLockSelected: () => Promise<void>;
+  toggleLockDrawing: (id: string) => Promise<void>;
   undo: () => Promise<void>;
   redo: () => Promise<void>;
 };
@@ -55,6 +64,11 @@ export function useDrawingWorkspace(
   const [selectedDrawingId, setSelectedDrawingId] = useState<string | null>(
     null
   );
+  const [hiddenDrawingIds, setHiddenDrawingIds] = useState<Set<string>>(
+    () => new Set()
+  );
+  const [hideAllDrawings, setHideAllDrawings] = useState(false);
+  const [isObjectTreeOpen, setIsObjectTreeOpen] = useState(false);
   const [undoStack, setUndoStack] = useState<DrawingToolState[][]>([]);
   const [redoStack, setRedoStack] = useState<DrawingToolState[][]>([]);
 
@@ -292,15 +306,81 @@ export function useDrawingWorkspace(
     }
   }, [commitLocalChange, persistence, symbol, timeframe]);
 
+  const deleteDrawingById = useCallback(
+    async (targetId: string) => {
+      const target = drawingsRef.current.find(
+        (drawing) => drawing.id === targetId
+      );
+      if (!target || !window.confirm('确认删除此画图吗？')) return;
+
+      if (persistence === 'memory') {
+        const current = drawingsRef.current;
+        commitLocalChange(
+          current.filter((drawing) => drawing.id !== targetId),
+          current
+        );
+        if (selectedDrawingId === targetId) setSelectedDrawingId(null);
+        return;
+      }
+
+      try {
+        await saveChainsRef.current[targetId]?.catch(() => undefined);
+        await deleteDrawing(
+          targetId,
+          DRAWING_SCOPE,
+          symbol,
+          timeframe
+        );
+        const current = drawingsRef.current;
+        commitLocalChange(
+          current.filter((drawing) => drawing.id !== targetId),
+          current
+        );
+        if (selectedDrawingId === targetId) setSelectedDrawingId(null);
+      } catch (deleteError) {
+        alert(
+          `删除画图记录失败: ${
+            deleteError instanceof Error ? deleteError.message : '网络异常'
+          }`
+        );
+      }
+    },
+    [commitLocalChange, persistence, selectedDrawingId, symbol, timeframe]
+  );
+
+  const toggleLockDrawing = useCallback(
+    async (targetId: string) => {
+      const target = drawingsRef.current.find(
+        (drawing) => drawing.id === targetId
+      );
+      if (target) {
+        await saveDrawingState({ ...target, locked: !target.locked });
+      }
+    },
+    [saveDrawingState]
+  );
+
   const toggleLockSelected = useCallback(async () => {
     if (!selectedDrawingId) return;
-    const target = drawingsRef.current.find(
-      (drawing) => drawing.id === selectedDrawingId
-    );
-    if (target) {
-      await saveDrawingState({ ...target, locked: !target.locked });
-    }
-  }, [saveDrawingState, selectedDrawingId]);
+    await toggleLockDrawing(selectedDrawingId);
+  }, [selectedDrawingId, toggleLockDrawing]);
+
+  const toggleHideAllDrawings = useCallback(() => {
+    setHideAllDrawings((hidden) => !hidden);
+  }, []);
+
+  const toggleHideDrawing = useCallback((id: string) => {
+    setHiddenDrawingIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  }, []);
+
+  const toggleObjectTree = useCallback(() => {
+    setIsObjectTreeOpen((open) => !open);
+  }, []);
 
   const toggleMagnet = useCallback(() => {
     setMagnetEnabled((enabled) => !enabled);
@@ -310,6 +390,12 @@ export function useDrawingWorkspace(
     () => drawings.filter((drawing) => drawing.symbol === symbol),
     [drawings, symbol]
   );
+
+  const visibleDrawings = useMemo(() => {
+    if (hideAllDrawings) return [];
+    if (hiddenDrawingIds.size === 0) return scopedDrawings;
+    return scopedDrawings.filter((drawing) => !hiddenDrawingIds.has(drawing.id));
+  }, [hideAllDrawings, hiddenDrawingIds, scopedDrawings]);
 
   const waitForPendingSaves = useCallback(async () => {
     await Promise.all(
@@ -437,6 +523,7 @@ export function useDrawingWorkspace(
       }
       if (event.key === 'Escape') {
         setActiveTool('select');
+        setSelectedDrawingId(null);
         return;
       }
       if (
@@ -474,25 +561,49 @@ export function useDrawingWorkspace(
         } else if (event.code === 'KeyH') {
           event.preventDefault();
           setActiveTool('HorizontalLine');
+        } else if (event.code === 'KeyF') {
+          event.preventDefault();
+          setActiveTool('FibRetracement');
+        } else if (event.code === 'KeyR') {
+          event.preventDefault();
+          setActiveTool('Rectangle');
+        } else if (event.code === 'KeyV') {
+          event.preventDefault();
+          toggleHideAllDrawings();
         }
       }
     };
     window.addEventListener('keydown', handleShortcut);
     return () => window.removeEventListener('keydown', handleShortcut);
-  }, [deleteSelectedDrawing, redo, selectedDrawingId, undo]);
+  }, [
+    deleteSelectedDrawing,
+    redo,
+    selectedDrawingId,
+    toggleHideAllDrawings,
+    undo,
+  ]);
 
   return {
     activeTool,
     setActiveTool,
     magnetEnabled,
     toggleMagnet,
-    drawings: scopedDrawings,
+    drawings: visibleDrawings,
+    allDrawings: scopedDrawings,
     selectedDrawingId,
     setSelectedDrawingId,
+    hiddenDrawingIds,
+    hideAllDrawings,
+    toggleHideAllDrawings,
+    toggleHideDrawing,
+    isObjectTreeOpen,
+    toggleObjectTree,
     saveDrawingState,
     deleteSelectedDrawing,
+    deleteDrawingById,
     clearAllDrawings,
     toggleLockSelected,
+    toggleLockDrawing,
     undo,
     redo,
   };

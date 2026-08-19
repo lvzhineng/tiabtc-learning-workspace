@@ -32,6 +32,7 @@ import {
   type ReviewTimeframe,
 } from '@/domain/timeframe';
 import { DraggableDrawingToolbar } from '@/features/drawings/DraggableDrawingToolbar';
+import { DrawingObjectTreePanel } from '@/features/drawings/DrawingObjectTreePanel';
 import { useDrawingWorkspace } from '@/features/review-workspace/useDrawingWorkspace';
 import type {
   BitlangDirection,
@@ -474,6 +475,15 @@ function BitlangTradeChart({
     magnetEnabled,
     toggleMagnet,
     drawings,
+    allDrawings,
+    hideAllDrawings,
+    toggleHideAllDrawings,
+    hiddenDrawingIds,
+    toggleHideDrawing,
+    deleteDrawingById,
+    toggleLockDrawing,
+    isObjectTreeOpen,
+    toggleObjectTree,
     selectedDrawingId,
     setSelectedDrawingId,
     saveDrawingState,
@@ -637,14 +647,31 @@ function BitlangTradeChart({
         magnetEnabled={magnetEnabled}
         selectedDrawingId={selectedDrawingId}
         selectedLocked={Boolean(selectedDrawing?.locked)}
+        hideAllDrawings={hideAllDrawings}
+        isObjectTreeOpen={isObjectTreeOpen}
         onSelectTool={setActiveTool}
         onToggleMagnet={toggleMagnet}
+        onToggleHideAllDrawings={toggleHideAllDrawings}
+        onToggleObjectTree={toggleObjectTree}
         onUndo={undo}
         onRedo={redo}
         onToggleLock={toggleLockSelected}
         onDeleteSelected={deleteSelectedDrawing}
         onClearAll={clearAllDrawings}
       />
+      {isObjectTreeOpen && (
+        <DrawingObjectTreePanel
+          drawings={allDrawings}
+          selectedDrawingId={selectedDrawingId}
+          hiddenDrawingIds={hiddenDrawingIds}
+          onSelectDrawing={setSelectedDrawingId}
+          onToggleHideDrawing={toggleHideDrawing}
+          onToggleLockDrawing={toggleLockDrawing}
+          onDeleteDrawing={deleteDrawingById}
+          onClearAllDrawings={clearAllDrawings}
+          onClose={toggleObjectTree}
+        />
+      )}
       <ChartCanvas
         candles={candles}
         symbol={symbol}
@@ -669,6 +696,8 @@ function BitlangTradeChart({
         drawingVideoId="__global__"
         onSelectDrawing={setSelectedDrawingId}
         onSaveDrawing={saveDrawingState}
+        onDeleteDrawing={deleteDrawingById}
+        onToggleLockDrawing={toggleLockDrawing}
         onDrawingComplete={() => setActiveTool('select')}
         showVolume
       />

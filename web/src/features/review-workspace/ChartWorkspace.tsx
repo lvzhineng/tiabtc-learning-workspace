@@ -20,6 +20,7 @@ import {
 } from '@/features/replay/free-replay-logic';
 import { FreeReplayPanel } from '@/features/replay/FreeReplayPanel';
 import { DraggableDrawingToolbar } from '@/features/drawings/DraggableDrawingToolbar';
+import { DrawingObjectTreePanel } from '@/features/drawings/DrawingObjectTreePanel';
 import type { VideoReviewContext } from '@/domain/review-context';
 import { buildVideoPublishedMarker } from '@/chart/system-marker';
 import type { PositionToolParams } from '@/features/paper-trading/paper-trade-types';
@@ -229,6 +230,15 @@ export function ChartWorkspace({
     magnetEnabled,
     toggleMagnet,
     drawings,
+    allDrawings,
+    hideAllDrawings,
+    toggleHideAllDrawings,
+    hiddenDrawingIds,
+    toggleHideDrawing,
+    deleteDrawingById,
+    toggleLockDrawing,
+    isObjectTreeOpen,
+    toggleObjectTree,
     selectedDrawingId,
     setSelectedDrawingId,
     saveDrawingState: handleSaveDrawingState,
@@ -701,8 +711,12 @@ export function ChartWorkspace({
         selectedDrawingId={selectedDrawingId}
         selectedLocked={selectedLocked}
         selectedPositionInfo={selectedPositionInfo}
+        hideAllDrawings={hideAllDrawings}
+        isObjectTreeOpen={isObjectTreeOpen}
         onSelectTool={setActiveTool}
         onToggleMagnet={toggleMagnet}
+        onToggleHideAllDrawings={toggleHideAllDrawings}
+        onToggleObjectTree={toggleObjectTree}
         onUndo={handleUndo}
         onRedo={handleRedo}
         onToggleLock={handleToggleLockSelected}
@@ -711,6 +725,20 @@ export function ChartWorkspace({
         onOpenPaperTrading={togglePaperPanel}
         onCreatePaperTradeFromPosition={handleCreateTradeFromPosition}
       />
+
+      {isObjectTreeOpen && (
+        <DrawingObjectTreePanel
+          drawings={allDrawings}
+          selectedDrawingId={selectedDrawingId}
+          hiddenDrawingIds={hiddenDrawingIds}
+          onSelectDrawing={setSelectedDrawingId}
+          onToggleHideDrawing={toggleHideDrawing}
+          onToggleLockDrawing={toggleLockDrawing}
+          onDeleteDrawing={deleteDrawingById}
+          onClearAllDrawings={handleClearAllDrawings}
+          onClose={toggleObjectTree}
+        />
+      )}
 
       {showPaperPanel && (
         <PaperTradingPanel
@@ -874,6 +902,8 @@ export function ChartWorkspace({
           drawingVideoId="__global__"
           onSelectDrawing={setSelectedDrawingId}
           onSaveDrawing={handleSaveDrawingState}
+          onDeleteDrawing={deleteDrawingById}
+          onToggleLockDrawing={toggleLockDrawing}
           onDrawingComplete={() => setActiveTool('select')}
           showVolume
           showUsSessionBands={showUsSessionBands}

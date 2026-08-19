@@ -7,9 +7,12 @@ import {
   IconBrush,
   IconClear,
   IconDatePriceRange,
+  IconEye,
+  IconEyeOff,
   IconFibRetracement,
   IconHalfRetracement,
   IconHorizontalRay,
+  IconLayers,
   IconLock,
   IconLongPosition,
   IconMagnet,
@@ -35,8 +38,12 @@ interface DraggableDrawingToolbarProps {
   selectedDrawingId: string | null;
   selectedLocked: boolean;
   selectedPositionInfo?: PositionToolParams | null;
+  hideAllDrawings?: boolean;
+  isObjectTreeOpen?: boolean;
   onSelectTool: (tool: ActiveToolType) => void;
   onToggleMagnet: () => void;
+  onToggleHideAllDrawings?: () => void;
+  onToggleObjectTree?: () => void;
   onUndo: () => void;
   onRedo: () => void;
   onToggleLock: () => void;
@@ -54,7 +61,7 @@ const QUICK_TOOLS: Array<{
   Icon: React.ComponentType;
 }> = [
   { tool: 'TrendLine', title: '趋势线 (Alt+T)', Icon: IconTrendLine },
-  { tool: 'FibRetracement', title: '斐波那契回撤', Icon: IconFibRetracement },
+  { tool: 'FibRetracement', title: '斐波那契回撤 (Alt+F)', Icon: IconFibRetracement },
   { tool: 'half-retracement', title: '0.5 回撤', Icon: IconHalfRetracement },
   { tool: 'ShortPosition', title: '空头仓位', Icon: IconShortPosition },
   { tool: 'LongPosition', title: '多头仓位', Icon: IconLongPosition },
@@ -65,7 +72,7 @@ const QUICK_TOOLS: Array<{
   },
   { tool: 'HorizontalRay', title: '水平射线 (Alt+J)', Icon: IconHorizontalRay },
   { tool: 'ParallelChannel', title: '平行通道', Icon: IconParallelChannel },
-  { tool: 'Rectangle', title: '矩形', Icon: IconRectangle },
+  { tool: 'Rectangle', title: '矩形 (Alt+R)', Icon: IconRectangle },
   { tool: 'text-annotation', title: '文字', Icon: IconText },
   {
     tool: 'fixed-range-volume-profile',
@@ -88,8 +95,12 @@ export const DraggableDrawingToolbar = memo(function DraggableDrawingToolbar({
   selectedDrawingId,
   selectedLocked,
   selectedPositionInfo,
+  hideAllDrawings = false,
+  isObjectTreeOpen = false,
   onSelectTool,
   onToggleMagnet,
+  onToggleHideAllDrawings,
+  onToggleObjectTree,
   onUndo,
   onRedo,
   onToggleLock,
@@ -210,6 +221,28 @@ export const DraggableDrawingToolbar = memo(function DraggableDrawingToolbar({
           <IconMagnet />
         </button>
 
+        {onToggleHideAllDrawings && (
+          <button
+            type="button"
+            className={`toolbar-btn ${hideAllDrawings ? 'active-toggle' : ''}`}
+            onClick={onToggleHideAllDrawings}
+            title={hideAllDrawings ? '显示所有画图 (Alt+V)' : '隐藏所有画图 (Alt+V)'}
+          >
+            {hideAllDrawings ? <IconEyeOff /> : <IconEye />}
+          </button>
+        )}
+
+        {onToggleObjectTree && (
+          <button
+            type="button"
+            className={`toolbar-btn ${isObjectTreeOpen ? 'active' : ''}`}
+            onClick={onToggleObjectTree}
+            title="画图图层对象树"
+          >
+            <IconLayers />
+          </button>
+        )}
+
         <button type="button" className="toolbar-btn" onClick={onUndo} title="撤销 (Ctrl+Z)">
           <IconUndo />
         </button>
@@ -245,7 +278,7 @@ export const DraggableDrawingToolbar = memo(function DraggableDrawingToolbar({
           className="toolbar-btn"
           disabled={!selectedDrawingId}
           onClick={onDeleteSelected}
-          title="删除选中画线"
+          title="删除选中画线 (Delete)"
         >
           <IconTrash />
         </button>
