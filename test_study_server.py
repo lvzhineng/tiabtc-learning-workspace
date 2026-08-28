@@ -1239,5 +1239,162 @@ class PositionReviewStorageTests(unittest.TestCase):
         )
 
 
+class BitlangReviewStorageTests(unittest.TestCase):
+    SAMPLE_TRADE_ID = "a" * 64
+
+    def setUp(self):
+        self.temporary_directory = tempfile.TemporaryDirectory()
+        self.original_database_file = study_server.DATABASE_FILE
+        self.original_state_file = study_server.STATE_FILE
+        study_server.DATABASE_FILE = Path(self.temporary_directory.name) / "review.sqlite"
+        study_server.STATE_FILE = Path(self.temporary_directory.name) / "learning-state.json"
+        study_server.initialize_database()
+
+    def tearDown(self):
+        study_server.DATABASE_FILE = self.original_database_file
+        study_server.STATE_FILE = self.original_state_file
+        self.temporary_directory.cleanup()
+
+    def test_notes_tags_map_and_delete_cascade(self):
+        saved = study_server.save_bitlang_note(
+            {"tradeId": self.SAMPLE_TRADE_ID, "note": "入场看突破"}
+        )
+        self.assertTrue(saved["ok"])
+        tag1 = study_server.create_bitlang_tag("突破追单")
+        tag2 = study_server.create_bitlang_tag("持单过久")
+        study_server.save_bitlang_tag_map(
+            {
+                "tradeId": self.SAMPLE_TRADE_ID,
+                "tagIds": [tag1["id"], tag2["id"]],
+            }
+        )
+
+        state = study_server.get_bitlang_review_state()
+        self.assertEqual(state["notes"][self.SAMPLE_TRADE_ID], "入场看突破")
+        self.assertEqual(
+            set(state["tagMap"][self.SAMPLE_TRADE_ID]),
+            {tag1["id"], tag2["id"]},
+        )
+        self.assertEqual({tag["name"] for tag in state["tags"]}, {"突破追单", "持单过久"})
+
+        study_server.delete_bitlang_tag(tag1["id"])
+        after_delete = study_server.get_bitlang_review_state()
+        self.assertEqual(after_delete["tagMap"][self.SAMPLE_TRADE_ID], [tag2["id"]])
+        self.assertEqual([tag["name"] for tag in after_delete["tags"]], ["持单过久"])
+
+        study_server.save_bitlang_note({"tradeId": self.SAMPLE_TRADE_ID, "note": "  "})
+        cleared = study_server.get_bitlang_review_state()
+        self.assertNotIn(self.SAMPLE_TRADE_ID, cleared["notes"])
+
+    def test_invalid_trade_id_rejected(self):
+        with self.assertRaises(ValueError):
+            study_server.save_bitlang_note({"tradeId": "not-a-hash", "note": "x"})
+
+    def test_drawings_persist_per_trade_across_timeframes(self):
+        other_trade_id = "b" * 64
+        first = {
+            **sample_drawing(),
+            "tradeId": self.SAMPLE_TRADE_ID,
+        }
+        saved = study_server.save_bitlang_drawing(first)
+        self.assertEqual(saved["interval"], "60")
+        self.assertEqual(
+            study_server.list_bitlang_drawings(
+                self.SAMPLE_TRADE_ID, "BTCUSDT", "15"
+            ),
+            [saved],
+        )
+        self.assertEqual(
+            study_server.list_bitlang_drawings(other_trade_id, "BTCUSDT", "60"),
+            [],
+        )
+
+        second = {
+            **sample_drawing(
+                id="drawing-2",
+                interval="15",
+                toolType="HorizontalLine",
+                points=[{"timestamp": 1700000000000, "price": 60500.0}],
+            ),
+            "tradeId": self.SAMPLE_TRADE_ID,
+        }
+        replaced = study_server.replace_bitlang_drawings(
+            {
+                "tradeId": self.SAMPLE_TRADE_ID,
+                "symbol": "BTCUSDT",
+                "interval": "15",
+                "drawings": [saved, second],
+            }
+        )
+        self.assertEqual(
+            {(item["id"], item["interval"]) for item in replaced},
+            {("drawing-1", "60"), ("drawing-2", "15")},
+        )
+
+        study_server.delete_bitlang_drawings(
+            {
+                "id": ["drawing-1"],
+                "tradeId": [self.SAMPLE_TRADE_ID],
+                "symbol": ["BTCUSDT"],
+                "interval": ["15"],
+            }
+        )
+        remaining = study_server.list_bitlang_drawings(
+            self.SAMPLE_TRADE_ID, "BTCUSDT", "60"
+        )
+        self.assertEqual([item["id"] for item in remaining], ["drawing-2"])
+
+        study_server.delete_bitlang_drawings(
+            {
+                "tradeId": [self.SAMPLE_TRADE_ID],
+                "symbol": ["BTCUSDT"],
+                "interval": ["60"],
+            }
+        )
+        self.assertEqual(
+            study_server.list_bitlang_drawings(
+                self.SAMPLE_TRADE_ID, "BTCUSDT", "60"
+            ),
+            [],
+        )
+
+    def test_drawing_invalid_trade_id_rejected(self):
+        with self.assertRaises(ValueError):
+            study_server.save_bitlang_drawing(
+                {**sample_drawing(), "tradeId": "not-a-hash"}
+            )
+
+    def test_bitlang_tables_are_isolated_from_position_review(self):
+        study_server.create_bitlang_tag("浪浪标签")
+        study_server.create_position_tag("仓位标签")
+        bitlang_state = study_server.get_bitlang_review_state()
+        position_tags = study_server.list_position_tags()
+        self.assertEqual([tag["name"] for tag in bitlang_state["tags"]], ["浪浪标签"])
+        self.assertEqual([tag["name"] for tag in position_tags], ["仓位标签"])
+
+        study_server.save_bitlang_drawing(
+            {**sample_drawing(), "tradeId": self.SAMPLE_TRADE_ID}
+        )
+        with study_server.DATABASE_LOCK, study_server.database() as connection:
+            self.assertEqual(
+                connection.execute(
+                    "SELECT COUNT(*) AS n FROM bitlang_trade_drawings"
+                ).fetchone()["n"],
+                1,
+            )
+            self.assertEqual(
+                connection.execute(
+                    "SELECT COUNT(*) AS n FROM position_drawings"
+                ).fetchone()["n"],
+                0,
+            )
+            self.assertEqual(
+                connection.execute(
+                    "SELECT COUNT(*) AS n FROM chart_drawings"
+                ).fetchone()["n"],
+                0,
+            )
+
+
 if __name__ == "__main__":
     unittest.main()

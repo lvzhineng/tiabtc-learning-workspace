@@ -2,10 +2,16 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Copy, RefreshCw } from 'lucide-react';
 import type { SeriesMarker, UTCTimestamp } from 'lightweight-charts';
 import {
-  fetchPositionEarlierCandles,
-  fetchPositionLaterCandles,
-  fetchPositionReviewCandles,
-} from '@/api/position-review-api';
+  fetchBitlangEarlierCandles,
+  fetchBitlangLaterCandles,
+  fetchBitlangTradeCandles,
+} from '@/api/market-api';
+import {
+  boundedTradeWindowMs,
+  candleVenueLabel,
+  clipTradeFocusRange,
+  sliceCachedCandleWindow,
+} from '@/api/candle-window-cache';
 import { ChartCanvas } from '@/chart/ChartCanvas';
 import { captureChartPng } from '@/chart/capture-chart-png';
 import {
@@ -15,28 +21,28 @@ import {
 } from '@/chart/chart-time';
 import type { Candlestick } from '@/domain/candle';
 import { TIMEFRAME_DISPLAY_MAP, type ReviewTimeframe } from '@/domain/timeframe';
-import {
-  boundedTradeWindowMs,
-  candleVenueLabel,
-  clipTradeFocusRange,
-  sliceCachedCandleWindow,
-} from '@/api/candle-window-cache';
 import { DraggableDrawingToolbar } from '@/features/drawings/DraggableDrawingToolbar';
 import { DrawingObjectTreePanel } from '@/features/drawings/DrawingObjectTreePanel';
 import { useDrawingWorkspace } from '@/features/review-workspace/useDrawingWorkspace';
 import { toast } from '@/ui/feedback/toast';
-import { FILL_KIND_LABEL, formatNumber, mergeCandles } from './position-review-format';
-import type { ReviewPosition } from './position-review-types';
+import {
+  bybitSymbol,
+  formatNumber,
+  mergeCandles,
+  tradeEntryMs,
+  tradeExitMs,
+} from './bitlang-format';
+import type { BitlangTrade } from './bitlang-types';
 
-export function PositionReviewChart({
-  position,
+export function BitlangTradeChart({
+  trade,
   timeframe,
   themeMode,
   focusRevision,
   showUsSessionBands,
   showWeekendBands,
 }: {
-  position: ReviewPosition;
+  trade: BitlangTrade;
   timeframe: ReviewTimeframe;
   themeMode: 'dark' | 'light';
   focusRevision: number;
@@ -50,7 +56,6 @@ export function PositionReviewChart({
   const [loadedContextKey, setLoadedContextKey] = useState('');
   const [error, setError] = useState<string | null>(null);
   const [warning, setWarning] = useState<string | null>(null);
-  const [candleVenue, setCandleVenue] = useState('bybit');
   const [reloadToken, setReloadToken] = useState(0);
   const [copyingChart, setCopyingChart] = useState(false);
   const chartRootRef = useRef<HTMLDivElement | null>(null);
@@ -58,18 +63,14 @@ export function PositionReviewChart({
   const earlierRequestRef = useRef<AbortController | null>(null);
   const laterRequestRef = useRef<AbortController | null>(null);
   const contextKeyRef = useRef('');
-  const entryTimeMs = position.entryTimeMs;
-  const closedExitTimeMs = position.exitTimeMs;
-  const symbol = position.chartSymbol;
-  const chartContextKey = `${symbol}:${timeframe}:${entryTimeMs}:${closedExitTimeMs ?? 'open'}:${position.positionId}`;
+  const entryTimeMs = tradeEntryMs(trade);
+  const exitTimeMs = tradeExitMs(trade);
+  const symbol = bybitSymbol(trade.instrument);
+  const chartContextKey = `${symbol}:${timeframe}:${entryTimeMs}:${exitTimeMs}:${trade.id}`;
   const [candles, setCandles] = useState<Candlestick[]>(() => {
-    const window = boundedTradeWindowMs(
-      entryTimeMs,
-      closedExitTimeMs ?? Date.now(),
-      timeframe
-    );
+    const window = boundedTradeWindowMs(entryTimeMs, exitTimeMs, timeframe);
     const cached = sliceCachedCandleWindow(
-      'position',
+      'bitlang',
       symbol,
       timeframe,
       window.fromMs,
@@ -101,9 +102,8 @@ export function PositionReviewChart({
     toggleLockSelected,
     undo,
     redo,
-  } = useDrawingWorkspace(symbol, timeframe, 'position', {
-    venue: position.venue,
-    positionId: position.positionId,
+  } = useDrawingWorkspace(symbol, timeframe, 'bitlang', {
+    tradeId: trade.id,
   });
   const selectedDrawing = drawings.find(
     (drawing) => drawing.id === selectedDrawingId
@@ -120,7 +120,7 @@ export function PositionReviewChart({
       const png = captureChartPng(chartRootRef.current, themeMode, {
         symbol,
         timeframe: TIMEFRAME_DISPLAY_MAP[timeframe],
-        source: candleVenue === 'bitget' ? 'Bitget' : 'Bybit',
+        source: 'Bybit',
       });
       await navigator.clipboard.write([
         new ClipboardItem({ 'image/png': png }),
@@ -133,7 +133,7 @@ export function PositionReviewChart({
     } finally {
       setCopyingChart(false);
     }
-  }, [candleVenue, copyingChart, symbol, themeMode, timeframe]);
+  }, [copyingChart, symbol, themeMode, timeframe]);
 
   useEffect(() => {
     earlierRequestRef.current?.abort();
@@ -149,10 +149,9 @@ export function PositionReviewChart({
     setWarning(null);
     failedEdgeRef.current = null;
 
-    const exitForFetch = closedExitTimeMs ?? Date.now();
-    const window = boundedTradeWindowMs(entryTimeMs, exitForFetch, timeframe);
+    const window = boundedTradeWindowMs(entryTimeMs, exitTimeMs, timeframe);
     const cached = sliceCachedCandleWindow(
-      'position',
+      'bitlang',
       symbol,
       timeframe,
       window.fromMs,
@@ -160,32 +159,32 @@ export function PositionReviewChart({
     );
     if (cached?.candles.length) {
       setCandles(cached.candles);
-      setCandleVenue(cached.venue || 'bybit');
       setLoadedContextKey(chartContextKey);
       setLoading(false);
     } else {
       setCandles([]);
-      setCandleVenue('bybit');
       setLoadedContextKey('');
       setLoading(true);
     }
 
-    fetchPositionReviewCandles(
+    fetchBitlangTradeCandles(
       symbol,
       timeframe,
       entryTimeMs,
-      exitForFetch,
+      exitTimeMs,
       controller.signal
     )
       .then((batch) => {
-        if (controller.signal.aborted || contextKeyRef.current !== chartContextKey) {
+        if (
+          controller.signal.aborted ||
+          contextKeyRef.current !== chartContextKey
+        ) {
           return;
         }
         setCandles(batch.candles);
-        setCandleVenue(batch.candleVenue);
-        setWarning(batch.warning);
-        setError(!batch.candles.length ? '未返回该时间范围的 K 线' : null);
         setLoadedContextKey(chartContextKey);
+        setWarning(batch.warning);
+        setError(!batch.candles.length ? 'Bybit 未返回该时间范围的 K 线' : null);
       })
       .catch((cause) => {
         if (
@@ -193,7 +192,7 @@ export function PositionReviewChart({
           contextKeyRef.current === chartContextKey
         ) {
           failedEdgeRef.current = 'main';
-          setError(cause instanceof Error ? cause.message : '加载 K 线失败');
+          setError(cause instanceof Error ? cause.message : 'K 线加载失败');
           setLoadedContextKey(chartContextKey);
         }
       })
@@ -210,17 +209,22 @@ export function PositionReviewChart({
       earlierRequestRef.current?.abort();
       laterRequestRef.current?.abort();
     };
-  }, [chartContextKey, closedExitTimeMs, entryTimeMs, reloadToken, symbol, timeframe]);
+  }, [chartContextKey, entryTimeMs, exitTimeMs, reloadToken, symbol, timeframe]);
 
   const loadEarlier = useCallback(() => {
-    if (loading || isLoadingEarlier || candles.length === 0 || earlierRequestRef.current) {
+    if (
+      loading ||
+      isLoadingEarlier ||
+      candles.length === 0 ||
+      earlierRequestRef.current
+    ) {
       return;
     }
     const controller = new AbortController();
     const requestContextKey = contextKeyRef.current;
     earlierRequestRef.current = controller;
     setIsLoadingEarlier(true);
-    void fetchPositionEarlierCandles(
+    void fetchBitlangEarlierCandles(
       symbol,
       timeframe,
       candles[0].timestampMs,
@@ -228,7 +232,10 @@ export function PositionReviewChart({
       controller.signal
     )
       .then((batch) => {
-        if (!controller.signal.aborted && contextKeyRef.current === requestContextKey) {
+        if (
+          !controller.signal.aborted &&
+          contextKeyRef.current === requestContextKey
+        ) {
           setCandles((current) => mergeCandles(current, batch.candles));
           if (batch.warning) setWarning(batch.warning);
           setError(null);
@@ -238,7 +245,9 @@ export function PositionReviewChart({
       .catch((cause) => {
         if (!controller.signal.aborted) {
           failedEdgeRef.current = 'earlier';
-          setError(cause instanceof Error ? cause.message : '加载更早 K 线失败');
+          setError(
+            cause instanceof Error ? cause.message : '加载更早 K 线失败'
+          );
         }
       })
       .finally(() => {
@@ -250,14 +259,19 @@ export function PositionReviewChart({
   }, [candles, isLoadingEarlier, loading, symbol, timeframe]);
 
   const loadLater = useCallback(() => {
-    if (loading || isLoadingLater || candles.length === 0 || laterRequestRef.current) {
+    if (
+      loading ||
+      isLoadingLater ||
+      candles.length === 0 ||
+      laterRequestRef.current
+    ) {
       return;
     }
     const controller = new AbortController();
     const requestContextKey = contextKeyRef.current;
     laterRequestRef.current = controller;
     setIsLoadingLater(true);
-    void fetchPositionLaterCandles(
+    void fetchBitlangLaterCandles(
       symbol,
       timeframe,
       candles[candles.length - 1].timestampMs,
@@ -265,7 +279,10 @@ export function PositionReviewChart({
       controller.signal
     )
       .then((batch) => {
-        if (!controller.signal.aborted && contextKeyRef.current === requestContextKey) {
+        if (
+          !controller.signal.aborted &&
+          contextKeyRef.current === requestContextKey
+        ) {
           setCandles((current) => mergeCandles(current, batch.candles));
           if (batch.warning) setWarning(batch.warning);
           setError(null);
@@ -275,7 +292,9 @@ export function PositionReviewChart({
       .catch((cause) => {
         if (!controller.signal.aborted) {
           failedEdgeRef.current = 'later';
-          setError(cause instanceof Error ? cause.message : '加载更晚 K 线失败');
+          setError(
+            cause instanceof Error ? cause.message : '加载更晚 K 线失败'
+          );
         }
       })
       .finally(() => {
@@ -305,14 +324,9 @@ export function PositionReviewChart({
   const chartError = contextReady ? error : null;
   const chartWarning = contextReady ? warning : null;
   const markers = useMemo(
-    () => buildPositionMarkers(position, timeframe, displayedCandles),
-    [displayedCandles, position, timeframe]
+    () => buildTradeMarkers(trade, timeframe, displayedCandles),
+    [displayedCandles, timeframe, trade]
   );
-  const focusExitMs =
-    closedExitTimeMs ??
-    (displayedCandles.length
-      ? displayedCandles[displayedCandles.length - 1].timestampMs
-      : entryTimeMs);
 
   return (
     <div ref={chartRootRef} className="bitlang-chart">
@@ -333,7 +347,7 @@ export function PositionReviewChart({
         onToggleLock={toggleLockSelected}
         onDeleteSelected={deleteSelectedDrawing}
         onClearAll={clearAllDrawings}
-        clearAllTitle="清空当前仓位所有画线"
+        clearAllTitle="清空当前交易所有画线"
       />
       {isObjectTreeOpen && (
         <DrawingObjectTreePanel
@@ -367,12 +381,7 @@ export function PositionReviewChart({
         systemMarkers={markers}
         focusRangeMs={
           contextReady && displayedCandles.length > 0
-            ? clipTradeFocusRange(
-                entryTimeMs,
-                focusExitMs,
-                displayedCandles,
-                timeframe
-              )
+            ? clipTradeFocusRange(entryTimeMs, exitTimeMs, displayedCandles, timeframe)
             : null
         }
         focusRevision={focusRevision}
@@ -385,7 +394,7 @@ export function PositionReviewChart({
         activeDrawingTool={drawingReady ? activeTool : 'select'}
         selectedDrawingId={selectedDrawingId}
         magnetEnabled={magnetEnabled}
-        drawingVideoId={position.positionId}
+        drawingVideoId={trade.id}
         onSelectDrawing={setSelectedDrawingId}
         onSaveDrawing={saveDrawingState}
         onDeleteDrawing={deleteDrawingById}
@@ -422,24 +431,17 @@ export function PositionReviewChart({
         <div className="bitlang-chart-status warning">{chartWarning}</div>
       )}
       {chartLoading && displayedCandles.length > 0 && (
-        <div className="posrev-venue-badge posrev-refreshing">更新中</div>
+        <div className="bitlang-venue-badge bitlang-refreshing">更新中</div>
       )}
-      {displayedCandles.length > 0 &&
-        !(chartLoading && displayedCandles.length > 0) && (
-        <div
-          className={`posrev-venue-badge ${
-            candleVenue === 'bitget' ? 'fallback' : ''
-          }`}
-        >
-          {candleVenueLabel(candleVenue)}
-        </div>
-        )}
+      {displayedCandles.length > 0 && !chartLoading && (
+        <div className="bitlang-venue-badge">{candleVenueLabel('bybit')}</div>
+      )}
     </div>
   );
 }
 
-function buildPositionMarkers(
-  position: ReviewPosition,
+function buildTradeMarkers(
+  trade: BitlangTrade,
   timeframe: ReviewTimeframe,
   candles: Candlestick[]
 ): SeriesMarker<UTCTimestamp>[] {
@@ -449,7 +451,8 @@ function buildPositionMarkers(
     const candle =
       candles.find(
         (item) =>
-          item.timestampMs <= eventTimeMs && item.timestampMs + interval > eventTimeMs
+          item.timestampMs <= eventTimeMs &&
+          item.timestampMs + interval > eventTimeMs
       ) ||
       candles.reduce((nearest, item) =>
         Math.abs(item.timestampMs - eventTimeMs) <
@@ -459,51 +462,20 @@ function buildPositionMarkers(
       );
     return timestampMsToUtcTimestamp(candle.timestampMs);
   };
-  const fills = position.fills ?? [];
-  const markers: SeriesMarker<UTCTimestamp>[] = [];
-  const pushTradeMarker = (
-    timeMs: number,
-    price: number | null,
-    text: string,
-    side: 'buy' | 'sell'
-  ) => {
-    const isBuy = side === 'buy';
-    markers.push({
-      time: markerTime(timeMs),
-      position: isBuy ? 'belowBar' : 'aboveBar',
-      color: isBuy ? '#089981' : '#f23645',
-      shape: isBuy ? 'arrowUp' : 'arrowDown',
-      text: `${text} ${formatNumber(price, 4)}`,
-    });
-  };
-  const openSide = position.side === 'long' ? 'buy' : 'sell';
-  const closeSide = position.side === 'long' ? 'sell' : 'buy';
-
-  if (fills.length > 0) {
-    for (const fill of fills) {
-      const label = FILL_KIND_LABEL[fill.kind];
-      pushTradeMarker(fill.timeMs, fill.price, label, fill.side);
-    }
-    if (!fills.some((fill) => fill.kind === 'open')) {
-      pushTradeMarker(position.entryTimeMs, position.entryPrice, '开', openSide);
-    }
-    if (position.exitTimeMs && !fills.some((fill) => fill.kind === 'close')) {
-      pushTradeMarker(position.exitTimeMs, position.exitPrice, '平', closeSide);
-    }
-  } else {
-    pushTradeMarker(position.entryTimeMs, position.entryPrice, '开', openSide);
-    if (position.exitTimeMs) {
-      pushTradeMarker(position.exitTimeMs, position.exitPrice, '平', closeSide);
-    }
-  }
-  if (!position.exitTimeMs) {
-    markers.push({
-      time: timestampMsToUtcTimestamp(candles[candles.length - 1].timestampMs),
+  return [
+    {
+      time: markerTime(Date.parse(trade.entryTime)),
+      position: 'belowBar',
+      color: trade.direction === '多' ? '#089981' : '#f23645',
+      shape: 'arrowUp',
+      text: `开 ${formatNumber(trade.entryPrice, 4)}`,
+    },
+    {
+      time: markerTime(Date.parse(trade.exitTime)),
       position: 'aboveBar',
-      color: '#60a5fa',
-      shape: 'circle',
-      text: '现在',
-    });
-  }
-  return markers.sort((left, right) => Number(left.time) - Number(right.time));
+      color: trade.profit >= 0 ? '#089981' : '#f23645',
+      shape: 'arrowDown',
+      text: `平 ${formatNumber(trade.exitPrice, 4)}`,
+    },
+  ];
 }

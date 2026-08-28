@@ -85,6 +85,7 @@ CREDENTIAL_KEY_FILE = RUN_DIR / "credential-key"
 POSITION_REVIEW_VENUE = "bitget"
 FILL_MATCH_PAD_MS = 2000
 TAG_COLORS = ("#3b82f6", "#10b981", "#f59e0b", "#ef4444", "#8b5cf6", "#14b8a6")
+BITLANG_TRADE_ID_RE = re.compile(r"^[0-9a-f]{64}$")
 MAX_CANDLES_PER_RESPONSE = 3000
 CACHE_AUDIT_MAX_RANGES = 1000
 CACHE_AUDIT_MAX_CANDLES_PER_RANGE = 20000
@@ -387,6 +388,35 @@ def initialize_database():
                 fetched_at TEXT NOT NULL,
                 PRIMARY KEY (symbol, day_utc)
             );
+            CREATE TABLE IF NOT EXISTS bitlang_trade_notes (
+                trade_id TEXT NOT NULL PRIMARY KEY,
+                note TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            );
+            CREATE TABLE IF NOT EXISTS bitlang_trade_tags (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                name TEXT NOT NULL UNIQUE,
+                color TEXT NOT NULL
+            );
+            CREATE TABLE IF NOT EXISTS bitlang_trade_tag_map (
+                trade_id TEXT NOT NULL,
+                tag_id INTEGER NOT NULL,
+                PRIMARY KEY (trade_id, tag_id),
+                FOREIGN KEY (tag_id) REFERENCES bitlang_trade_tags(id)
+            );
+            CREATE TABLE IF NOT EXISTS bitlang_trade_drawings (
+                trade_id TEXT NOT NULL,
+                id TEXT NOT NULL,
+                symbol TEXT NOT NULL,
+                interval TEXT NOT NULL,
+                tool_type TEXT NOT NULL,
+                tool_json TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                PRIMARY KEY (trade_id, id)
+            );
+            CREATE INDEX IF NOT EXISTS idx_bitlang_trade_drawings_scope
+                ON bitlang_trade_drawings (trade_id, created_at);
             CREATE INDEX IF NOT EXISTS idx_exchange_positions_entry
                 ON exchange_positions (entry_time_ms DESC);
             """
@@ -2843,6 +2873,289 @@ def save_position_tag_map(payload):
     return {"ok": True, "tagIds": cleaned_ids}
 
 
+def _clean_bitlang_trade_id(value):
+    cleaned = str(value or "").strip().lower()
+    if not BITLANG_TRADE_ID_RE.fullmatch(cleaned):
+        raise ValueError("交易 ID 无效")
+    return cleaned
+
+
+def _read_bitlang_tags(connection):
+    rows = connection.execute(
+        "SELECT id, name, color FROM bitlang_trade_tags ORDER BY name COLLATE NOCASE"
+    ).fetchall()
+    return [{"id": row["id"], "name": row["name"], "color": row["color"]} for row in rows]
+
+
+def get_bitlang_review_state():
+    with DATABASE_LOCK, database() as connection:
+        notes_rows = connection.execute(
+            "SELECT trade_id, note FROM bitlang_trade_notes"
+        ).fetchall()
+        tags = _read_bitlang_tags(connection)
+        map_rows = connection.execute(
+            "SELECT trade_id, tag_id FROM bitlang_trade_tag_map ORDER BY tag_id"
+        ).fetchall()
+    notes = {row["trade_id"]: row["note"] for row in notes_rows}
+    tag_map = {}
+    for row in map_rows:
+        tag_map.setdefault(row["trade_id"], []).append(row["tag_id"])
+    return {"notes": notes, "tags": tags, "tagMap": tag_map}
+
+
+def save_bitlang_note(payload):
+    trade_id = _clean_bitlang_trade_id(payload.get("tradeId"))
+    note = payload.get("note") or ""
+    if not isinstance(note, str) or len(note) > 20000:
+        raise ValueError("备注过长")
+    updated_at = datetime.now().astimezone().isoformat()
+    with DATABASE_LOCK, database() as connection:
+        if note.strip():
+            connection.execute(
+                """INSERT INTO bitlang_trade_notes (trade_id, note, updated_at)
+                   VALUES (?, ?, ?)
+                   ON CONFLICT(trade_id) DO UPDATE SET
+                     note = excluded.note, updated_at = excluded.updated_at""",
+                (trade_id, note, updated_at),
+            )
+        else:
+            connection.execute(
+                "DELETE FROM bitlang_trade_notes WHERE trade_id = ?",
+                (trade_id,),
+            )
+    return {"ok": True, "updatedAt": updated_at}
+
+
+def create_bitlang_tag(name):
+    cleaned = str(name or "").strip()
+    if not cleaned or len(cleaned) > 32:
+        raise ValueError("标签名称为 1–32 个字符")
+    color = TAG_COLORS[sum(ord(char) for char in cleaned) % len(TAG_COLORS)]
+    with DATABASE_LOCK, database() as connection:
+        try:
+            connection.execute(
+                "INSERT INTO bitlang_trade_tags (name, color) VALUES (?, ?)",
+                (cleaned, color),
+            )
+        except sqlite3.IntegrityError as error:
+            raise ValueError("标签已存在") from error
+        row = connection.execute(
+            "SELECT id, name, color FROM bitlang_trade_tags WHERE name = ?",
+            (cleaned,),
+        ).fetchone()
+    return {"id": row["id"], "name": row["name"], "color": row["color"]}
+
+
+def delete_bitlang_tag(tag_id):
+    try:
+        cleaned_id = int(tag_id)
+    except (TypeError, ValueError):
+        raise ValueError("标签 ID 无效")
+    if cleaned_id <= 0:
+        raise ValueError("标签 ID 无效")
+    with DATABASE_LOCK, database() as connection:
+        connection.execute(
+            "DELETE FROM bitlang_trade_tag_map WHERE tag_id = ?",
+            (cleaned_id,),
+        )
+        connection.execute(
+            "DELETE FROM bitlang_trade_tags WHERE id = ?",
+            (cleaned_id,),
+        )
+    return {"ok": True}
+
+
+def save_bitlang_tag_map(payload):
+    trade_id = _clean_bitlang_trade_id(payload.get("tradeId"))
+    tag_ids = payload.get("tagIds") or []
+    if not isinstance(tag_ids, list) or len(tag_ids) > 20:
+        raise ValueError("标签数量无效")
+    cleaned_ids = []
+    seen_ids = set()
+    for item in tag_ids:
+        tag_id = int(item)
+        if tag_id <= 0:
+            raise ValueError("标签无效")
+        if tag_id in seen_ids:
+            continue
+        seen_ids.add(tag_id)
+        cleaned_ids.append(tag_id)
+    with DATABASE_LOCK, database() as connection:
+        connection.execute(
+            "DELETE FROM bitlang_trade_tag_map WHERE trade_id = ?",
+            (trade_id,),
+        )
+        for tag_id in cleaned_ids:
+            tag_exists = connection.execute(
+                "SELECT 1 FROM bitlang_trade_tags WHERE id = ?",
+                (tag_id,),
+            ).fetchone()
+            if tag_exists is None:
+                raise ValueError("标签不存在")
+            connection.execute(
+                "INSERT INTO bitlang_trade_tag_map (trade_id, tag_id) VALUES (?, ?)",
+                (trade_id, tag_id),
+            )
+    return {"ok": True, "tagIds": cleaned_ids}
+
+
+def _validate_bitlang_drawing_scope(trade_id, symbol, interval):
+    cleaned_trade_id = _clean_bitlang_trade_id(trade_id)
+    cleaned_symbol = str(symbol or "").strip().upper()
+    cleaned_interval = str(interval or "").strip()
+    if not re.match(r"^[A-Z0-9]{3,20}USDT$", cleaned_symbol):
+        raise ValueError("交易合约格式无效")
+    if cleaned_interval not in VALID_INTERVALS:
+        raise ValueError("不支持该 K 线周期")
+    return cleaned_trade_id, cleaned_symbol, cleaned_interval
+
+
+def save_bitlang_drawing(payload):
+    if not isinstance(payload, dict):
+        raise ValueError("画图记录必须是对象")
+    trade_id, symbol, interval = _validate_bitlang_drawing_scope(
+        payload.get("tradeId"),
+        payload.get("symbol"),
+        payload.get("interval"),
+    )
+    drawing, encoded = _validate_drawing_content(payload)
+    now = datetime.now().astimezone().isoformat()
+    with DATABASE_LOCK, database() as connection:
+        existing = connection.execute(
+            """SELECT created_at FROM bitlang_trade_drawings
+               WHERE trade_id = ? AND id = ?""",
+            (trade_id, drawing["id"]),
+        ).fetchone()
+        created_at = existing["created_at"] if existing else now
+        connection.execute(
+            """INSERT INTO bitlang_trade_drawings
+               (trade_id, id, symbol, interval, tool_type, tool_json,
+                created_at, updated_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+               ON CONFLICT(trade_id, id) DO UPDATE SET
+                 symbol = excluded.symbol, interval = excluded.interval,
+                 tool_type = excluded.tool_type, tool_json = excluded.tool_json,
+                 updated_at = excluded.updated_at""",
+            (
+                trade_id,
+                drawing["id"],
+                symbol,
+                interval,
+                drawing["toolType"],
+                encoded,
+                created_at,
+                now,
+            ),
+        )
+    return {**drawing, "interval": interval}
+
+
+def list_bitlang_drawings(trade_id, symbol, interval):
+    trade_id, symbol, _interval = _validate_bitlang_drawing_scope(
+        trade_id, symbol, interval
+    )
+    with DATABASE_LOCK, database() as connection:
+        rows = connection.execute(
+            """SELECT interval, tool_json FROM bitlang_trade_drawings
+               WHERE trade_id = ? AND symbol = ?
+               ORDER BY created_at ASC""",
+            (trade_id, symbol),
+        ).fetchall()
+    return [
+        {**json.loads(row["tool_json"]), "interval": row["interval"]}
+        for row in rows
+    ]
+
+
+def replace_bitlang_drawings(payload):
+    if not isinstance(payload, dict):
+        raise ValueError("画图批量记录必须是对象")
+    trade_id, symbol, interval = _validate_bitlang_drawing_scope(
+        payload.get("tradeId"),
+        payload.get("symbol"),
+        payload.get("interval"),
+    )
+    drawings = payload.get("drawings")
+    if not isinstance(drawings, list) or len(drawings) > 500:
+        raise ValueError("画图批量记录无效")
+    validated = []
+    seen_ids = set()
+    for item in drawings:
+        if not isinstance(item, dict):
+            raise ValueError("画图记录必须是对象")
+        item_interval = str(item.get("interval", interval))
+        if item_interval not in VALID_INTERVALS:
+            raise ValueError("不支持该 K 线周期")
+        drawing, encoded = _validate_drawing_content(item)
+        if drawing["id"] in seen_ids:
+            raise ValueError("画图 ID 重复")
+        seen_ids.add(drawing["id"])
+        validated.append((item_interval, drawing, encoded))
+
+    now = datetime.now().astimezone().isoformat()
+    with DATABASE_LOCK, database() as connection:
+        created_times = {
+            row["id"]: row["created_at"]
+            for row in connection.execute(
+                """SELECT id, created_at FROM bitlang_trade_drawings
+                   WHERE trade_id = ?""",
+                (trade_id,),
+            ).fetchall()
+        }
+        connection.execute(
+            "DELETE FROM bitlang_trade_drawings WHERE trade_id = ?",
+            (trade_id,),
+        )
+        connection.executemany(
+            """INSERT INTO bitlang_trade_drawings
+               (trade_id, id, symbol, interval, tool_type, tool_json,
+                created_at, updated_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+            [
+                (
+                    trade_id,
+                    drawing["id"],
+                    symbol,
+                    item_interval,
+                    drawing["toolType"],
+                    encoded,
+                    created_times.get(drawing["id"], now),
+                    now,
+                )
+                for item_interval, drawing, encoded in validated
+            ],
+        )
+    return [
+        {**drawing, "interval": item_interval}
+        for item_interval, drawing, _encoded in validated
+    ]
+
+
+def delete_bitlang_drawings(query):
+    drawing_id = str(query.get("id", [""])[0]).strip()
+    trade_id, symbol, interval = _validate_bitlang_drawing_scope(
+        query.get("tradeId", [""])[0],
+        query.get("symbol", [""])[0],
+        query.get("interval", [""])[0],
+    )
+    if drawing_id and (
+        len(drawing_id) > 100 or drawing_id.startswith(SYSTEM_DRAWING_PREFIX)
+    ):
+        raise ValueError("画图 ID 无效")
+    with DATABASE_LOCK, database() as connection:
+        if drawing_id:
+            connection.execute(
+                """DELETE FROM bitlang_trade_drawings
+                   WHERE trade_id = ? AND id = ?""",
+                (trade_id, drawing_id),
+            )
+            return
+        connection.execute(
+            "DELETE FROM bitlang_trade_drawings WHERE trade_id = ?",
+            (trade_id,),
+        )
+
+
 def _read_position_review(connection):
     rows = connection.execute(
         """SELECT p.*, n.note,
@@ -3346,6 +3659,18 @@ class StudyHandler(BaseHTTPRequestHandler):
                 HTTPStatus.OK,
                 {"offlineMode": get_offline_mode()},
             )
+        if parsed.path == "/api/bitlang-review":
+            return self.send_json(HTTPStatus.OK, get_bitlang_review_state())
+        if parsed.path == "/api/bitlang-review/drawings":
+            try:
+                drawings = list_bitlang_drawings(
+                    query.get("tradeId", [""])[0],
+                    query.get("symbol", [""])[0],
+                    query.get("interval", [""])[0],
+                )
+                return self.send_json(HTTPStatus.OK, {"drawings": drawings})
+            except ValueError as error:
+                return self.send_json(HTTPStatus.BAD_REQUEST, {"error": str(error)})
         if parsed.path == "/api/bitlang/candles":
             try:
                 symbol = query.get("symbol", [""])[0]
@@ -3498,6 +3823,21 @@ class StudyHandler(BaseHTTPRequestHandler):
                 tag_id = payload.get("id") or payload.get("tagId")
                 delete_position_tag(int(tag_id))
                 return self.send_json(HTTPStatus.OK, {"ok": True})
+            if parsed.path == "/api/bitlang-review/notes":
+                return self.send_json(HTTPStatus.OK, save_bitlang_note(payload))
+            if parsed.path == "/api/bitlang-review/tags":
+                return self.send_json(
+                    HTTPStatus.CREATED,
+                    create_bitlang_tag(payload.get("name")),
+                )
+            if parsed.path == "/api/bitlang-review/trade-tags":
+                return self.send_json(HTTPStatus.OK, save_bitlang_tag_map(payload))
+            if parsed.path == "/api/bitlang-review/drawings":
+                return self.send_json(HTTPStatus.OK, save_bitlang_drawing(payload))
+            if parsed.path == "/api/bitlang-review/tags/delete":
+                tag_id = payload.get("id") or payload.get("tagId")
+                delete_bitlang_tag(int(tag_id))
+                return self.send_json(HTTPStatus.OK, {"ok": True})
         except SyncInProgressError as error:
             return self.send_json(HTTPStatus.CONFLICT, {"error": str(error)})
         except (ValueError, TypeError, OverflowError, AttributeError, json.JSONDecodeError) as error:
@@ -3520,6 +3860,15 @@ class StudyHandler(BaseHTTPRequestHandler):
                 return self.send_json(
                     HTTPStatus.OK,
                     {"drawings": replace_position_drawings(payload)},
+                )
+            except (ValueError, json.JSONDecodeError, AttributeError) as error:
+                return self.send_json(HTTPStatus.BAD_REQUEST, {"error": str(error)})
+        if path == "/api/bitlang-review/drawings":
+            try:
+                payload = self.read_json_body()
+                return self.send_json(
+                    HTTPStatus.OK,
+                    {"drawings": replace_bitlang_drawings(payload)},
                 )
             except (ValueError, json.JSONDecodeError, AttributeError) as error:
                 return self.send_json(HTTPStatus.BAD_REQUEST, {"error": str(error)})
@@ -3563,8 +3912,18 @@ class StudyHandler(BaseHTTPRequestHandler):
                     raw_id = payload.get("id") or payload.get("tagId")
                 delete_position_tag(int(raw_id))
                 return self.send_json(HTTPStatus.OK, {"ok": True})
+            if parsed.path == "/api/bitlang-review/tags":
+                raw_id = query.get("id", [None])[0]
+                if raw_id is None:
+                    payload = self.read_json_body()
+                    raw_id = payload.get("id") or payload.get("tagId")
+                delete_bitlang_tag(int(raw_id))
+                return self.send_json(HTTPStatus.OK, {"ok": True})
             if parsed.path == "/api/position-review/drawings":
                 delete_position_drawings(query)
+                return self.send_json(HTTPStatus.OK, {"ok": True})
+            if parsed.path == "/api/bitlang-review/drawings":
+                delete_bitlang_drawings(query)
                 return self.send_json(HTTPStatus.OK, {"ok": True})
             if parsed.path != "/api/chart/drawings":
                 return self.send_error(HTTPStatus.NOT_FOUND)

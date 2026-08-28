@@ -27,3 +27,8 @@ export interface BitlangTradeSnapshot {
   generatedAt: string;
   trades: BitlangTrade[];
 }
+
+export interface AnnotatedBitlangTrade extends BitlangTrade {
+  note: string;
+  tagIds: number[];
+}

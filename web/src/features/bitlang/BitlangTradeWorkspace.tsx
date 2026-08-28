@@ -7,50 +7,46 @@ import {
   useState,
 } from 'react';
 import {
+  BarChart2,
   ChevronDown,
   ChevronLeft,
   ChevronRight,
   ChevronUp,
+  LayoutDashboard,
+  PanelRightOpen,
   RefreshCw,
   Search,
+  X,
 } from 'lucide-react';
-import type { SeriesMarker, UTCTimestamp } from 'lightweight-charts';
-import {
-  fetchBitlangEarlierCandles,
-  fetchBitlangLaterCandles,
-  fetchBitlangTradeCandles,
-} from '@/api/market-api';
-import {
-  candleVenueLabel,
-  clipTradeFocusRange,
-  sliceCachedCandleWindow,
-  boundedTradeWindowMs,
-} from '@/api/candle-window-cache';
-import { ChartCanvas } from '@/chart/ChartCanvas';
-import {
-  formatChartTime,
-  timestampMsToUtcTimestamp,
-  timeframeMs,
-} from '@/chart/chart-time';
-import type { Candlestick } from '@/domain/candle';
+import type { BitlangTag } from '@/api/bitlang-review-api';
+import { fetchBitlangReviewState } from '@/api/bitlang-review-api';
 import {
   TIMEFRAME_DISPLAY_MAP,
   suggestReviewTimeframe,
   type ReviewTimeframe,
 } from '@/domain/timeframe';
-import { DraggableDrawingToolbar } from '@/features/drawings/DraggableDrawingToolbar';
-import { DrawingObjectTreePanel } from '@/features/drawings/DrawingObjectTreePanel';
-import { useDrawingWorkspace } from '@/features/review-workspace/useDrawingWorkspace';
 import {
   scrollReviewRowIntoView,
   useReviewListKeyboard,
 } from '@/features/review-workspace/useReviewListKeyboard';
+import { BitlangDashboardWorkspace } from './BitlangDashboardWorkspace';
+import { BitlangTradeChart } from './BitlangTradeChart';
+import { BitlangTradePanel } from './BitlangTradePanel';
+import {
+  bybitSymbol,
+  formatHoldingMinutes,
+  formatNumber,
+  formatPercent,
+  formatTradeTime,
+} from './bitlang-format';
 import type {
+  AnnotatedBitlangTrade,
   BitlangDirection,
   BitlangTrade,
   BitlangTradeSnapshot,
 } from './bitlang-types';
 import '@/styles/bitlang.css';
+import '@/styles/position-review.css';
 
 const PAGE_SIZE = 100;
 const TIMEFRAMES: ReviewTimeframe[] = ['1', '5', '15', '60', '240', 'D', 'W'];
@@ -86,80 +82,30 @@ interface BitlangTradeWorkspaceProps {
   themeMode?: 'dark' | 'light';
 }
 
-function formatTime(value: string): string {
-  const timestampMs = Date.parse(value);
-  return Number.isFinite(timestampMs)
-    ? formatChartTime(timestampMs).slice(0, 16)
-    : '--';
-}
-
-function formatNumber(value: number, digits = 2): string {
-  return new Intl.NumberFormat('zh-CN', {
-    minimumFractionDigits: digits,
-    maximumFractionDigits: digits,
-  }).format(value);
-}
-
-function formatPercent(value: number): string {
-  return `${value >= 0 ? '+' : ''}${formatNumber(value * 100)}%`;
-}
-
 function timeframeLabel(timeframe: ReviewTimeframe): string {
   return TIMEFRAME_DISPLAY_MAP[timeframe];
 }
 
-function bybitSymbol(instrument: string): string {
-  return instrument.replace(/-USDT-SWAP$/i, 'USDT').replace(/-/g, '').toUpperCase();
-}
-
-function formatHoldingMinutes(minutes: number): string {
-  const roundedMinutes = Math.round(minutes);
-  if (roundedMinutes < 1) return '< 1m';
-  if (roundedMinutes < 60) return `${roundedMinutes}m`;
-  const hours = Math.floor(roundedMinutes / 60);
-  const remMinutes = roundedMinutes % 60;
-  if (hours < 24) {
-    return remMinutes > 0 ? `${hours}h ${remMinutes}m` : `${hours}h`;
-  }
-  const days = Math.floor(hours / 24);
-  const remHours = hours % 24;
-  return remHours > 0 ? `${days}d ${remHours}h` : `${days}d`;
-}
-
-function mergeCandles(
-  current: Candlestick[],
-  incoming: Candlestick[]
-): Candlestick[] {
-  if (!incoming.length) return current;
-  if (!current.length) return incoming;
-  if (
-    incoming[incoming.length - 1].timestampMs < current[0].timestampMs
-  ) {
-    return [...incoming, ...current];
-  }
-  if (
-    incoming[0].timestampMs > current[current.length - 1].timestampMs
-  ) {
-    return [...current, ...incoming];
-  }
-  const merged = new Map(
-    current.map((candle) => [candle.timestampMs, candle])
-  );
-  let changed = false;
-  for (const candle of incoming) {
-    if (!merged.has(candle.timestampMs)) changed = true;
-    merged.set(candle.timestampMs, candle);
-  }
-  if (!changed) return current;
-  return Array.from(merged.values()).sort(
-    (left, right) => left.timestampMs - right.timestampMs
-  );
+function annotateTrades(
+  trades: BitlangTrade[],
+  notes: Record<string, string>,
+  tagMap: Record<string, number[]>
+): AnnotatedBitlangTrade[] {
+  return trades.map((trade) => ({
+    ...trade,
+    note: notes[trade.id] || '',
+    tagIds: tagMap[trade.id] || [],
+  }));
 }
 
 export function BitlangTradeWorkspace({
   themeMode = 'dark',
 }: BitlangTradeWorkspaceProps) {
   const [snapshot, setSnapshot] = useState<BitlangTradeSnapshot | null>(null);
+  const [annotatedTrades, setAnnotatedTrades] = useState<AnnotatedBitlangTrade[]>(
+    []
+  );
+  const [tags, setTags] = useState<BitlangTag[]>([]);
   const [selectedId, setSelectedId] = useState('');
   const [focusRevision, setFocusRevision] = useState(0);
   const [search, setSearch] = useState('');
@@ -168,6 +114,9 @@ export function BitlangTradeWorkspace({
   const [result, setResult] = useState<ResultFilter>('all');
   const [dateRange, setDateRange] = useState<DateRangeFilter>('all');
   const [minimumHoldingMinutes, setMinimumHoldingMinutes] = useState('');
+  const [tagFilter, setTagFilter] = useState('all');
+  const [noNote, setNoNote] = useState(false);
+  const [noTag, setNoTag] = useState(false);
   const [sortField, setSortField] = useState<SortField>('entryTime');
   const [descending, setDescending] = useState(true);
   const [timeframe, setTimeframe] = useState<ReviewTimeframe>('60');
@@ -175,18 +124,37 @@ export function BitlangTradeWorkspace({
   const [showMoreFilters, setShowMoreFilters] = useState(false);
   const [showUsSessionBands, setShowUsSessionBands] = useState(false);
   const [showWeekendBands, setShowWeekendBands] = useState(false);
+  const [showDetails, setShowDetails] = useState(false);
   const [page, setPage] = useState(1);
   const [error, setError] = useState<string | null>(null);
+  const [viewMode, setViewMode] = useState<'chart' | 'dashboard'>(() => {
+    return new URLSearchParams(window.location.search).get('view') === 'dashboard'
+      ? 'dashboard'
+      : 'chart';
+  });
   const deferredSearch = useDeferredValue(search);
+  const pendingRevealIdRef = useRef<string | null>(null);
   const listRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
     let active = true;
     void loadBitlangSnapshot()
-      .then((data) => {
+      .then(async (data) => {
         if (!active) return;
         setSnapshot(data);
         setSelectedId(data.trades[0]?.id || '');
+        setError(null);
+        try {
+          const annotations = await fetchBitlangReviewState();
+          if (!active) return;
+          setTags(annotations.tags);
+          setAnnotatedTrades(
+            annotateTrades(data.trades, annotations.notes, annotations.tagMap)
+          );
+        } catch {
+          if (!active) return;
+          setAnnotatedTrades(annotateTrades(data.trades, {}, {}));
+        }
       })
       .catch((cause) => {
         if (!active) return;
@@ -200,9 +168,18 @@ export function BitlangTradeWorkspace({
   const instruments = useMemo(
     () =>
       Array.from(
-        new Set(snapshot?.trades.map((trade) => trade.instrument) || [])
+        new Set(annotatedTrades.map((trade) => trade.instrument))
       ).sort(),
-    [snapshot]
+    [annotatedTrades]
+  );
+
+  const snapshotEndMs = useMemo(
+    () =>
+      annotatedTrades.reduce(
+        (latest, trade) => Math.max(latest, Date.parse(trade.entryTime) || 0),
+        0
+      ),
+    [annotatedTrades]
   );
 
   const filteredTrades = useMemo(() => {
@@ -212,15 +189,10 @@ export function BitlangTradeWorkspace({
       minimumHoldingMinutes !== '' &&
       Number.isFinite(holdingMinutesThreshold) &&
       holdingMinutesThreshold > 0;
-    const snapshotEndMs = (snapshot?.trades || []).reduce(
-      (latest, trade) => Math.max(latest, Date.parse(trade.entryTime) || 0),
-      0
-    );
     const cutoffMs =
-      dateRange === 'all'
-        ? 0
-        : snapshotEndMs - DATE_RANGE_MS_MAP[dateRange];
-    return (snapshot?.trades || [])
+      dateRange === 'all' ? 0 : snapshotEndMs - DATE_RANGE_MS_MAP[dateRange];
+    const tagId = tagFilter === 'all' ? null : Number(tagFilter);
+    return annotatedTrades
       .filter((trade) => {
         if (instrument !== 'all' && trade.instrument !== instrument) return false;
         if (direction !== 'all' && trade.direction !== direction) return false;
@@ -233,12 +205,16 @@ export function BitlangTradeWorkspace({
         ) {
           return false;
         }
-        return (
-          !keyword ||
-          `${trade.sequence} ${trade.instrument} ${trade.sourceNote}`
-            .toLowerCase()
-            .includes(keyword)
-        );
+        if (tagId != null && !trade.tagIds.includes(tagId)) return false;
+        if (noNote && trade.note.trim()) return false;
+        if (noTag && trade.tagIds.length > 0) return false;
+        if (!keyword) return true;
+        const tagNames = trade.tagIds
+          .map((id) => tags.find((tag) => tag.id === id)?.name || '')
+          .join(' ');
+        return `${trade.sequence} ${trade.instrument} ${trade.sourceNote} ${trade.note} ${tagNames}`
+          .toLowerCase()
+          .includes(keyword);
       })
       .sort((left, right) => {
         const leftValue = left[sortField];
@@ -250,15 +226,20 @@ export function BitlangTradeWorkspace({
         return descending ? -comparison : comparison;
       });
   }, [
+    annotatedTrades,
+    dateRange,
+    deferredSearch,
     descending,
     direction,
-    dateRange,
     instrument,
     minimumHoldingMinutes,
+    noNote,
+    noTag,
     result,
-    deferredSearch,
-    snapshot,
+    snapshotEndMs,
     sortField,
+    tagFilter,
+    tags,
   ]);
 
   useEffect(() => {
@@ -272,6 +253,9 @@ export function BitlangTradeWorkspace({
     minimumHoldingMinutes,
     sortField,
     descending,
+    tagFilter,
+    noNote,
+    noTag,
   ]);
 
   const stats = useMemo(() => {
@@ -279,8 +263,10 @@ export function BitlangTradeWorkspace({
     let totalLoss = 0;
     let winning = 0;
     let holdingSum = 0;
+    let totalFee = 0;
     for (const trade of filteredTrades) {
       holdingSum += trade.holdingMinutes;
+      totalFee += Math.abs(trade.fee || 0);
       if (trade.profit > 0) {
         winning += 1;
         totalWin += trade.profit;
@@ -295,6 +281,7 @@ export function BitlangTradeWorkspace({
       profitFactor: totalLoss > 0 ? totalWin / totalLoss : null,
       avgHoldingMinutes:
         filteredTrades.length > 0 ? holdingSum / filteredTrades.length : 0,
+      totalFee,
     };
   }, [filteredTrades]);
 
@@ -310,10 +297,55 @@ export function BitlangTradeWorkspace({
     null;
 
   useEffect(() => {
+    if (pendingRevealIdRef.current) return;
     if (selectedTrade && selectedTrade.id !== selectedId) {
       setSelectedId(selectedTrade.id);
     }
   }, [selectedId, selectedTrade]);
+
+  useEffect(() => {
+    const url = new URL(window.location.href);
+    if (viewMode === 'dashboard') url.searchParams.set('view', 'dashboard');
+    else url.searchParams.delete('view');
+    window.history.replaceState(null, '', url);
+  }, [viewMode]);
+
+  useEffect(() => {
+    const revealId = pendingRevealIdRef.current;
+    if (!revealId) return;
+    const index = filteredTrades.findIndex((trade) => trade.id === revealId);
+    if (index < 0) return;
+    setPage(Math.floor(index / PAGE_SIZE) + 1);
+    setSelectedId(revealId);
+    pendingRevealIdRef.current = null;
+  }, [filteredTrades]);
+
+  const filteredRef = useRef(filteredTrades);
+  filteredRef.current = filteredTrades;
+
+  const openTradeOnChart = useCallback((tradeId: string) => {
+    pendingRevealIdRef.current = tradeId;
+    const visibleIndex = filteredRef.current.findIndex(
+      (trade) => trade.id === tradeId
+    );
+    if (visibleIndex >= 0) {
+      setPage(Math.floor(visibleIndex / PAGE_SIZE) + 1);
+      pendingRevealIdRef.current = null;
+    } else {
+      setSearch('');
+      setDateRange('all');
+      setInstrument('all');
+      setDirection('all');
+      setResult('all');
+      setTagFilter('all');
+      setNoNote(false);
+      setNoTag(false);
+      setMinimumHoldingMinutes('');
+    }
+    setSelectedId(tradeId);
+    setViewMode('chart');
+    setFocusRevision((revision) => revision + 1);
+  }, []);
 
   const applyManualTimeframe = useCallback((next: ReviewTimeframe) => {
     setAutoTimeframe(false);
@@ -345,7 +377,7 @@ export function BitlangTradeWorkspace({
   );
 
   useReviewListKeyboard({
-    enabled: Boolean(snapshot),
+    enabled: Boolean(snapshot) && viewMode === 'chart',
     itemIds: filteredIds,
     selectedId: selectedTrade?.id,
     pageSize: PAGE_SIZE,
@@ -356,6 +388,23 @@ export function BitlangTradeWorkspace({
   useEffect(() => {
     scrollReviewRowIntoView(listRef.current, selectedTrade?.id);
   }, [safePage, selectedTrade?.id]);
+
+  const updateSelected = (next: AnnotatedBitlangTrade) => {
+    setAnnotatedTrades((current) =>
+      current.map((item) => (item.id === next.id ? next : item))
+    );
+  };
+
+  const handleTagDeleted = (deletedId: number) => {
+    setTags((current) => current.filter((tag) => tag.id !== deletedId));
+    setAnnotatedTrades((current) =>
+      current.map((trade) => ({
+        ...trade,
+        tagIds: trade.tagIds.filter((id) => id !== deletedId),
+      }))
+    );
+    if (tagFilter === String(deletedId)) setTagFilter('all');
+  };
 
   if (error) {
     return <div className="bitlang-state">交割单加载失败：{error}</div>;
@@ -377,6 +426,24 @@ export function BitlangTradeWorkspace({
             <strong>bit浪浪实盘分析</strong>
             <span>Trade Review · {snapshot.trades.length} 笔</span>
           </div>
+          <div className="posrev-view-switch">
+            <button
+              type="button"
+              className={viewMode === 'chart' ? 'active' : ''}
+              onClick={() => setViewMode('chart')}
+            >
+              <BarChart2 size={13} />
+              K 线
+            </button>
+            <button
+              type="button"
+              className={viewMode === 'dashboard' ? 'active' : ''}
+              onClick={() => setViewMode('dashboard')}
+            >
+              <LayoutDashboard size={13} />
+              看板
+            </button>
+          </div>
         </div>
 
         <div className="bitlang-sidebar-filters">
@@ -385,7 +452,7 @@ export function BitlangTradeWorkspace({
             <input
               value={search}
               onChange={(event) => setSearch(event.target.value)}
-              placeholder="搜索交易对、序号或备注"
+              placeholder="搜索交易对、序号、备注或标签"
             />
           </label>
           <div className="review-filter-chips">
@@ -425,6 +492,20 @@ export function BitlangTradeWorkspace({
             >
               亏
             </button>
+            <button
+              type="button"
+              className={noNote ? 'active' : ''}
+              onClick={() => setNoNote((value) => !value)}
+            >
+              未备注
+            </button>
+            <button
+              type="button"
+              className={noTag ? 'active' : ''}
+              onClick={() => setNoTag((value) => !value)}
+            >
+              未打标
+            </button>
           </div>
           <div className="bitlang-filter-row">
             <select
@@ -440,10 +521,15 @@ export function BitlangTradeWorkspace({
               <option value="30d">近 30 天</option>
               <option value="90d">近 90 天</option>
             </select>
-            <select value={instrument} onChange={(event) => setInstrument(event.target.value)}>
+            <select
+              value={instrument}
+              onChange={(event) => setInstrument(event.target.value)}
+            >
               <option value="all">全部交易对</option>
               {instruments.map((item) => (
-                <option key={item} value={item}>{bybitSymbol(item)}</option>
+                <option key={item} value={item}>
+                  {bybitSymbol(item)}
+                </option>
               ))}
             </select>
           </div>
@@ -470,26 +556,42 @@ export function BitlangTradeWorkspace({
             {showMoreFilters ? '收起筛选' : '更多筛选'}
           </button>
           {showMoreFilters && (
-            <label className="bitlang-duration-filter">
-              <span>持仓时间</span>
-              <strong>大于</strong>
-              <input
-                type="number"
-                min="0"
-                step="1"
-                inputMode="numeric"
-                value={minimumHoldingMinutes}
-                onChange={(event) => {
-                  const value = event.target.value;
-                  setMinimumHoldingMinutes(
-                    value === '' ? '' : String(Math.max(0, Number(value)))
-                  );
-                }}
-                placeholder="0"
-                aria-label="最小持仓时间"
-              />
-              <span>分钟</span>
-            </label>
+            <>
+              <div className="bitlang-filter-row">
+                <select
+                  value={tagFilter}
+                  onChange={(event) => setTagFilter(event.target.value)}
+                >
+                  <option value="all">全部标签</option>
+                  {tags.map((tag) => (
+                    <option key={tag.id} value={String(tag.id)}>
+                      {tag.name}
+                    </option>
+                  ))}
+                </select>
+                <span />
+              </div>
+              <label className="bitlang-duration-filter">
+                <span>持仓时间</span>
+                <strong>大于</strong>
+                <input
+                  type="number"
+                  min="0"
+                  step="1"
+                  inputMode="numeric"
+                  value={minimumHoldingMinutes}
+                  onChange={(event) => {
+                    const value = event.target.value;
+                    setMinimumHoldingMinutes(
+                      value === '' ? '' : String(Math.max(0, Number(value)))
+                    );
+                  }}
+                  placeholder="0"
+                  aria-label="最小持仓时间"
+                />
+                <span>分钟</span>
+              </label>
+            </>
           )}
         </div>
 
@@ -514,6 +616,12 @@ export function BitlangTradeWorkspace({
               <strong>{formatNumber(stats.profitFactor, 2)}</strong>
             </div>
           )}
+          {stats.totalFee > 0 && (
+            <div className="bitlang-stat-item" title="交割单手续费合计">
+              <span>手续费</span>
+              <strong>-{formatNumber(stats.totalFee, 2)}</strong>
+            </div>
+          )}
           <div className="bitlang-stat-item">
             <span>均持仓</span>
             <strong>{formatHoldingMinutes(stats.avgHoldingMinutes)}</strong>
@@ -526,7 +634,7 @@ export function BitlangTradeWorkspace({
               type="button"
               key={trade.id}
               data-review-id={trade.id}
-              className={`bitlang-trade-row bitlang-trade-row-compact ${
+              className={`bitlang-trade-row posrev-trade-row ${
                 trade.id === selectedTrade?.id ? 'active' : ''
               }`}
               onClick={() => {
@@ -534,45 +642,85 @@ export function BitlangTradeWorkspace({
                 setFocusRevision((revision) => revision + 1);
               }}
             >
-              <div className="bitlang-row-top">
-                <span className="bitlang-row-main">
+              <div className="posrev-row-top">
+                <div className="posrev-row-sym">
                   <strong>{bybitSymbol(trade.instrument)}</strong>
-                  <em className={trade.direction === '多' ? 'profit' : 'loss'}>
+                  <span
+                    className={`posrev-side-badge ${
+                      trade.direction === '多' ? 'long' : 'short'
+                    }`}
+                  >
                     {trade.direction}
                     {` ${formatNumber(trade.leverage, 0)}x`}
-                  </em>
-                </span>
-                <span className={trade.profit >= 0 ? 'profit' : 'loss'}>
-                  {formatNumber(trade.profit)}
+                  </span>
+                </div>
+                <span className="posrev-row-time">
+                  {formatTradeTime(trade.entryTime).slice(5)}
                 </span>
               </div>
-              <div className="bitlang-row-bottom">
-                <span className="bitlang-row-time">
-                  {formatTime(trade.entryTime).slice(5)} · {formatHoldingMinutes(trade.holdingMinutes)}
-                </span>
-                <span className={trade.profit >= 0 ? 'profit' : 'loss'}>
-                  {formatPercent(trade.returnRate)}
-                </span>
+              <div className="posrev-row-bottom">
+                <div className="posrev-row-meta">
+                  <span className="posrev-duration" title="持仓时长">
+                    ⏱ {formatHoldingMinutes(trade.holdingMinutes)}
+                  </span>
+                  {trade.tagIds.length > 0 && (
+                    <div className="posrev-tag-pills">
+                      {trade.tagIds.slice(0, 2).map((tagId) => {
+                        const tag = tags.find((entry) => entry.id === tagId);
+                        if (!tag) return null;
+                        return (
+                          <span
+                            key={tag.id}
+                            className="posrev-tag-pill"
+                            style={{ borderColor: tag.color, color: tag.color }}
+                          >
+                            {tag.name}
+                          </span>
+                        );
+                      })}
+                      {trade.tagIds.length > 2 && (
+                        <span className="posrev-tag-pill-more">
+                          +{trade.tagIds.length - 2}
+                        </span>
+                      )}
+                    </div>
+                  )}
+                </div>
+                <div className="posrev-row-pnl">
+                  <strong className={trade.profit >= 0 ? 'profit' : 'loss'}>
+                    {trade.profit >= 0 ? '+' : ''}
+                    {formatNumber(trade.profit)}
+                  </strong>
+                  <span
+                    className={`posrev-roi ${
+                      trade.returnRate >= 0 ? 'profit' : 'loss'
+                    }`}
+                  >
+                    {formatPercent(trade.returnRate)}
+                  </span>
+                </div>
               </div>
             </button>
           ))}
         </div>
 
         <div className="bitlang-pagination">
-          <span>{safePage} / {pageCount}</span>
           <button
             type="button"
             disabled={safePage <= 1}
             onClick={() => setPage(safePage - 1)}
           >
-            <ChevronLeft size={15} />
+            <ChevronLeft size={14} />
           </button>
+          <span>
+            {safePage} / {pageCount}
+          </span>
           <button
             type="button"
             disabled={safePage >= pageCount}
             onClick={() => setPage(safePage + 1)}
           >
-            <ChevronRight size={15} />
+            <ChevronRight size={14} />
           </button>
         </div>
         <div className="bitlang-shortcut-hint">
@@ -580,505 +728,155 @@ export function BitlangTradeWorkspace({
         </div>
       </aside>
 
-      <section className="bitlang-chart-workspace">
-        {selectedTrade ? (
-          <>
-            <header className="bitlang-chart-header">
-              <div>
-                <h2>{bybitSymbol(selectedTrade.instrument)}</h2>
-                <p>
-                  {formatTime(selectedTrade.entryTime)} 到{' '}
-                  {formatTime(selectedTrade.exitTime)}
-                  {` · 持仓 ${formatHoldingMinutes(selectedTrade.holdingMinutes)}`}
-                </p>
-              </div>
-              <div className="bitlang-timeframes">
-                <button
-                  type="button"
-                  className={autoTimeframe ? 'active' : ''}
-                  onClick={() => {
-                    setAutoTimeframe(true);
-                    setFocusRevision((revision) => revision + 1);
-                  }}
-                  title="按持仓时长自动选择周期"
-                >
-                  自动
-                </button>
-                {TIMEFRAMES.map((item) => (
-                  <button
-                    type="button"
-                    key={item}
-                    className={item === effectiveTimeframe ? 'active' : ''}
-                    onClick={() => {
-                      if (!autoTimeframe && item === timeframe) return;
-                      applyManualTimeframe(item);
-                    }}
-                  >
-                    {timeframeLabel(item)}
-                  </button>
-                ))}
-                <button
-                  type="button"
-                  className={showUsSessionBands ? 'active' : ''}
-                  onClick={() => setShowUsSessionBands((value) => !value)}
-                  title="美股常规交易时段（纽约 09:30–16:00）"
-                >
-                  美盘
-                </button>
-                <button
-                  type="button"
-                  className={showWeekendBands ? 'active' : ''}
-                  onClick={() => setShowWeekendBands((value) => !value)}
-                  title="美盘周末"
-                >
-                  周末
-                </button>
-              </div>
-            </header>
+      {viewMode === 'dashboard' ? (
+        <section className="bitlang-chart-workspace posrev-dashboard-pane">
+          <BitlangDashboardWorkspace
+            themeMode={themeMode}
+            trades={annotatedTrades}
+            tags={tags}
+            snapshotEndMs={snapshotEndMs}
+            onNoteUpdated={(tradeId, note) => {
+              setAnnotatedTrades((current) =>
+                current.map((item) =>
+                  item.id === tradeId ? { ...item, note } : item
+                )
+              );
+            }}
+            onNavigateToTrade={openTradeOnChart}
+          />
+        </section>
+      ) : (
+        <section className="bitlang-chart-workspace posrev-chart-workspace">
+          {selectedTrade ? (
+            <>
+              <header className="bitlang-chart-header">
+                <div>
+                  <div className="posrev-chart-title">
+                    <h2>{bybitSymbol(selectedTrade.instrument)}</h2>
+                    <span
+                      className={`posrev-side-badge ${
+                        selectedTrade.direction === '多' ? 'long' : 'short'
+                      }`}
+                    >
+                      {selectedTrade.direction}
+                      {` ${formatNumber(selectedTrade.leverage, 0)}x`}
+                    </span>
+                    <strong
+                      className={`posrev-header-pnl ${
+                        selectedTrade.profit >= 0 ? 'profit' : 'loss'
+                      }`}
+                    >
+                      {selectedTrade.profit >= 0 ? '+' : ''}
+                      {formatNumber(selectedTrade.profit)} USDT
+                    </strong>
+                    <button
+                      type="button"
+                      className={`posrev-detail-toggle ${showDetails ? 'active' : ''}`}
+                      aria-expanded={showDetails}
+                      onClick={() => setShowDetails((value) => !value)}
+                    >
+                      <PanelRightOpen size={14} />
+                      复盘详情
+                    </button>
+                  </div>
+                  <p>
+                    {formatTradeTime(selectedTrade.entryTime)} 到{' '}
+                    {formatTradeTime(selectedTrade.exitTime)}
+                    {` · 持仓 ${formatHoldingMinutes(selectedTrade.holdingMinutes)}`}
+                  </p>
+                </div>
+                <div className="posrev-chart-header-actions">
+                  <div className="bitlang-timeframes">
+                    <button
+                      type="button"
+                      className={autoTimeframe ? 'active' : ''}
+                      onClick={() => {
+                        setAutoTimeframe(true);
+                        setFocusRevision((revision) => revision + 1);
+                      }}
+                      title="按持仓时长自动选择周期"
+                    >
+                      自动
+                    </button>
+                    {TIMEFRAMES.map((item) => (
+                      <button
+                        type="button"
+                        key={item}
+                        className={item === effectiveTimeframe ? 'active' : ''}
+                        onClick={() => {
+                          if (!autoTimeframe && item === timeframe) return;
+                          applyManualTimeframe(item);
+                        }}
+                      >
+                        {timeframeLabel(item)}
+                      </button>
+                    ))}
+                    <button
+                      type="button"
+                      className={showUsSessionBands ? 'active' : ''}
+                      onClick={() => setShowUsSessionBands((value) => !value)}
+                      title="美股常规交易时段（纽约 09:30–16:00）"
+                    >
+                      美盘
+                    </button>
+                    <button
+                      type="button"
+                      className={showWeekendBands ? 'active' : ''}
+                      onClick={() => setShowWeekendBands((value) => !value)}
+                      title="美盘周末"
+                    >
+                      周末
+                    </button>
+                  </div>
+                </div>
+              </header>
 
-            <BitlangTradeChart
-              key={`${bybitSymbol(selectedTrade.instrument)}:${effectiveTimeframe}`}
-              trade={selectedTrade}
-              timeframe={effectiveTimeframe}
-              themeMode={themeMode}
-              focusRevision={focusRevision}
-              showUsSessionBands={showUsSessionBands}
-              showWeekendBands={showWeekendBands}
-            />
+              <BitlangTradeChart
+                key={`${selectedTrade.id}:${bybitSymbol(selectedTrade.instrument)}:${effectiveTimeframe}`}
+                trade={selectedTrade}
+                timeframe={effectiveTimeframe}
+                themeMode={themeMode}
+                focusRevision={focusRevision}
+                showUsSessionBands={showUsSessionBands}
+                showWeekendBands={showWeekendBands}
+              />
 
-            <TradeMetrics trade={selectedTrade} />
-          </>
-        ) : (
-          <div className="bitlang-state">没有符合筛选条件的交易。</div>
-        )}
-      </section>
-    </div>
-  );
-}
-
-function BitlangTradeChart({
-  trade,
-  timeframe,
-  themeMode,
-  focusRevision,
-  showUsSessionBands,
-  showWeekendBands,
-}: {
-  trade: BitlangTrade;
-  timeframe: ReviewTimeframe;
-  themeMode: 'dark' | 'light';
-  focusRevision: number;
-  showUsSessionBands: boolean;
-  showWeekendBands: boolean;
-}) {
-  const [hoveredCandle, setHoveredCandle] = useState<Candlestick | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [isLoadingEarlier, setIsLoadingEarlier] = useState(false);
-  const [isLoadingLater, setIsLoadingLater] = useState(false);
-  const [loadedContextKey, setLoadedContextKey] = useState('');
-  const [error, setError] = useState<string | null>(null);
-  const [warning, setWarning] = useState<string | null>(null);
-  const [reloadToken, setReloadToken] = useState(0);
-  const failedEdgeRef = useRef<'main' | 'earlier' | 'later' | null>(null);
-  const earlierRequestRef = useRef<AbortController | null>(null);
-  const laterRequestRef = useRef<AbortController | null>(null);
-  const contextKeyRef = useRef('');
-  const entryTimeMs = Date.parse(trade.entryTime);
-  const exitTimeMs = Date.parse(trade.exitTime);
-  const symbol = bybitSymbol(trade.instrument);
-  const chartContextKey = `${symbol}:${timeframe}:${entryTimeMs}:${exitTimeMs}`;
-  const [candles, setCandles] = useState<Candlestick[]>(() => {
-    const window = boundedTradeWindowMs(entryTimeMs, exitTimeMs, timeframe);
-    const cached = sliceCachedCandleWindow(
-      'bitlang',
-      symbol,
-      timeframe,
-      window.fromMs,
-      window.toMs
-    );
-    return cached?.candles ?? [];
-  });
-  const {
-    ready: drawingReady,
-    activeTool,
-    setActiveTool,
-    magnetEnabled,
-    toggleMagnet,
-    drawings,
-    allDrawings,
-    hideAllDrawings,
-    toggleHideAllDrawings,
-    hiddenDrawingIds,
-    toggleHideDrawing,
-    deleteDrawingById,
-    toggleLockDrawing,
-    isObjectTreeOpen,
-    toggleObjectTree,
-    selectedDrawingId,
-    setSelectedDrawingId,
-    saveDrawingState,
-    deleteSelectedDrawing,
-    clearAllDrawings,
-    toggleLockSelected,
-    undo,
-    redo,
-  } = useDrawingWorkspace(symbol, timeframe, 'memory');
-  const selectedDrawing = drawings.find(
-    (drawing) => drawing.id === selectedDrawingId
-  );
-
-  useEffect(() => {
-    earlierRequestRef.current?.abort();
-    laterRequestRef.current?.abort();
-    earlierRequestRef.current = null;
-    laterRequestRef.current = null;
-    const controller = new AbortController();
-    contextKeyRef.current = chartContextKey;
-    setHoveredCandle(null);
-    setIsLoadingEarlier(false);
-    setIsLoadingLater(false);
-    setError(null);
-    setWarning(null);
-    failedEdgeRef.current = null;
-
-    const window = boundedTradeWindowMs(entryTimeMs, exitTimeMs, timeframe);
-    const cached = sliceCachedCandleWindow(
-      'bitlang',
-      symbol,
-      timeframe,
-      window.fromMs,
-      window.toMs
-    );
-    if (cached?.candles.length) {
-      setCandles(cached.candles);
-      setLoadedContextKey(chartContextKey);
-      setLoading(false);
-    } else {
-      setCandles([]);
-      setLoadedContextKey('');
-      setLoading(true);
-    }
-
-    fetchBitlangTradeCandles(
-      symbol,
-      timeframe,
-      entryTimeMs,
-      exitTimeMs,
-      controller.signal
-    )
-      .then((batch) => {
-        if (
-          controller.signal.aborted ||
-          contextKeyRef.current !== chartContextKey
-        ) {
-          return;
-        }
-        setCandles(batch.candles);
-        setLoadedContextKey(chartContextKey);
-        setWarning(batch.warning);
-        setError(!batch.candles.length ? 'Bybit 未返回该时间范围的 K 线' : null);
-      })
-      .catch((cause) => {
-        if (controller.signal.aborted) return;
-        failedEdgeRef.current = 'main';
-        setError(cause instanceof Error ? cause.message : 'K 线加载失败');
-      })
-      .finally(() => {
-        if (!controller.signal.aborted) setLoading(false);
-      });
-    return () => {
-      controller.abort();
-      earlierRequestRef.current?.abort();
-      laterRequestRef.current?.abort();
-    };
-  }, [chartContextKey, entryTimeMs, exitTimeMs, reloadToken, symbol, timeframe]);
-
-  const loadEarlier = useCallback(() => {
-    if (
-      loading ||
-      isLoadingEarlier ||
-      candles.length === 0 ||
-      earlierRequestRef.current
-    ) {
-      return;
-    }
-    const controller = new AbortController();
-    const requestContextKey = contextKeyRef.current;
-    earlierRequestRef.current = controller;
-    setIsLoadingEarlier(true);
-    void fetchBitlangEarlierCandles(
-      symbol,
-      timeframe,
-      candles[0].timestampMs,
-      500,
-      controller.signal
-    )
-      .then((batch) => {
-        if (
-          !controller.signal.aborted &&
-          contextKeyRef.current === requestContextKey
-        ) {
-          setCandles((current) => mergeCandles(current, batch.candles));
-          if (batch.warning) setWarning(batch.warning);
-          setError(null);
-          failedEdgeRef.current = null;
-        }
-      })
-      .catch((cause) => {
-        if (!controller.signal.aborted) {
-          failedEdgeRef.current = 'earlier';
-          setError(
-            cause instanceof Error ? cause.message : '加载更早 K 线失败'
-          );
-          console.warn('Bit浪浪更早 K 线加载失败:', cause);
-        }
-      })
-      .finally(() => {
-        if (earlierRequestRef.current === controller) {
-          earlierRequestRef.current = null;
-          setIsLoadingEarlier(false);
-        }
-      });
-  }, [candles, isLoadingEarlier, loading, symbol, timeframe]);
-
-  const loadLater = useCallback(() => {
-    if (
-      loading ||
-      isLoadingLater ||
-      candles.length === 0 ||
-      laterRequestRef.current
-    ) {
-      return;
-    }
-    const controller = new AbortController();
-    const requestContextKey = contextKeyRef.current;
-    laterRequestRef.current = controller;
-    setIsLoadingLater(true);
-    void fetchBitlangLaterCandles(
-      symbol,
-      timeframe,
-      candles[candles.length - 1].timestampMs,
-      500,
-      controller.signal
-    )
-      .then((batch) => {
-        if (
-          !controller.signal.aborted &&
-          contextKeyRef.current === requestContextKey
-        ) {
-          setCandles((current) => mergeCandles(current, batch.candles));
-          if (batch.warning) setWarning(batch.warning);
-          setError(null);
-          failedEdgeRef.current = null;
-        }
-      })
-      .catch((cause) => {
-        if (!controller.signal.aborted) {
-          failedEdgeRef.current = 'later';
-          setError(
-            cause instanceof Error ? cause.message : '加载更晚 K 线失败'
-          );
-          console.warn('Bit浪浪更晚 K 线加载失败:', cause);
-        }
-      })
-      .finally(() => {
-        if (laterRequestRef.current === controller) {
-          laterRequestRef.current = null;
-          setIsLoadingLater(false);
-        }
-      });
-  }, [candles, isLoadingLater, loading, symbol, timeframe]);
-
-  const retryLoad = useCallback(() => {
-    const kind = failedEdgeRef.current;
-    if (kind === 'earlier') {
-      loadEarlier();
-      return;
-    }
-    if (kind === 'later') {
-      loadLater();
-      return;
-    }
-    setReloadToken((value) => value + 1);
-  }, [loadEarlier, loadLater]);
-
-  const markers = useMemo(
-    () => buildTradeMarkers(trade, timeframe, candles),
-    [candles, timeframe, trade]
-  );
-
-  return (
-    <div className="bitlang-chart">
-      <DraggableDrawingToolbar
-        disabled={!drawingReady}
-        activeTool={activeTool}
-        magnetEnabled={magnetEnabled}
-        selectedDrawingId={selectedDrawingId}
-        selectedLocked={Boolean(selectedDrawing?.locked)}
-        hideAllDrawings={hideAllDrawings}
-        isObjectTreeOpen={isObjectTreeOpen}
-        onSelectTool={setActiveTool}
-        onToggleMagnet={toggleMagnet}
-        onToggleHideAllDrawings={toggleHideAllDrawings}
-        onToggleObjectTree={toggleObjectTree}
-        onUndo={undo}
-        onRedo={redo}
-        onToggleLock={toggleLockSelected}
-        onDeleteSelected={deleteSelectedDrawing}
-        onClearAll={clearAllDrawings}
-      />
-      {isObjectTreeOpen && (
-        <DrawingObjectTreePanel
-          drawings={allDrawings}
-          selectedDrawingId={selectedDrawingId}
-          hiddenDrawingIds={hiddenDrawingIds}
-          onSelectDrawing={setSelectedDrawingId}
-          onToggleHideDrawing={toggleHideDrawing}
-          onToggleLockDrawing={toggleLockDrawing}
-          onDeleteDrawing={deleteDrawingById}
-          onClearAllDrawings={clearAllDrawings}
-          onClose={toggleObjectTree}
-        />
-      )}
-      <ChartCanvas
-        candles={candles}
-        symbol={symbol}
-        interval={timeframe}
-        themeMode={themeMode}
-        systemMarkers={markers}
-        focusRangeMs={
-          loadedContextKey === chartContextKey
-            ? clipTradeFocusRange(entryTimeMs, exitTimeMs, candles, timeframe)
-            : null
-        }
-        focusRevision={focusRevision}
-        onCrosshairMove={setHoveredCandle}
-        onLoadEarlier={loadEarlier}
-        isLoadingEarlier={isLoadingEarlier}
-        onLoadLater={loadLater}
-        isLoadingLater={isLoadingLater}
-        drawings={drawings}
-        activeDrawingTool={drawingReady ? activeTool : 'select'}
-        selectedDrawingId={selectedDrawingId}
-        magnetEnabled={magnetEnabled}
-        drawingVideoId="__global__"
-        onSelectDrawing={setSelectedDrawingId}
-        onSaveDrawing={saveDrawingState}
-        onDeleteDrawing={deleteDrawingById}
-        onToggleLockDrawing={toggleLockDrawing}
-        onDrawingComplete={() => setActiveTool('select')}
-        showVolume
-        showUsSessionBands={showUsSessionBands}
-        showWeekendBands={showWeekendBands}
-      />
-      {hoveredCandle && (
-        <div className="bitlang-candle-readout">
-          <span>{formatChartTime(hoveredCandle.timestampMs, timeframe)}</span>
-          <span>开 {formatNumber(hoveredCandle.open, 4)}</span>
-          <span>高 {formatNumber(hoveredCandle.high, 4)}</span>
-          <span>低 {formatNumber(hoveredCandle.low, 4)}</span>
-          <span>收 {formatNumber(hoveredCandle.close, 4)}</span>
-          <span>量 {formatNumber(hoveredCandle.volume)}</span>
-        </div>
-      )}
-      {((loading && candles.length === 0) || error) && (
-        <div className={`bitlang-chart-status ${error ? 'error' : ''}`}>
-          {loading && candles.length === 0 && (
-            <RefreshCw size={17} className="spin" />
+              {showDetails && (
+                <aside className="posrev-detail-drawer" aria-label="交易复盘详情">
+                  <header className="posrev-detail-drawer-header">
+                    <div>
+                      <strong>复盘详情</strong>
+                      <span>{bybitSymbol(selectedTrade.instrument)}</span>
+                    </div>
+                    <button
+                      type="button"
+                      aria-label="关闭复盘详情"
+                      title="关闭"
+                      onClick={() => setShowDetails(false)}
+                    >
+                      <X size={16} />
+                    </button>
+                  </header>
+                  <div className="posrev-detail-drawer-body">
+                    <BitlangTradePanel
+                      key={selectedTrade.id}
+                      trade={selectedTrade}
+                      tags={tags}
+                      onChange={updateSelected}
+                      onTagsCreated={(tag) =>
+                        setTags((current) => [...current, tag])
+                      }
+                      onTagDeleted={handleTagDeleted}
+                    />
+                  </div>
+                </aside>
+              )}
+            </>
+          ) : (
+            <div className="bitlang-state">没有符合筛选条件的交易。</div>
           )}
-          <span>{error || `正在加载 ${symbol} K 线...`}</span>
-          {error && (
-            <button type="button" onClick={retryLoad}>
-              重试
-            </button>
-          )}
-        </div>
+        </section>
       )}
-      {warning && !error && (
-        <div className="bitlang-chart-status warning">{warning}</div>
-      )}
-      {loading && candles.length > 0 && (
-        <div className="bitlang-venue-badge bitlang-refreshing">更新中</div>
-      )}
-      {candles.length > 0 && !(loading && candles.length > 0) && (
-        <div className="bitlang-venue-badge">{candleVenueLabel('bybit')}</div>
-      )}
-    </div>
-  );
-}
-
-function buildTradeMarkers(
-  trade: BitlangTrade,
-  timeframe: ReviewTimeframe,
-  candles: Candlestick[]
-): SeriesMarker<UTCTimestamp>[] {
-  if (!candles.length) return [];
-  const interval = timeframeMs(timeframe);
-  const markerTime = (eventTimeMs: number) => {
-    const candle =
-      candles.find(
-        (item) =>
-          item.timestampMs <= eventTimeMs &&
-          item.timestampMs + interval > eventTimeMs
-      ) || candles.reduce((nearest, item) =>
-        Math.abs(item.timestampMs - eventTimeMs) <
-        Math.abs(nearest.timestampMs - eventTimeMs)
-          ? item
-          : nearest
-      );
-    return timestampMsToUtcTimestamp(candle.timestampMs);
-  };
-  return [
-    {
-      time: markerTime(Date.parse(trade.entryTime)),
-      position: 'belowBar',
-      color: trade.direction === '多' ? '#089981' : '#f23645',
-      shape: 'arrowUp',
-      text: `开 ${formatNumber(trade.entryPrice, 4)}`,
-    },
-    {
-      time: markerTime(Date.parse(trade.exitTime)),
-      position: 'aboveBar',
-      color: trade.profit >= 0 ? '#089981' : '#f23645',
-      shape: 'arrowDown',
-      text: `平 ${formatNumber(trade.exitPrice, 4)}`,
-    },
-  ];
-}
-
-function TradeMetrics({ trade }: { trade: BitlangTrade }) {
-  const metrics = [
-    ['方向', `${trade.direction} / ${formatNumber(trade.leverage, 0)}x`],
-    ['开仓', formatNumber(trade.entryPrice, 4)],
-    ['平仓', formatNumber(trade.exitPrice, 4)],
-    ['收益率', formatPercent(trade.returnRate)],
-    ['收益', `${formatNumber(trade.profit)} USDT`],
-    ['持仓', `${trade.holdingMinutes} 分钟`],
-  ];
-  return (
-    <div className="bitlang-review-panel">
-      <div className="bitlang-metrics">
-        {metrics.map(([label, value]) => (
-          <div key={label}>
-            <span>{label}</span>
-            <strong
-              className={
-                label === '收益' || label === '收益率'
-                  ? trade.profit >= 0
-                    ? 'profit'
-                    : 'loss'
-                  : ''
-              }
-            >
-              {value}
-            </strong>
-          </div>
-        ))}
-      </div>
-      <div className="bitlang-original-note">
-        <span>原始备注</span>
-        <p>{trade.sourceNote || '无备注'}</p>
-      </div>
     </div>
   );
 }

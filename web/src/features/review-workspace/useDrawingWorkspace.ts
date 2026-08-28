@@ -15,6 +15,13 @@ import {
   saveDrawing,
 } from '@/api/drawing-api';
 import {
+  deleteBitlangDrawing,
+  fetchBitlangDrawings,
+  replaceBitlangDrawings,
+  saveBitlangDrawing,
+  type BitlangDrawingScope,
+} from '@/api/bitlang-review-api';
+import {
   deletePositionDrawing,
   fetchPositionDrawings,
   replacePositionDrawings,
@@ -61,22 +68,29 @@ type DrawingWorkspace = {
 
 const DRAWING_SCOPE = '__global__';
 const MAX_HISTORY_ENTRIES = 100;
-type DrawingPersistence = 'server' | 'memory' | 'position';
+type DrawingPersistence = 'server' | 'memory' | 'position' | 'bitlang';
+type ExtraDrawingScope = PositionDrawingScope | BitlangDrawingScope;
 
 export function useDrawingWorkspace(
   symbol: string,
   timeframe: ReviewTimeframe,
   persistence: DrawingPersistence = 'server',
-  positionScope?: PositionDrawingScope
+  extraScope?: ExtraDrawingScope
 ): DrawingWorkspace {
-  const positionVenue = positionScope?.venue || '';
-  const positionId = positionScope?.positionId || '';
+  const positionVenue =
+    extraScope && 'venue' in extraScope ? extraScope.venue : '';
+  const positionId =
+    extraScope && 'positionId' in extraScope ? extraScope.positionId : '';
+  const bitlangTradeId =
+    extraScope && 'tradeId' in extraScope ? extraScope.tradeId : '';
   const drawingWorkspaceKey =
     persistence === 'memory'
       ? `${persistence}:${symbol}:${timeframe}`
       : persistence === 'position'
         ? `${persistence}:${positionVenue}:${positionId}:${symbol}`
-        : `${persistence}:${symbol}`;
+        : persistence === 'bitlang'
+          ? `${persistence}:${bitlangTradeId}:${symbol}`
+          : `${persistence}:${symbol}`;
   const [activeTool, setActiveTool] = useState<ActiveToolType>('select');
   const [magnetEnabled, setMagnetEnabled] = useState(false);
   const [drawings, setDrawings] = useState<DrawingToolState[]>([]);
@@ -100,8 +114,20 @@ export function useDrawingWorkspace(
   const historyOperationRef = useRef(false);
   const readyRef = useRef(ready);
   readyRef.current = ready;
-  const loadScopeRef = useRef({ symbol, timeframe, positionVenue, positionId });
-  loadScopeRef.current = { symbol, timeframe, positionVenue, positionId };
+  const loadScopeRef = useRef({
+    symbol,
+    timeframe,
+    positionVenue,
+    positionId,
+    bitlangTradeId,
+  });
+  loadScopeRef.current = {
+    symbol,
+    timeframe,
+    positionVenue,
+    positionId,
+    bitlangTradeId,
+  };
 
   const replaceLocalDrawings = useCallback(
     (nextDrawings: DrawingToolState[]) => {
@@ -156,12 +182,19 @@ export function useDrawingWorkspace(
             loadScope.timeframe,
             controller.signal
           )
-        : fetchDrawings(
-            DRAWING_SCOPE,
-            loadScope.symbol,
-            loadScope.timeframe,
-            controller.signal
-          );
+        : persistence === 'bitlang'
+          ? fetchBitlangDrawings(
+              { tradeId: loadScope.bitlangTradeId },
+              loadScope.symbol,
+              loadScope.timeframe,
+              controller.signal
+            )
+          : fetchDrawings(
+              DRAWING_SCOPE,
+              loadScope.symbol,
+              loadScope.timeframe,
+              controller.signal
+            );
     void request
       .then((persistedDrawings) => {
         if (
@@ -225,7 +258,12 @@ export function useDrawingWorkspace(
                   { venue: positionVenue, positionId },
                   serialized
                 )
-              : await saveDrawing(serialized);
+              : persistence === 'bitlang'
+                ? await saveBitlangDrawing(
+                    { tradeId: bitlangTradeId },
+                    serialized
+                  )
+                : await saveDrawing(serialized);
           if (
             workspaceRevisionRef.current !== workspaceRevision ||
             saveRevisionsRef.current[toolState.id] !== drawingSaveRevision
@@ -271,6 +309,7 @@ export function useDrawingWorkspace(
       }
     },
     [
+      bitlangTradeId,
       commitLocalChange,
       persistence,
       positionId,
@@ -314,6 +353,13 @@ export function useDrawingWorkspace(
           timeframe,
           selectedDrawingId
         );
+      } else if (persistence === 'bitlang') {
+        await deleteBitlangDrawing(
+          { tradeId: bitlangTradeId },
+          symbol,
+          timeframe,
+          selectedDrawingId
+        );
       } else {
         await deleteDrawing(
           selectedDrawingId,
@@ -338,6 +384,7 @@ export function useDrawingWorkspace(
       );
     }
   }, [
+    bitlangTradeId,
     commitLocalChange,
     persistence,
     positionId,
@@ -359,7 +406,9 @@ export function useDrawingWorkspace(
           ? `确认要清空当前 Symbol (${symbol}) 的所有临时画图吗？`
           : persistence === 'position'
             ? `确认要清空当前仓位 (${symbol}) 的所有画图记录吗？此操作无法撤销。`
-          : `确认要清空当前 Symbol (${symbol}) 的所有画图记录吗？此操作无法撤销。`,
+            : persistence === 'bitlang'
+              ? `确认要清空当前交易 (${symbol}) 的所有画图记录吗？此操作无法撤销。`
+              : `确认要清空当前 Symbol (${symbol}) 的所有画图记录吗？此操作无法撤销。`,
       confirmText: '确认清空',
       isDanger: true,
     });
@@ -384,6 +433,12 @@ export function useDrawingWorkspace(
           symbol,
           timeframe
         );
+      } else if (persistence === 'bitlang') {
+        await deleteBitlangDrawing(
+          { tradeId: bitlangTradeId },
+          symbol,
+          timeframe
+        );
       } else {
         await clearAllDrawingsForSymbol(DRAWING_SCOPE, symbol, timeframe);
       }
@@ -399,6 +454,7 @@ export function useDrawingWorkspace(
       );
     }
   }, [
+    bitlangTradeId,
     commitLocalChange,
     persistence,
     positionId,
@@ -443,6 +499,13 @@ export function useDrawingWorkspace(
             timeframe,
             targetId
           );
+        } else if (persistence === 'bitlang') {
+          await deleteBitlangDrawing(
+            { tradeId: bitlangTradeId },
+            symbol,
+            timeframe,
+            targetId
+          );
         } else {
           await deleteDrawing(
             targetId,
@@ -468,6 +531,7 @@ export function useDrawingWorkspace(
       }
     },
     [
+      bitlangTradeId,
       commitLocalChange,
       persistence,
       positionId,
@@ -579,12 +643,19 @@ export function useDrawingWorkspace(
               timeframe,
               serialized
             )
-          : await replaceDrawings(
-              DRAWING_SCOPE,
-              symbol,
-              timeframe,
-              serialized
-            );
+          : persistence === 'bitlang'
+            ? await replaceBitlangDrawings(
+                { tradeId: bitlangTradeId },
+                symbol,
+                timeframe,
+                serialized
+              )
+            : await replaceDrawings(
+                DRAWING_SCOPE,
+                symbol,
+                timeframe,
+                serialized
+              );
       if (workspaceRevisionRef.current !== workspaceRevision) return;
       setRedoStack((stack) =>
         [...stack, current].slice(-MAX_HISTORY_ENTRIES)
@@ -607,6 +678,7 @@ export function useDrawingWorkspace(
       }
     }
   }, [
+    bitlangTradeId,
     persistence,
     positionId,
     positionVenue,
@@ -651,12 +723,19 @@ export function useDrawingWorkspace(
               timeframe,
               serialized
             )
-          : await replaceDrawings(
-              DRAWING_SCOPE,
-              symbol,
-              timeframe,
-              serialized
-            );
+          : persistence === 'bitlang'
+            ? await replaceBitlangDrawings(
+                { tradeId: bitlangTradeId },
+                symbol,
+                timeframe,
+                serialized
+              )
+            : await replaceDrawings(
+                DRAWING_SCOPE,
+                symbol,
+                timeframe,
+                serialized
+              );
       if (workspaceRevisionRef.current !== workspaceRevision) return;
       setUndoStack((stack) =>
         [...stack, current].slice(-MAX_HISTORY_ENTRIES)
@@ -679,6 +758,7 @@ export function useDrawingWorkspace(
       }
     }
   }, [
+    bitlangTradeId,
     persistence,
     positionId,
     positionVenue,

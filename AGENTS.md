@@ -84,13 +84,11 @@ Python 后端是纯 API 服务。禁止恢复项目目录静态文件服务；�
 ### 3.4 画图
 
 - 画完一个图形后，工具必须自动回到选择指针。
-- **行情复盘**画图可以通过 `/api/chart/drawings` 持久化。
-- **Bit浪浪实盘分析**与**仓位复盘**画图必须使用内存模式：
-  - 当时可以新增、拖动、锁定、删除、清空、撤销和重做；
-  - 不读取或调用任何画图持久化接口；
-  - 刷新页面后消失；
-  - 切换 Symbol 或周期后清空对应临时画图。
-- 视频发布时间标记和交易/仓位开平仓标记属于 System Marker，禁止写入 `chart_drawings`。
+- **行情复盘**画图通过 `/api/chart/drawings` 持久化，写入 `chart_drawings`。
+- **仓位复盘**画图通过 `/api/position-review/drawings` 按 `(venue, position_id)` 持久化，写入 `position_drawings`；list **不按周期过滤**，切换 15m/1h 仍加载该仓位全部画线。
+- **Bit浪浪实盘分析**画图通过 `/api/bitlang-review/drawings` 按交割单 `trade_id` 持久化，写入 `bitlang_trade_drawings`；list **不按周期过滤**，切换周期仍加载该笔全部画线；切换交易后加载对应交易的画线。后端不要求交割单行存在于 SQLite。
+- 三套画图表禁止混写。前端封装分别走 `drawing-api.ts` / `position-review-api.ts` / `bitlang-review-api.ts`。
+- 视频发布时间标记和交易/仓位开平仓标记属于 System Marker，禁止写入任何 drawings 表。
 - 不要把 Bit浪浪交割单、仓位复盘同步仓位与模拟交易混为一类。
 
 ### 3.5 Bit浪浪交割单
@@ -100,6 +98,12 @@ Python 后端是纯 API 服务。禁止恢复项目目录静态文件服务；�
 - `BTC-USDT-SWAP` 等交割单名称只在适配层转换为 Bybit Symbol，例如 `BTCUSDT`。
 - 左侧筛选、排序和分页不能修改原始交易数组。
 - 持仓时间筛选口径是：`holdingMinutes` **严格大于**用户输入的分钟数。
+- 工作台内含 **K 线复盘**与**交割单看板**两个视图，不要再加第五个顶部入口。看板日记跳转到某笔交易时，应切回 K 线并定位该交易。
+- 可编辑备注与标签走独立 SQLite 表与 `/api/bitlang-review`，按交割单 `id`（导入时 sha256）持久化；**不得覆盖** JSON 里的 `sourceNote`，也不得写入 `position_notes` / `position_tags` / `position_tag_map`。
+- `GET /api/bitlang-review` 须在同一只读事务中组装 notes / tags / tagMap；后端不读取交割单 JSON。
+- 前端封装在 `web/src/api/bitlang-review-api.ts`，不要在组件内直接拼请求。
+- 画图按交割单 `id` 持久化到 `bitlang_trade_drawings`；刷新后仍在，切换周期保留，切换交易隔离。禁止写入 `chart_drawings` / `position_drawings`。
+- 看板时间窗按快照最晚开仓时间裁切，不要用 `Date.now()`。
 
 ### 3.6 仓位复盘（Bitget UTA）
 
@@ -115,7 +119,8 @@ Python 后端是纯 API 服务。禁止恢复项目目录静态文件服务；�
 - 前端仓位复盘 API 封装在 `web/src/api/position-review-api.ts`，不要在组件内直接拼私有账户请求。
 - 备注、标签、仓位-标签映射走 `/api/position-review/notes|tags|position-tags`；筛选与排序只作用于列表视图，不修改库内原始仓位行。
 - 领域对象需带 `venue`；图表 symbol 使用紧凑 USDT 形式（如 `BTCUSDT`、`INTCUSDT`）。
-- v1 不做 CSV 导入、AI 分析、画图持久化或多交易所一夜切换；扩展其他交易所前必须单独评估 CCXT 能力与鉴权差异。
+- 仓位画图走 `/api/position-review/drawings`，写入 `position_drawings`；禁止写入 `chart_drawings` / `bitlang_trade_drawings`。
+- v1 不做 CSV 导入、AI 分析或多交易所一夜切换；扩展其他交易所前必须单独评估 CCXT 能力与鉴权差异。
 
 ## 4. 数据安全
 
@@ -123,8 +128,11 @@ Python 后端是纯 API 服务。禁止恢复项目目录静态文件服务；�
 - 不批量修改历史 K 线、画图、学习状态、模拟交易或已同步仓位复盘数据。
 - 数据库变更必须先说明表结构、兼容方式、回滚方案和历史数据影响。
 - 仓位复盘相关新表（仅增量，不改既有 Bybit 行情表语义）：
-  - `exchange_positions`、`position_notes`、`position_tags`、`position_tag_map`、`position_fills`
+  - `exchange_positions`、`position_notes`、`position_tags`、`position_tag_map`、`position_fills`、`position_drawings`
   - `venue_market_candles`、`venue_market_cache_ranges`
+- bit浪浪本机备注/标签/画图相关新表（仅增量，不改交割单 JSON 与仓位复盘表语义）：
+  - `bitlang_trade_notes`、`bitlang_trade_tags`、`bitlang_trade_tag_map`、`bitlang_trade_drawings`
+  - 回滚：`DROP` 这四张表即可；交割单快照与仓位数据不受影响
 - 行情复盘 OI/CVD 相关新表（仅增量，不改既有 Bybit 行情表语义）：
   - `market_oi_15m`、`market_oi_15m_cache_ranges`
   - 旧表 `market_oi_1h`、`market_oi_1h_cache_ranges` 保留不删
@@ -138,7 +146,7 @@ Python 后端是纯 API 服务。禁止恢复项目目录静态文件服务；�
 
 - 保持最小变更，沿用现有目录、组件、API 封装和 CSS Token。
 - 不创建新的独立入口；导航统一由 `AppShell.tsx` 管理。
-- 公共 Bybit 行情请求走 `web/src/api/market-api.ts`；仓位复盘走 `web/src/api/position-review-api.ts`。不要在组件内散落新的行情或账户请求。
+- 公共 Bybit 行情请求走 `web/src/api/market-api.ts`；仓位复盘走 `web/src/api/position-review-api.ts`；bit浪浪备注/标签/画图走 `web/src/api/bitlang-review-api.ts`。不要在组件内散落新的行情或账户请求。
 - 不为一次修复引入大型框架或新的状态管理库。
 - 用户提示走全局 toast / 确认框（`web/src/ui/feedback/`）；确认框打开时给 `.app-shell` 加 `inert`。不要回退到原生 `alert` / `confirm`。
 - 不批量格式化无关文件。
@@ -161,14 +169,18 @@ Python 后端是纯 API 服务。禁止恢复项目目录静态文件服务；�
 | `web/src/chart/ChartCanvas.tsx` | K 线、成交量、视口、十字线和边界加载 |
 | `web/src/chart/chart-time.ts` | 毫秒/秒边界转换和北京时间格式化 |
 | `web/src/features/review-workspace/ChartWorkspace.tsx` | 行情与视频复盘组合 |
-| `web/src/features/review-workspace/useDrawingWorkspace.ts` | server/memory 两种画图模式 |
-| `web/src/features/bitlang/BitlangTradeWorkspace.tsx` | 交割单列表、筛选、交易定位和临时画图 |
+| `web/src/features/review-workspace/useDrawingWorkspace.ts` | server/memory/position/bitlang 四种画图模式 |
+| `web/src/features/bitlang/BitlangTradeWorkspace.tsx` | 交割单列表、筛选、K 线/看板切换和按交易持久化画图 |
+| `web/src/features/bitlang/BitlangTradeChart.tsx` | 交割单图表、复制图表、按交易持久化画图 |
+| `web/src/features/bitlang/BitlangTradePanel.tsx` | 复盘详情：概览、原始备注、本机笔记与标签 |
+| `web/src/features/bitlang/BitlangDashboardWorkspace.tsx` | 交割单看板；日记跳转须切回 K 线并定位交易 |
 | `web/src/features/position-review/PositionReviewWorkspace.tsx` | 仓位复盘编排：同步、筛选、K 线/看板切换 |
-| `web/src/features/position-review/PositionReviewChart.tsx` | 仓位图表、临时画图、来源与截断提示 |
+| `web/src/features/position-review/PositionReviewChart.tsx` | 仓位图表、按仓位持久化画图、来源与截断提示 |
 | `web/src/features/position-review/PositionReviewPanel.tsx` | 密钥、筛选、列表、备注标签 |
 | `web/src/features/position-dashboard/PositionDashboardWorkspace.tsx` | 账户看板；日记跳转须切回 K 线并定位仓位 |
 | `web/src/api/market-api.ts` | 公共 Bybit 行情请求 |
 | `web/src/api/position-review-api.ts` | 仓位复盘 API 封装 |
+| `web/src/api/bitlang-review-api.ts` | bit浪浪本机备注/标签/画图 API 封装 |
 | `web/src/api/candle-window-cache.ts` | 窗口 K 线分片 LRU |
 | `web/src/ui/feedback/GlobalConfirmDialog.tsx` | 全局确认框 |
 | `web/src/features/learning/LearningWorkspace.tsx` | 视频列表、筛选和学习状态 |
@@ -204,10 +216,10 @@ Python 后端是纯 API 服务。禁止恢复项目目录静态文件服务；�
 5. 缩放、拖动和左右延展不跳动。
 6. 十字线时间为北京时间完整格式。
 7. Bit浪浪点击交易后开平仓区间居中。
-8. Bit浪浪临时画图可用但刷新后消失。
+8. Bit浪浪画图可保存；刷新后仍在；切周期仍在；切交易后加载该笔画图。
 9. 行情复盘持久化画图仍可正常读取和保存。
 10. 仓位复盘：保存只读密钥后可同步列表；点击仓位后开平仓区间居中；切换周期后重新定位。
-11. 仓位复盘：备注与标签可保存；临时画图刷新后消失；主流合约 K 线来源显示 Bybit，Bybit 无合约时应回退 Bitget。
+11. 仓位复盘：备注与标签可保存；画图按仓位持久化，刷新后仍在，切周期仍在；主流合约 K 线来源显示 Bybit，Bybit 无合约时应回退 Bitget。
 12. GET `/api/position-review` 与相关接口响应中不得出现明文 API Key/Secret/Passphrase。
 13. 控制台没有未处理异常，接口错误能显示可理解的信息。
 14. 行情复盘「OI / CVD」开关默认关闭；打开后为独立副图；CVD 来自 BTCUSDT 15m 涨跌成交量近似，OI 为 BTCUSDT 15m；更细周期阶梯对齐，更粗周期取桶末；拖图不触发下载。
@@ -216,3 +228,5 @@ Python 后端是纯 API 服务。禁止恢复项目目录静态文件服务；�
 17. 同步进行中再次同步显示冲突（409），页面不被打挂。
 18. 密钥面板「审计 Bitget 回退缓存」只读、不改库。
 19. 全局确认框打开时后台不可操作。
+20. bit浪浪：点击交易后开平仓区间居中；复盘详情抽屉可开关；复制图表可用；画图按交易持久化，刷新后仍在。
+21. bit浪浪：本机备注/标签可保存且不覆盖交割单原始备注；看板可进入；日记跳转切回 K 线并居中。
