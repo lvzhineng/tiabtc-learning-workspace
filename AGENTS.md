@@ -53,6 +53,7 @@ Python 后端是纯 API 服务。禁止恢复项目目录静态文件服务；�
   - 优先 Bybit（走现有 `market_candles` / `market_cache_ranges`）；
   - 仅当 Bybit 目录中不存在该 USDT 永续 symbol 时，才回退 Bitget；
   - Bitget 回退 K 线写入独立表 `venue_market_candles` / `venue_market_cache_ranges`，禁止与 Bybit 缓存混写。
+- 单次 K 线响应上限约 **3000** 根（`MAX_CANDLES_PER_RESPONSE`）。过长仓位/交易窗口截在开仓附近，响应带 `truncated`；前端窗口缓存走 `web/src/api/candle-window-cache.ts` 分片 LRU。不要为了「一次看完全程」去掉该上限。
 - SQLite 是本地行情缓存，不是独立行情源。
 - 请求时应优先读取 SQLite，只下载缺失区间，并合并相邻缓存范围。
 - 支持周期：`1`、`5`、`15`、`60`、`240`、`D`、`W`。
@@ -107,6 +108,9 @@ Python 后端是纯 API 服务。禁止恢复项目目录静态文件服务；�
 - 仅支持 **Bitget UTA** 只读同步；CCXT 调用必须带 `uta=True`。不要实现下单、改单、撤单或任何交易写接口。
 - 密钥经 Fernet 加密后写入 `app_settings`；对称密钥文件为 `.run/credential-key`。GET 接口只返回 `configured: true/false`，**永不回传明文密钥**。
 - 同步为手动触发（`POST /api/position-review/sync`），默认拉取约 90 天已平仓 + 当前持仓；不要改成后台轮询或自动实盘跟单。
+- 并发同步：已有同步进行中时再次 `POST /api/position-review/sync` 返回 **409**，前端提示稍后再试；不要改成排队自动重试或后台轮询。
+- `GET /api/position-review` 须在同一只读事务中组装 positions / tags / fills / balance / `configured`。
+- `GET /api/position-review/cache-audit` 只读对照 `venue_market_cache_ranges` 与实际 K 线连续性；禁止自动改写缓存范围。
 - 仓位按 `(venue, position_id)` upsert；备注与标签不因同步被覆盖。开仓合成 ID 在平仓后若能按 symbol/side/开仓时间匹配，应迁移备注/标签到交易所 `positionId`。
 - 前端仓位复盘 API 封装在 `web/src/api/position-review-api.ts`，不要在组件内直接拼私有账户请求。
 - 备注、标签、仓位-标签映射走 `/api/position-review/notes|tags|position-tags`；筛选与排序只作用于列表视图，不修改库内原始仓位行。
@@ -136,6 +140,7 @@ Python 后端是纯 API 服务。禁止恢复项目目录静态文件服务；�
 - 不创建新的独立入口；导航统一由 `AppShell.tsx` 管理。
 - 公共 Bybit 行情请求走 `web/src/api/market-api.ts`；仓位复盘走 `web/src/api/position-review-api.ts`。不要在组件内散落新的行情或账户请求。
 - 不为一次修复引入大型框架或新的状态管理库。
+- 用户提示走全局 toast / 确认框（`web/src/ui/feedback/`）；确认框打开时给 `.app-shell` 加 `inert`。不要回退到原生 `alert` / `confirm`。
 - 不批量格式化无关文件。
 - 性能优化应优先考虑：
   - 避免重复网络请求和 JSON 解析；
@@ -158,8 +163,14 @@ Python 后端是纯 API 服务。禁止恢复项目目录静态文件服务；�
 | `web/src/features/review-workspace/ChartWorkspace.tsx` | 行情与视频复盘组合 |
 | `web/src/features/review-workspace/useDrawingWorkspace.ts` | server/memory 两种画图模式 |
 | `web/src/features/bitlang/BitlangTradeWorkspace.tsx` | 交割单列表、筛选、交易定位和临时画图 |
-| `web/src/features/position-review/PositionReviewWorkspace.tsx` | 仓位同步、筛选、备注标签、图表定位和临时画图 |
+| `web/src/features/position-review/PositionReviewWorkspace.tsx` | 仓位复盘编排：同步、筛选、K 线/看板切换 |
+| `web/src/features/position-review/PositionReviewChart.tsx` | 仓位图表、临时画图、来源与截断提示 |
+| `web/src/features/position-review/PositionReviewPanel.tsx` | 密钥、筛选、列表、备注标签 |
+| `web/src/features/position-dashboard/PositionDashboardWorkspace.tsx` | 账户看板；日记跳转须切回 K 线并定位仓位 |
+| `web/src/api/market-api.ts` | 公共 Bybit 行情请求 |
 | `web/src/api/position-review-api.ts` | 仓位复盘 API 封装 |
+| `web/src/api/candle-window-cache.ts` | 窗口 K 线分片 LRU |
+| `web/src/ui/feedback/GlobalConfirmDialog.tsx` | 全局确认框 |
 | `web/src/features/learning/LearningWorkspace.tsx` | 视频列表、筛选和学习状态 |
 
 ## 7. 工作流程
@@ -200,3 +211,8 @@ Python 后端是纯 API 服务。禁止恢复项目目录静态文件服务；�
 12. GET `/api/position-review` 与相关接口响应中不得出现明文 API Key/Secret/Passphrase。
 13. 控制台没有未处理异常，接口错误能显示可理解的信息。
 14. 行情复盘「OI / CVD」开关默认关闭；打开后为独立副图；CVD 来自 BTCUSDT 15m 涨跌成交量近似，OI 为 BTCUSDT 15m；更细周期阶梯对齐，更粗周期取桶末；拖图不触发下载。
+15. 仓位复盘账户看板可进入；日记跳转切回 K 线并居中。
+16. 过长 1m 仓位出现截断提示，不一次拉全历史。
+17. 同步进行中再次同步显示冲突（409），页面不被打挂。
+18. 密钥面板「审计 Bitget 回退缓存」只读、不改库。
+19. 全局确认框打开时后台不可操作。

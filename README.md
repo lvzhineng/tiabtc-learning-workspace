@@ -1,8 +1,8 @@
 # TiaBTC Learning Workspace
 
-一个本地运行的交易学习、行情复盘和实盘交割单分析工作台。
+一个本地运行的交易学习、行情复盘、实盘交割单分析和仓位复盘工作台。
 
-项目将原有学习页面、行情复盘和 Bit浪浪交割单分析整合为一个 React 应用，行情统一通过 CCXT 获取 Bybit USDT 永续合约数据，并使用 SQLite 做本地缓存。
+项目将顺序学习、行情复盘、Bit浪浪交割单分析和仓位复盘整合为一个 React 应用。行情复盘 / Bit浪浪 / 顺序学习进复盘的 K 线通过 CCXT 获取 Bybit USDT 永续合约数据；仓位复盘优先使用同一套 Bybit 缓存，仅当 Bybit 目录中没有该合约时才回退 Bitget。本地使用 SQLite 做行情与仓位缓存。
 
 ## 功能
 
@@ -21,6 +21,7 @@
 - 支持多种画图工具、撤销、重做、锁定和磁吸。
 - 支持持久化画图和模拟交易。
 - 图表向左右边界移动时自动延展历史行情。
+- 可选打开 OI / CVD 独立副图（默认关闭）。OI 为 BTCUSDT 15 分钟持仓量；CVD 由 15 分钟 K 线涨跌成交量近似，不是逐笔 taker CVD。
 
 ### bit浪浪实盘分析
 
@@ -30,13 +31,21 @@
 - 点击交易或切换周期后，交易区间自动回到图表中央。
 - 可以临时画图，但不会写入数据库；刷新页面后自动清空。
 
+### 仓位复盘
+
+- 使用本机保存的 Bitget UTA **只读**密钥，手动同步约 90 天已平仓与当前持仓。
+- 左侧筛选仓位列表，右侧显示对应 K 线、开平仓标记；支持备注与标签。
+- 内含 **K 线复盘**与**账户看板**两个视图；看板日记可跳回对应仓位并居中。
+- 可以临时画图，刷新页面后消失；不写入画图持久化接口。
+- API Key / Secret / Passphrase 经本机加密后保存。接口只返回是否已配置，**永不回传明文密钥**。
+
 ## 环境要求
 
 - Windows 10/11
 - Python 3.10 或更高版本
 - Node.js 20 LTS（推荐）
 - npm
-- 能够访问 Bybit；如系统配置了 `HTTP_PROXY` 或 `HTTPS_PROXY`，CCXT 会自动使用
+- 能够访问 Bybit；仓位复盘还需能访问 Bitget。如系统配置了 `HTTP_PROXY` 或 `HTTPS_PROXY`，CCXT 会自动使用
 
 ## 一键启动
 
@@ -49,7 +58,7 @@ start-workspace.cmd
 首次启动会自动：
 
 1. 检查 Python 和 npm。
-2. 安装 `requirements.txt` 中的 CCXT。
+2. 安装 `requirements.txt` 中的 CCXT 与 cryptography。
 3. 在缺少 `web/node_modules` 时执行 `npm install`。
 4. 启动 Python API 服务。
 5. 启动 Vite 前端。
@@ -65,6 +74,8 @@ start-workspace.cmd
 .\start-workspace.ps1 -Page learning
 .\start-workspace.ps1 -Page review
 .\start-workspace.ps1 -Page bitlang
+.\start-workspace.ps1 -Page positions
+.\start-workspace.ps1 -Page dashboard
 ```
 
 不自动打开浏览器：
@@ -80,6 +91,8 @@ start-workspace.cmd
 | 顺序学习 | `http://127.0.0.1:3000/` |
 | 行情复盘 | `http://127.0.0.1:3000/?tab=review` |
 | bit浪浪实盘分析 | `http://127.0.0.1:3000/?tab=bitlang` |
+| 仓位复盘 | `http://127.0.0.1:3000/?tab=positions` |
+| 账户看板 | `http://127.0.0.1:3000/?tab=positions&view=dashboard` |
 | 后端健康检查 | `http://127.0.0.1:8765/api/health` |
 
 ## 数据流
@@ -89,17 +102,19 @@ React/Vite
    └─ /api 请求
       └─ Python API
          ├─ 优先读取 tiabtc-review.sqlite
-         └─ 缺少 K 线时通过 CCXT 请求 Bybit
-            └─ 写入 SQLite 缓存供后续复用
+         ├─ 缺 K 线时通过 CCXT 请求 Bybit（主源，写入 market_candles）
+         └─ 仓位复盘：Bybit 目录没有该合约时，才回退 Bitget
+            └─ 写入独立表 venue_market_candles，不与 Bybit 缓存混写
 ```
 
-行情复盘与 Bit浪浪分析共用同一套 Bybit K 线缓存。两个页面的展示窗口和业务标记不同，但相同 Symbol、周期和时间对应的行情数据来自同一张 `market_candles` 表。
+行情复盘、Bit浪浪与顺序学习进复盘共用同一套 Bybit K 线缓存（`market_candles`）。仓位复盘优先走这套缓存，仅当 Bybit 目录中没有该合约时才回退 Bitget。各入口的展示窗口和业务标记不同，但相同 Symbol、周期和时间对应的 Bybit 行情来自同一张表。
 
 ## 主要数据文件
 
 | 文件 | 用途 | 是否可直接删除 |
 | --- | --- | --- |
-| `tiabtc-review.sqlite` | K 线缓存、画图、模拟交易和配置 | 否 |
+| `tiabtc-review.sqlite` | K 线缓存、画图、模拟交易、仓位复盘，以及加密后的交易所密钥 | 否 |
+| `.run/credential-key` | 本机 Fernet 对称密钥，用于加密 Bitget 只读密钥；已 gitignore | 否，且勿提交 |
 | `learning-state.json` | 视频学习状态 | 否 |
 | `web/public/videos.json` | 浏览器读取的视频列表快照 | 可重新生成 |
 | `web/public/bitlang-trades.json` | 浏览器读取的交割单快照 | 可从原始 Excel 重新生成 |
@@ -203,7 +218,14 @@ npm run dev -- --host 127.0.0.1 --port 3000
 ### 画图弹出保存失败
 
 - 行情复盘画图会写入数据库，应检查后端日志和 Symbol 配置。
-- Bit浪浪画图是纯临时模式，不应发出保存请求；刷新页面后临时画图会消失。
+- Bit浪浪与仓位复盘画图是纯临时模式，不应发出保存请求；刷新页面后临时画图会消失。
+
+### 仓位复盘同步失败或提示冲突
+
+- GET `/api/position-review` 只返回 `configured: true/false`，看不到明文密钥是正常的。
+- 同步进行中再次点击会返回 409，稍后再试即可；不要改成后台轮询。
+- 确认密钥是 Bitget UTA **只读**权限，并查看 `.run/backend.err.log`。
+- `.run/credential-key` 与加密后的密钥只存在本机，不要提交到 Git。
 
 ### 端口被占用
 
@@ -218,7 +240,8 @@ npm run dev -- --host 127.0.0.1 --port 3000
 
 - 前端：React 18、TypeScript、Vite、Lightweight Charts 4。
 - 后端：Python 标准库 HTTP Server、SQLite。
-- 在线行情：CCXT / Bybit USDT Perpetual。
+- 在线行情：CCXT / Bybit USDT Perpetual（主源）；仓位复盘私有账户与回退 K 线：CCXT / Bitget UTA（`uta=True`）。
+- 本地加密：`cryptography`（Fernet）；密钥材料只存 `.run/` 与 SQLite，不入库。
 - 时间：内部 Unix 毫秒，界面按 `Asia/Shanghai` 显示。
 - 主题：支持亮色和暗色，本地记忆用户选择。
 
