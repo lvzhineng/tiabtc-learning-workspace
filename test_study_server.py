@@ -849,13 +849,18 @@ class PositionReviewStorageTests(unittest.TestCase):
         with study_server.DATABASE_LOCK, study_server.database() as connection:
             study_server._delete_unannotated_stale_open_positions(connection, set())
             remaining = {
-                row["position_id"]
+                row["position_id"]: row["status"]
                 for row in connection.execute(
-                    "SELECT position_id FROM exchange_positions"
+                    "SELECT position_id, status FROM exchange_positions"
                 ).fetchall()
             }
         self.assertIn("open-with-drawing", remaining)
+        self.assertEqual(remaining["open-with-drawing"], "stale")
         self.assertNotIn("open-without-annotation", remaining)
+        visible_ids = {
+            item["positionId"] for item in study_server.list_position_review()
+        }
+        self.assertNotIn("open-with-drawing", visible_ids)
 
     def test_upsert_keeps_leverage_when_closed_history_omits_it(self):
         with study_server.DATABASE_LOCK, study_server.database() as connection:
@@ -945,6 +950,70 @@ class PositionReviewStorageTests(unittest.TestCase):
             "bitget", "eth-closed-1", "ETHUSDT", "60"
         )
         self.assertEqual([item["id"] for item in drawings], ["drawing-1"])
+
+    def test_migrate_preserves_annotations_when_closed_match_is_ambiguous(self):
+        open_position = {
+            "venue": "bitget",
+            "positionId": "open:BTCUSDT:long:10000",
+            "unifiedSymbol": "BTC/USDT:USDT",
+            "chartSymbol": "BTCUSDT",
+            "side": "long",
+            "status": "open",
+            "entryPrice": 100.0,
+            "exitPrice": None,
+            "contracts": 1.0,
+            "leverage": 5.0,
+            "marginMode": "crossed",
+            "hedged": False,
+            "realizedPnl": None,
+            "netPnl": None,
+            "funding": None,
+            "openFee": 0.1,
+            "closeFee": None,
+            "entryTimeMs": 10_000,
+            "exitTimeMs": None,
+        }
+        closed_positions = [
+            {
+                **open_position,
+                "positionId": "closed-a",
+                "status": "closed",
+                "entryTimeMs": 9_500,
+                "exitTimeMs": 20_000,
+            },
+            {
+                **open_position,
+                "positionId": "closed-b",
+                "status": "closed",
+                "entryTimeMs": 10_500,
+                "exitTimeMs": 30_000,
+            },
+        ]
+        with study_server.DATABASE_LOCK, study_server.database() as connection:
+            study_server._upsert_exchange_position(
+                connection, open_position, "2026-08-28T12:00:00+08:00"
+            )
+            connection.execute(
+                """INSERT INTO position_notes (venue, position_id, note, updated_at)
+                   VALUES (?, ?, ?, ?)""",
+                ("bitget", open_position["positionId"], "保留我", "2026-08-28"),
+            )
+            migrated = study_server._migrate_open_annotations(
+                connection, closed_positions[0], closed_positions
+            )
+            source_note = connection.execute(
+                """SELECT note FROM position_notes
+                   WHERE venue = ? AND position_id = ?""",
+                ("bitget", open_position["positionId"]),
+            ).fetchone()
+            target_note = connection.execute(
+                """SELECT note FROM position_notes
+                   WHERE venue = ? AND position_id = ?""",
+                ("bitget", closed_positions[0]["positionId"]),
+            ).fetchone()
+        self.assertFalse(migrated)
+        self.assertEqual(source_note["note"], "保留我")
+        self.assertIsNone(target_note)
 
     def test_assign_fills_open_reduce_close(self):
         positions = [
@@ -1133,6 +1202,10 @@ class PositionReviewStorageTests(unittest.TestCase):
         kinds_by_exec = {item["execId"]: item["kind"] for item in assigned}
         self.assertEqual(kinds_by_exec["close-a-1"], "close")
         self.assertEqual(kinds_by_exec["close-b"], "reduce")
+        self.assertEqual(
+            [(item["execId"], item["timeMs"]) for item in assigned],
+            [("open", 1_000), ("close-b", 5_000), ("close-a-1", 6_000)],
+        )
 
     def test_assign_fills_does_not_cross_adjacent_positions(self):
         positions = [
@@ -1165,6 +1238,16 @@ class PositionReviewStorageTests(unittest.TestCase):
                 "pnl": 0.0,
             },
             {
+                "execId": "a-close",
+                "chartSymbol": "BTCUSDT",
+                "side": "sell",
+                "tradeSide": "close",
+                "timeMs": 5_000,
+                "price": 120.0,
+                "quantity": 1.0,
+                "pnl": 20.0,
+            },
+            {
                 "execId": "b-open",
                 "chartSymbol": "BTCUSDT",
                 "side": "buy",
@@ -1186,7 +1269,13 @@ class PositionReviewStorageTests(unittest.TestCase):
             },
         ]
         assigned = study_server.assign_fills_to_positions(positions, fills)
-        self.assertEqual([item["execId"] for item in assigned["first"]], ["a-open"])
+        self.assertEqual(
+            [item["execId"] for item in assigned["first"]],
+            ["a-open", "a-close"],
+        )
+        self.assertEqual(
+            [item["kind"] for item in assigned["first"]], ["open", "close"]
+        )
         self.assertEqual(
             [item["execId"] for item in assigned["second"]],
             ["b-open", "b-close"],

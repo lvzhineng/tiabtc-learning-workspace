@@ -63,11 +63,12 @@ export function BitlangJournalStream({
   };
 
   const handleSave = async (trade: AnnotatedBitlangTrade) => {
+    const noteToSave = draftNote;
     setSaving(true);
     try {
-      await saveBitlangNote({ tradeId: trade.id, note: draftNote });
-      onNoteUpdated?.(trade.id, draftNote);
-      setEditingId(null);
+      await saveBitlangNote({ tradeId: trade.id, note: noteToSave });
+      onNoteUpdated?.(trade.id, noteToSave);
+      setEditingId((currentId) => (currentId === trade.id ? null : currentId));
       toast.success('复盘笔记已保存');
     } catch (err) {
       toast.error(err instanceof Error ? err.message : '保存笔记失败');

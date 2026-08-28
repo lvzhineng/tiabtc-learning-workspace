@@ -108,6 +108,7 @@ export function useDrawingWorkspace(
   const ready = hydratedWorkspaceKey === drawingWorkspaceKey;
 
   const drawingsRef = useRef<DrawingToolState[]>([]);
+  const confirmedDrawingsRef = useRef<DrawingToolState[]>([]);
   const saveChainsRef = useRef<Record<string, Promise<void>>>({});
   const saveRevisionsRef = useRef<Record<string, number>>({});
   const workspaceRevisionRef = useRef(0);
@@ -162,6 +163,7 @@ export function useDrawingWorkspace(
     setRedoStack([]);
     saveChainsRef.current = {};
     saveRevisionsRef.current = {};
+    confirmedDrawingsRef.current = [];
     historyOperationRef.current = false;
     if (persistence === 'memory') {
       setHydratedWorkspaceKey(drawingWorkspaceKey);
@@ -203,19 +205,18 @@ export function useDrawingWorkspace(
         ) {
           return;
         }
-        replaceLocalDrawings(persistedDrawings.map(deserializeDrawing));
+        const loadedDrawings = persistedDrawings.map(deserializeDrawing);
+        confirmedDrawingsRef.current = loadedDrawings;
+        replaceLocalDrawings(loadedDrawings);
+        setHydratedWorkspaceKey(drawingWorkspaceKey);
       })
       .catch((requestError) => {
-        if (!controller.signal.aborted) {
-          console.warn('拉取画图持久化记录失败:', requestError);
-        }
-      })
-      .finally(() => {
         if (
           !controller.signal.aborted &&
           workspaceRevisionRef.current === workspaceRevision
         ) {
-          setHydratedWorkspaceKey(drawingWorkspaceKey);
+          console.warn('拉取画图持久化记录失败:', requestError);
+          toast.error('加载画图失败，已暂停画图编辑；请刷新页面后重试');
         }
       });
     return () => {
@@ -264,13 +265,23 @@ export function useDrawingWorkspace(
                     serialized
                   )
                 : await saveDrawing(serialized);
+          if (workspaceRevisionRef.current !== workspaceRevision) {
+            return;
+          }
+          const normalized = deserializeDrawing(saved);
+          const confirmed = confirmedDrawingsRef.current;
+          confirmedDrawingsRef.current = confirmed.some(
+            (drawing) => drawing.id === toolState.id
+          )
+            ? confirmed.map((drawing) =>
+                drawing.id === toolState.id ? normalized : drawing
+              )
+            : [...confirmed, normalized];
           if (
-            workspaceRevisionRef.current !== workspaceRevision ||
             saveRevisionsRef.current[toolState.id] !== drawingSaveRevision
           ) {
             return;
           }
-          const normalized = deserializeDrawing(saved);
           const current = drawingsRef.current;
           replaceLocalDrawings(
             current.map((drawing) =>
@@ -287,13 +298,18 @@ export function useDrawingWorkspace(
           saveRevisionsRef.current[toolState.id] === drawingSaveRevision
         ) {
           const current = drawingsRef.current;
+          const confirmedDrawing = confirmedDrawingsRef.current.find(
+            (drawing) => drawing.id === toolState.id
+          );
           replaceLocalDrawings(
-            previousDrawing
+            confirmedDrawing
               ? current.map((drawing) =>
-                  drawing.id === toolState.id ? previousDrawing : drawing
+                  drawing.id === toolState.id ? confirmedDrawing : drawing
                 )
               : current.filter((drawing) => drawing.id !== toolState.id)
           );
+          setUndoStack([]);
+          setRedoStack([]);
         }
         toast.error(
           `保存画图记录失败: ${
@@ -369,6 +385,9 @@ export function useDrawingWorkspace(
         );
       }
       if (workspaceRevisionRef.current !== workspaceRevision) return;
+      confirmedDrawingsRef.current = confirmedDrawingsRef.current.filter(
+        (drawing) => drawing.id !== selectedDrawingId
+      );
       const current = drawingsRef.current;
       commitLocalChange(
         current.filter((drawing) => drawing.id !== selectedDrawingId),
@@ -443,6 +462,7 @@ export function useDrawingWorkspace(
         await clearAllDrawingsForSymbol(DRAWING_SCOPE, symbol, timeframe);
       }
       if (workspaceRevisionRef.current !== workspaceRevision) return;
+      confirmedDrawingsRef.current = [];
       commitLocalChange([], drawingsRef.current);
       setSelectedDrawingId(null);
       toast.success('已清空所有画图记录');
@@ -515,6 +535,9 @@ export function useDrawingWorkspace(
           );
         }
         if (workspaceRevisionRef.current !== workspaceRevision) return;
+        confirmedDrawingsRef.current = confirmedDrawingsRef.current.filter(
+          (drawing) => drawing.id !== targetId
+        );
         const current = drawingsRef.current;
         commitLocalChange(
           current.filter((drawing) => drawing.id !== targetId),
@@ -662,6 +685,7 @@ export function useDrawingWorkspace(
       );
       setUndoStack((stack) => stack.slice(0, -1));
       const restored = saved.map(deserializeDrawing);
+      confirmedDrawingsRef.current = restored;
       replaceLocalDrawings(restored);
       reconcileSelection(restored);
     } catch (undoError) {
@@ -742,6 +766,7 @@ export function useDrawingWorkspace(
       );
       setRedoStack((stack) => stack.slice(0, -1));
       const restored = saved.map(deserializeDrawing);
+      confirmedDrawingsRef.current = restored;
       replaceLocalDrawings(restored);
       reconcileSelection(restored);
     } catch (redoError) {

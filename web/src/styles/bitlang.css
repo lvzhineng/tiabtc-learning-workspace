@@ -19,6 +19,20 @@
   color: var(--text-secondary);
 }
 
+.bitlang-state-action {
+  border: 1px solid var(--border-color);
+  border-radius: 6px;
+  padding: 5px 10px;
+  color: var(--text-primary);
+  background: var(--bg-dark-700);
+  cursor: pointer;
+}
+
+.bitlang-state-action:hover {
+  border-color: var(--accent-blue);
+  color: var(--accent-blue);
+}
+
 .bitlang-sidebar {
   min-height: 0;
   display: flex;

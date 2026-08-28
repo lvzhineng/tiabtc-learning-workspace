@@ -2387,10 +2387,10 @@ def _upsert_exchange_position(connection, position, synced_at):
     )
 
 
-def _migrate_open_annotations(connection, closed_position):
+def _migrate_open_annotations(connection, closed_position, closed_positions=None):
     rows = connection.execute(
-        """SELECT position_id, leverage FROM exchange_positions
-           WHERE venue = ? AND status = 'open' AND chart_symbol = ? AND side = ?
+        """SELECT position_id, leverage, entry_time_ms FROM exchange_positions
+           WHERE venue = ? AND status IN ('open', 'stale') AND chart_symbol = ? AND side = ?
              AND ABS(entry_time_ms - ?) < 2000 AND position_id <> ?""",
         (
             closed_position["venue"],
@@ -2400,52 +2400,75 @@ def _migrate_open_annotations(connection, closed_position):
             closed_position["positionId"],
         ),
     ).fetchall()
-    for row in rows:
-        old_id = row["position_id"]
-        if closed_position.get("leverage") is None and row["leverage"] is not None:
-            closed_position["leverage"] = row["leverage"]
-        connection.execute(
-            """INSERT INTO position_notes (venue, position_id, note, updated_at)
-               SELECT venue, ?, note, updated_at FROM position_notes
-               WHERE venue = ? AND position_id = ?
-               ON CONFLICT(venue, position_id) DO NOTHING""",
-            (closed_position["positionId"], closed_position["venue"], old_id),
-        )
-        connection.execute(
-            """INSERT INTO position_tag_map (venue, position_id, tag_id)
-               SELECT venue, ?, tag_id FROM position_tag_map
-               WHERE venue = ? AND position_id = ?
-               ON CONFLICT(venue, position_id, tag_id) DO NOTHING""",
-            (closed_position["positionId"], closed_position["venue"], old_id),
-        )
-        connection.execute(
-            """INSERT INTO position_drawings (
-                   venue, position_id, id, symbol, interval, tool_type,
-                   tool_json, created_at, updated_at
-               )
-               SELECT venue, ?, id, symbol, interval, tool_type,
-                      tool_json, created_at, updated_at
-               FROM position_drawings
-               WHERE venue = ? AND position_id = ?
-               ON CONFLICT(venue, position_id, id) DO NOTHING""",
-            (closed_position["positionId"], closed_position["venue"], old_id),
-        )
-        connection.execute(
-            "DELETE FROM position_notes WHERE venue = ? AND position_id = ?",
-            (closed_position["venue"], old_id),
-        )
-        connection.execute(
-            "DELETE FROM position_tag_map WHERE venue = ? AND position_id = ?",
-            (closed_position["venue"], old_id),
-        )
-        connection.execute(
-            "DELETE FROM position_drawings WHERE venue = ? AND position_id = ?",
-            (closed_position["venue"], old_id),
-        )
-        connection.execute(
-            "DELETE FROM exchange_positions WHERE venue = ? AND position_id = ?",
-            (closed_position["venue"], old_id),
-        )
+    if len(rows) != 1:
+        return False
+    if closed_positions is not None:
+        open_entry_time_ms = rows[0]["entry_time_ms"]
+        matching_closed = [
+            candidate
+            for candidate in closed_positions
+            if candidate.get("venue") == closed_position["venue"]
+            and candidate.get("chartSymbol") == closed_position["chartSymbol"]
+            and candidate.get("side") == closed_position["side"]
+            and abs(
+                (candidate.get("entryTimeMs") or 0)
+                - open_entry_time_ms
+            )
+            < 2000
+        ]
+        if (
+            len(matching_closed) != 1
+            or matching_closed[0].get("positionId") != closed_position["positionId"]
+        ):
+            return False
+
+    row = rows[0]
+    old_id = row["position_id"]
+    if closed_position.get("leverage") is None and row["leverage"] is not None:
+        closed_position["leverage"] = row["leverage"]
+    connection.execute(
+        """INSERT INTO position_notes (venue, position_id, note, updated_at)
+           SELECT venue, ?, note, updated_at FROM position_notes
+           WHERE venue = ? AND position_id = ?
+           ON CONFLICT(venue, position_id) DO NOTHING""",
+        (closed_position["positionId"], closed_position["venue"], old_id),
+    )
+    connection.execute(
+        """INSERT INTO position_tag_map (venue, position_id, tag_id)
+           SELECT venue, ?, tag_id FROM position_tag_map
+           WHERE venue = ? AND position_id = ?
+           ON CONFLICT(venue, position_id, tag_id) DO NOTHING""",
+        (closed_position["positionId"], closed_position["venue"], old_id),
+    )
+    connection.execute(
+        """INSERT INTO position_drawings (
+               venue, position_id, id, symbol, interval, tool_type,
+               tool_json, created_at, updated_at
+           )
+           SELECT venue, ?, id, symbol, interval, tool_type,
+                  tool_json, created_at, updated_at
+           FROM position_drawings
+           WHERE venue = ? AND position_id = ?
+           ON CONFLICT(venue, position_id, id) DO NOTHING""",
+        (closed_position["positionId"], closed_position["venue"], old_id),
+    )
+    connection.execute(
+        "DELETE FROM position_notes WHERE venue = ? AND position_id = ?",
+        (closed_position["venue"], old_id),
+    )
+    connection.execute(
+        "DELETE FROM position_tag_map WHERE venue = ? AND position_id = ?",
+        (closed_position["venue"], old_id),
+    )
+    connection.execute(
+        "DELETE FROM position_drawings WHERE venue = ? AND position_id = ?",
+        (closed_position["venue"], old_id),
+    )
+    connection.execute(
+        "DELETE FROM exchange_positions WHERE venue = ? AND position_id = ?",
+        (closed_position["venue"], old_id),
+    )
+    return True
 
 
 def _upsert_position_fill(connection, fill, synced_at):
@@ -2580,15 +2603,13 @@ def assign_fills_to_positions(positions, fills):
             role = classify_fill_role(fill, position)
             if not role:
                 continue
-            candidates.append((position, role))
-        eligible = [
-            item
-            for item in candidates
-            if item[0]["entryTimeMs"] <= fill_time + FILL_MATCH_PAD_MS
-        ]
+            strictly_inside = entry_ms <= fill_time <= exit_ms
+            candidates.append((position, role, strictly_inside))
+        strict_candidates = [item for item in candidates if item[2]]
+        eligible = strict_candidates or candidates
         if not eligible:
             continue
-        chosen, role = max(eligible, key=lambda item: item[0]["entryTimeMs"])
+        chosen, role, _ = max(eligible, key=lambda item: item[0]["entryTimeMs"])
         grouped[chosen["positionId"]].append({**fill, "role": role})
 
     assigned = {}
@@ -2619,10 +2640,15 @@ def assign_fills_to_positions(positions, fills):
                 kind = "close"
             else:
                 kind = "reduce"
+            operation_time_ms = (
+                item.get("_lastTimeMs")
+                if kind == "close"
+                else item.get("timeMs")
+            )
             annotated.append(
                 {
                     "execId": item.get("execId"),
-                    "timeMs": item.get("timeMs"),
+                    "timeMs": operation_time_ms,
                     "side": item.get("side"),
                     "tradeSide": item.get("tradeSide"),
                     "kind": kind,
@@ -2631,7 +2657,10 @@ def assign_fills_to_positions(positions, fills):
                     "pnl": item.get("pnl"),
                 }
             )
-        assigned[position["positionId"]] = annotated
+        assigned[position["positionId"]] = sorted(
+            annotated,
+            key=lambda item: (item.get("timeMs") or 0, item.get("execId") or ""),
+        )
     return assigned
 
 
@@ -2669,6 +2698,11 @@ def _delete_unannotated_stale_open_positions(connection, active_position_ids):
             ),
         ).fetchone()[0]
         if has_annotations:
+            connection.execute(
+                """UPDATE exchange_positions SET status = 'stale'
+                   WHERE venue = ? AND position_id = ?""",
+                (POSITION_REVIEW_VENUE, position_id),
+            )
             continue
         connection.execute(
             "DELETE FROM exchange_positions WHERE venue = ? AND position_id = ?",
@@ -2720,7 +2754,7 @@ def _sync_bitget_positions():
     synced_at = datetime.now().astimezone().isoformat()
     with DATABASE_LOCK, database() as connection:
         for position in closed:
-            _migrate_open_annotations(connection, position)
+            _migrate_open_annotations(connection, position, closed)
             _upsert_exchange_position(connection, position, synced_at)
         _delete_unannotated_stale_open_positions(connection, open_ids)
         for position in opened:
@@ -3165,6 +3199,7 @@ def _read_position_review(connection):
              ON n.venue = p.venue AND n.position_id = p.position_id
            LEFT JOIN position_tag_map m
              ON m.venue = p.venue AND m.position_id = p.position_id
+           WHERE p.status <> 'stale'
            GROUP BY p.venue, p.position_id
            ORDER BY COALESCE(p.exit_time_ms, p.entry_time_ms) DESC"""
     ).fetchall()

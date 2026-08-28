@@ -1,4 +1,10 @@
-import React, { memo, useRef, useState } from 'react';
+import React, {
+  memo,
+  useCallback,
+  useLayoutEffect,
+  useRef,
+  useState,
+} from 'react';
 import type { ActiveToolType } from './drawing-types';
 import type { PositionToolParams } from '@/features/paper-trading/paper-trade-types';
 import {
@@ -129,12 +135,56 @@ export const DraggableDrawingToolbar = memo(function DraggableDrawingToolbar({
   });
 
   const [isDragging, setIsDragging] = useState(false);
+  const toolbarRef = useRef<HTMLDivElement | null>(null);
   const dragRef = useRef<{
     startX: number;
     startY: number;
     initLeft: number;
     initTop: number;
   } | null>(null);
+
+  const clampToParent = useCallback((next: { left: number; top: number }) => {
+    const toolbar = toolbarRef.current;
+    const parent = toolbar?.parentElement;
+    if (!toolbar || !parent) {
+      return { left: Math.max(8, next.left), top: Math.max(8, next.top) };
+    }
+    return {
+      left: Math.min(
+        Math.max(8, next.left),
+        Math.max(8, parent.clientWidth - toolbar.offsetWidth - 8)
+      ),
+      top: Math.min(
+        Math.max(8, next.top),
+        Math.max(8, parent.clientHeight - toolbar.offsetHeight - 8)
+      ),
+    };
+  }, []);
+
+  useLayoutEffect(() => {
+    const toolbar = toolbarRef.current;
+    const parent = toolbar?.parentElement;
+    if (!toolbar || !parent) return;
+    const clampCurrentPosition = () => {
+      setPosition((current) => {
+        const clamped = clampToParent(current);
+        if (clamped.left === current.left && clamped.top === current.top) {
+          return current;
+        }
+        try {
+          localStorage.setItem(STORAGE_KEY, JSON.stringify(clamped));
+        } catch (_) {
+          // ignore
+        }
+        return clamped;
+      });
+    };
+    clampCurrentPosition();
+    const observer = new ResizeObserver(clampCurrentPosition);
+    observer.observe(parent);
+    observer.observe(toolbar);
+    return () => observer.disconnect();
+  }, [clampToParent]);
 
   const handlePointerDown = (e: React.PointerEvent) => {
     if (e.button !== 0) return;
@@ -152,24 +202,31 @@ export const DraggableDrawingToolbar = memo(function DraggableDrawingToolbar({
     if (!isDragging || !dragRef.current) return;
     const dx = e.clientX - dragRef.current.startX;
     const dy = e.clientY - dragRef.current.startY;
-    const newLeft = Math.max(8, dragRef.current.initLeft + dx);
-    const newTop = Math.max(8, dragRef.current.initTop + dy);
-    setPosition({ left: newLeft, top: newTop });
+    setPosition(
+      clampToParent({
+        left: dragRef.current.initLeft + dx,
+        top: dragRef.current.initTop + dy,
+      })
+    );
   };
 
   const handlePointerUp = () => {
     if (!isDragging) return;
     setIsDragging(false);
     dragRef.current = null;
-    try {
-      localStorage.setItem(STORAGE_KEY, JSON.stringify(position));
-    } catch (_) {
-      // ignore
-    }
+    setPosition((current) => {
+      try {
+        localStorage.setItem(STORAGE_KEY, JSON.stringify(current));
+      } catch (_) {
+        // ignore
+      }
+      return current;
+    });
   };
 
   return (
     <div
+      ref={toolbarRef}
       className="drawing-toolbar-floating"
       data-dragging={isDragging ? 'true' : 'false'}
       style={{

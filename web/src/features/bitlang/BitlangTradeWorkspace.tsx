@@ -127,6 +127,7 @@ export function BitlangTradeWorkspace({
   const [showDetails, setShowDetails] = useState(false);
   const [page, setPage] = useState(1);
   const [error, setError] = useState<string | null>(null);
+  const [loadRevision, setLoadRevision] = useState(0);
   const [viewMode, setViewMode] = useState<'chart' | 'dashboard'>(() => {
     return new URLSearchParams(window.location.search).get('view') === 'dashboard'
       ? 'dashboard'
@@ -151,9 +152,13 @@ export function BitlangTradeWorkspace({
           setAnnotatedTrades(
             annotateTrades(data.trades, annotations.notes, annotations.tagMap)
           );
-        } catch {
+        } catch (cause) {
           if (!active) return;
-          setAnnotatedTrades(annotateTrades(data.trades, {}, {}));
+          setError(
+            cause instanceof Error
+              ? `复盘注释读取失败：${cause.message}`
+              : '复盘注释读取失败'
+          );
         }
       })
       .catch((cause) => {
@@ -163,7 +168,7 @@ export function BitlangTradeWorkspace({
     return () => {
       active = false;
     };
-  }, []);
+  }, [loadRevision]);
 
   const instruments = useMemo(
     () =>
@@ -407,7 +412,22 @@ export function BitlangTradeWorkspace({
   };
 
   if (error) {
-    return <div className="bitlang-state">交割单加载失败：{error}</div>;
+    return (
+      <div className="bitlang-state">
+        <span>{error}</span>
+        <button
+          type="button"
+          className="bitlang-state-action"
+          onClick={() => {
+            setError(null);
+            setSnapshot(null);
+            setLoadRevision((revision) => revision + 1);
+          }}
+        >
+          重试
+        </button>
+      </div>
+    );
   }
   if (!snapshot) {
     return (
