@@ -254,6 +254,7 @@ export function ChartWorkspace({
   ]);
 
   const {
+    ready: drawingReady,
     activeTool,
     setActiveTool,
     magnetEnabled,
@@ -783,6 +784,7 @@ export function ChartWorkspace({
       )}
 
       <DraggableDrawingToolbar
+        disabled={!drawingReady}
         activeTool={activeTool}
         magnetEnabled={magnetEnabled}
         selectedDrawingId={selectedDrawingId}
@@ -996,7 +998,7 @@ export function ChartWorkspace({
           onLoadLater={replayState.status === 'idle' ? handleLoadLater : undefined}
           isLoadingLater={isLoadingLater}
           drawings={replayVisibleDrawings}
-          activeDrawingTool={activeTool}
+          activeDrawingTool={drawingReady ? activeTool : 'select'}
           selectedDrawingId={selectedDrawingId}
           magnetEnabled={magnetEnabled}
           drawingVideoId="__global__"

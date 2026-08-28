@@ -14,6 +14,13 @@ import {
   replaceDrawings,
   saveDrawing,
 } from '@/api/drawing-api';
+import {
+  deletePositionDrawing,
+  fetchPositionDrawings,
+  replacePositionDrawings,
+  savePositionDrawing,
+  type PositionDrawingScope,
+} from '@/api/position-review-api';
 import type { ReviewTimeframe } from '@/domain/timeframe';
 import {
   deserializeDrawing,
@@ -27,6 +34,7 @@ import { confirmDialog } from '@/ui/feedback/confirm';
 import { toast } from '@/ui/feedback/toast';
 
 type DrawingWorkspace = {
+  ready: boolean;
   activeTool: ActiveToolType;
   setActiveTool: Dispatch<SetStateAction<ActiveToolType>>;
   magnetEnabled: boolean;
@@ -53,13 +61,22 @@ type DrawingWorkspace = {
 
 const DRAWING_SCOPE = '__global__';
 const MAX_HISTORY_ENTRIES = 100;
-type DrawingPersistence = 'server' | 'memory';
+type DrawingPersistence = 'server' | 'memory' | 'position';
 
 export function useDrawingWorkspace(
   symbol: string,
   timeframe: ReviewTimeframe,
-  persistence: DrawingPersistence = 'server'
+  persistence: DrawingPersistence = 'server',
+  positionScope?: PositionDrawingScope
 ): DrawingWorkspace {
+  const positionVenue = positionScope?.venue || '';
+  const positionId = positionScope?.positionId || '';
+  const drawingWorkspaceKey =
+    persistence === 'memory'
+      ? `${persistence}:${symbol}:${timeframe}`
+      : persistence === 'position'
+        ? `${persistence}:${positionVenue}:${positionId}:${symbol}`
+        : `${persistence}:${symbol}`;
   const [activeTool, setActiveTool] = useState<ActiveToolType>('select');
   const [magnetEnabled, setMagnetEnabled] = useState(false);
   const [drawings, setDrawings] = useState<DrawingToolState[]>([]);
@@ -73,18 +90,18 @@ export function useDrawingWorkspace(
   const [isObjectTreeOpen, setIsObjectTreeOpen] = useState(false);
   const [undoStack, setUndoStack] = useState<DrawingToolState[][]>([]);
   const [redoStack, setRedoStack] = useState<DrawingToolState[][]>([]);
+  const [hydratedWorkspaceKey, setHydratedWorkspaceKey] = useState('');
+  const ready = hydratedWorkspaceKey === drawingWorkspaceKey;
 
   const drawingsRef = useRef<DrawingToolState[]>([]);
   const saveChainsRef = useRef<Record<string, Promise<void>>>({});
   const saveRevisionsRef = useRef<Record<string, number>>({});
   const workspaceRevisionRef = useRef(0);
   const historyOperationRef = useRef(false);
-  const loadScopeRef = useRef({ symbol, timeframe });
-  loadScopeRef.current = { symbol, timeframe };
-  const drawingWorkspaceKey =
-    persistence === 'memory'
-      ? `${persistence}:${symbol}:${timeframe}`
-      : `${persistence}:${symbol}`;
+  const readyRef = useRef(ready);
+  readyRef.current = ready;
+  const loadScopeRef = useRef({ symbol, timeframe, positionVenue, positionId });
+  loadScopeRef.current = { symbol, timeframe, positionVenue, positionId };
 
   const replaceLocalDrawings = useCallback(
     (nextDrawings: DrawingToolState[]) => {
@@ -112,25 +129,40 @@ export function useDrawingWorkspace(
     const loadScope = loadScopeRef.current;
     const workspaceRevision = ++workspaceRevisionRef.current;
     const controller = new AbortController();
+    setHydratedWorkspaceKey('');
     replaceLocalDrawings([]);
     setSelectedDrawingId(null);
     setUndoStack([]);
     setRedoStack([]);
     saveChainsRef.current = {};
     saveRevisionsRef.current = {};
+    historyOperationRef.current = false;
     if (persistence === 'memory') {
+      setHydratedWorkspaceKey(drawingWorkspaceKey);
       return () => {
         if (workspaceRevisionRef.current === workspaceRevision) {
           workspaceRevisionRef.current += 1;
         }
       };
     }
-    void fetchDrawings(
-      DRAWING_SCOPE,
-      loadScope.symbol,
-      loadScope.timeframe,
-      controller.signal
-    )
+    const request =
+      persistence === 'position'
+        ? fetchPositionDrawings(
+            {
+              venue: loadScope.positionVenue,
+              positionId: loadScope.positionId,
+            },
+            loadScope.symbol,
+            loadScope.timeframe,
+            controller.signal
+          )
+        : fetchDrawings(
+            DRAWING_SCOPE,
+            loadScope.symbol,
+            loadScope.timeframe,
+            controller.signal
+          );
+    void request
       .then((persistedDrawings) => {
         if (
           controller.signal.aborted ||
@@ -144,6 +176,14 @@ export function useDrawingWorkspace(
         if (!controller.signal.aborted) {
           console.warn('拉取画图持久化记录失败:', requestError);
         }
+      })
+      .finally(() => {
+        if (
+          !controller.signal.aborted &&
+          workspaceRevisionRef.current === workspaceRevision
+        ) {
+          setHydratedWorkspaceKey(drawingWorkspaceKey);
+        }
       });
     return () => {
       controller.abort();
@@ -155,6 +195,7 @@ export function useDrawingWorkspace(
 
   const saveDrawingState = useCallback(
     async (toolState: DrawingToolState) => {
+      if (!readyRef.current) return;
       const workspaceRevision = workspaceRevisionRef.current;
       const drawingSaveRevision =
         (saveRevisionsRef.current[toolState.id] || 0) + 1;
@@ -177,7 +218,14 @@ export function useDrawingWorkspace(
       const currentSave = previousSave
         .catch(() => undefined)
         .then(async () => {
-          const saved = await saveDrawing(serializeDrawing(toolState));
+          const serialized = serializeDrawing(toolState);
+          const saved =
+            persistence === 'position'
+              ? await savePositionDrawing(
+                  { venue: positionVenue, positionId },
+                  serialized
+                )
+              : await saveDrawing(serialized);
           if (
             workspaceRevisionRef.current !== workspaceRevision ||
             saveRevisionsRef.current[toolState.id] !== drawingSaveRevision
@@ -222,10 +270,17 @@ export function useDrawingWorkspace(
         }
       }
     },
-    [commitLocalChange, persistence, replaceLocalDrawings]
+    [
+      commitLocalChange,
+      persistence,
+      positionId,
+      positionVenue,
+      replaceLocalDrawings,
+    ]
   );
 
   const deleteSelectedDrawing = useCallback(async () => {
+    if (!readyRef.current) return;
     if (!selectedDrawingId) return;
     const target = drawingsRef.current.find(
       (drawing) => drawing.id === selectedDrawingId
@@ -252,12 +307,21 @@ export function useDrawingWorkspace(
 
     try {
       await saveChainsRef.current[selectedDrawingId]?.catch(() => undefined);
-      await deleteDrawing(
-        selectedDrawingId,
-        DRAWING_SCOPE,
-        symbol,
-        timeframe
-      );
+      if (persistence === 'position') {
+        await deletePositionDrawing(
+          { venue: positionVenue, positionId },
+          symbol,
+          timeframe,
+          selectedDrawingId
+        );
+      } else {
+        await deleteDrawing(
+          selectedDrawingId,
+          DRAWING_SCOPE,
+          symbol,
+          timeframe
+        );
+      }
       if (workspaceRevisionRef.current !== workspaceRevision) return;
       const current = drawingsRef.current;
       commitLocalChange(
@@ -276,12 +340,15 @@ export function useDrawingWorkspace(
   }, [
     commitLocalChange,
     persistence,
+    positionId,
+    positionVenue,
     selectedDrawingId,
     symbol,
     timeframe,
   ]);
 
   const clearAllDrawings = useCallback(async () => {
+    if (!readyRef.current) return;
     const current = drawingsRef.current;
     if (current.length === 0) return;
     const workspaceRevision = workspaceRevisionRef.current;
@@ -290,6 +357,8 @@ export function useDrawingWorkspace(
       message:
         persistence === 'memory'
           ? `确认要清空当前 Symbol (${symbol}) 的所有临时画图吗？`
+          : persistence === 'position'
+            ? `确认要清空当前仓位 (${symbol}) 的所有画图记录吗？此操作无法撤销。`
           : `确认要清空当前 Symbol (${symbol}) 的所有画图记录吗？此操作无法撤销。`,
       confirmText: '确认清空',
       isDanger: true,
@@ -309,7 +378,15 @@ export function useDrawingWorkspace(
           request.catch(() => undefined)
         )
       );
-      await clearAllDrawingsForSymbol(DRAWING_SCOPE, symbol, timeframe);
+      if (persistence === 'position') {
+        await deletePositionDrawing(
+          { venue: positionVenue, positionId },
+          symbol,
+          timeframe
+        );
+      } else {
+        await clearAllDrawingsForSymbol(DRAWING_SCOPE, symbol, timeframe);
+      }
       if (workspaceRevisionRef.current !== workspaceRevision) return;
       commitLocalChange([], drawingsRef.current);
       setSelectedDrawingId(null);
@@ -321,10 +398,18 @@ export function useDrawingWorkspace(
         }`
       );
     }
-  }, [commitLocalChange, persistence, symbol, timeframe]);
+  }, [
+    commitLocalChange,
+    persistence,
+    positionId,
+    positionVenue,
+    symbol,
+    timeframe,
+  ]);
 
   const deleteDrawingById = useCallback(
     async (targetId: string) => {
+      if (!readyRef.current) return;
       const target = drawingsRef.current.find(
         (drawing) => drawing.id === targetId
       );
@@ -351,12 +436,21 @@ export function useDrawingWorkspace(
 
       try {
         await saveChainsRef.current[targetId]?.catch(() => undefined);
-        await deleteDrawing(
-          targetId,
-          DRAWING_SCOPE,
-          symbol,
-          timeframe
-        );
+        if (persistence === 'position') {
+          await deletePositionDrawing(
+            { venue: positionVenue, positionId },
+            symbol,
+            timeframe,
+            targetId
+          );
+        } else {
+          await deleteDrawing(
+            targetId,
+            DRAWING_SCOPE,
+            symbol,
+            timeframe
+          );
+        }
         if (workspaceRevisionRef.current !== workspaceRevision) return;
         const current = drawingsRef.current;
         commitLocalChange(
@@ -373,7 +467,15 @@ export function useDrawingWorkspace(
         );
       }
     },
-    [commitLocalChange, persistence, selectedDrawingId, symbol, timeframe]
+    [
+      commitLocalChange,
+      persistence,
+      positionId,
+      positionVenue,
+      selectedDrawingId,
+      symbol,
+      timeframe,
+    ]
   );
 
   const toggleLockDrawing = useCallback(
@@ -445,7 +547,14 @@ export function useDrawingWorkspace(
   );
 
   const undo = useCallback(async () => {
-    if (undoStack.length === 0 || historyOperationRef.current) return;
+    if (
+      !readyRef.current ||
+      undoStack.length === 0 ||
+      historyOperationRef.current
+    ) {
+      return;
+    }
+    const workspaceRevision = workspaceRevisionRef.current;
     historyOperationRef.current = true;
     const previous = undoStack[undoStack.length - 1];
     const current = drawingsRef.current;
@@ -460,12 +569,23 @@ export function useDrawingWorkspace(
         return;
       }
       await waitForPendingSaves();
-      const saved = await replaceDrawings(
-        DRAWING_SCOPE,
-        symbol,
-        timeframe,
-        previous.map(serializeDrawing)
-      );
+      if (workspaceRevisionRef.current !== workspaceRevision) return;
+      const serialized = previous.map(serializeDrawing);
+      const saved =
+        persistence === 'position'
+          ? await replacePositionDrawings(
+              { venue: positionVenue, positionId },
+              symbol,
+              timeframe,
+              serialized
+            )
+          : await replaceDrawings(
+              DRAWING_SCOPE,
+              symbol,
+              timeframe,
+              serialized
+            );
+      if (workspaceRevisionRef.current !== workspaceRevision) return;
       setRedoStack((stack) =>
         [...stack, current].slice(-MAX_HISTORY_ENTRIES)
       );
@@ -474,16 +594,22 @@ export function useDrawingWorkspace(
       replaceLocalDrawings(restored);
       reconcileSelection(restored);
     } catch (undoError) {
-      toast.error(
-        `撤销画图失败: ${
-          undoError instanceof Error ? undoError.message : '网络异常'
-        }`
-      );
+      if (workspaceRevisionRef.current === workspaceRevision) {
+        toast.error(
+          `撤销画图失败: ${
+            undoError instanceof Error ? undoError.message : '网络异常'
+          }`
+        );
+      }
     } finally {
-      historyOperationRef.current = false;
+      if (workspaceRevisionRef.current === workspaceRevision) {
+        historyOperationRef.current = false;
+      }
     }
   }, [
     persistence,
+    positionId,
+    positionVenue,
     reconcileSelection,
     replaceLocalDrawings,
     symbol,
@@ -493,7 +619,14 @@ export function useDrawingWorkspace(
   ]);
 
   const redo = useCallback(async () => {
-    if (redoStack.length === 0 || historyOperationRef.current) return;
+    if (
+      !readyRef.current ||
+      redoStack.length === 0 ||
+      historyOperationRef.current
+    ) {
+      return;
+    }
+    const workspaceRevision = workspaceRevisionRef.current;
     historyOperationRef.current = true;
     const next = redoStack[redoStack.length - 1];
     const current = drawingsRef.current;
@@ -508,12 +641,23 @@ export function useDrawingWorkspace(
         return;
       }
       await waitForPendingSaves();
-      const saved = await replaceDrawings(
-        DRAWING_SCOPE,
-        symbol,
-        timeframe,
-        next.map(serializeDrawing)
-      );
+      if (workspaceRevisionRef.current !== workspaceRevision) return;
+      const serialized = next.map(serializeDrawing);
+      const saved =
+        persistence === 'position'
+          ? await replacePositionDrawings(
+              { venue: positionVenue, positionId },
+              symbol,
+              timeframe,
+              serialized
+            )
+          : await replaceDrawings(
+              DRAWING_SCOPE,
+              symbol,
+              timeframe,
+              serialized
+            );
+      if (workspaceRevisionRef.current !== workspaceRevision) return;
       setUndoStack((stack) =>
         [...stack, current].slice(-MAX_HISTORY_ENTRIES)
       );
@@ -522,16 +666,22 @@ export function useDrawingWorkspace(
       replaceLocalDrawings(restored);
       reconcileSelection(restored);
     } catch (redoError) {
-      toast.error(
-        `重做画图失败: ${
-          redoError instanceof Error ? redoError.message : '网络异常'
-        }`
-      );
+      if (workspaceRevisionRef.current === workspaceRevision) {
+        toast.error(
+          `重做画图失败: ${
+            redoError instanceof Error ? redoError.message : '网络异常'
+          }`
+        );
+      }
     } finally {
-      historyOperationRef.current = false;
+      if (workspaceRevisionRef.current === workspaceRevision) {
+        historyOperationRef.current = false;
+      }
     }
   }, [
     persistence,
+    positionId,
+    positionVenue,
     reconcileSelection,
     redoStack,
     replaceLocalDrawings,
@@ -542,6 +692,7 @@ export function useDrawingWorkspace(
 
   useEffect(() => {
     const handleShortcut = (event: KeyboardEvent) => {
+      if (!readyRef.current) return;
       if (
         event.defaultPrevented ||
         document.querySelector('[aria-modal="true"]')
@@ -618,6 +769,7 @@ export function useDrawingWorkspace(
   ]);
 
   return {
+    ready,
     activeTool,
     setActiveTool,
     magnetEnabled,

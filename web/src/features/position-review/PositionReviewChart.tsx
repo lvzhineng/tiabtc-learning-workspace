@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { RefreshCw } from 'lucide-react';
+import { Copy, RefreshCw } from 'lucide-react';
 import type { SeriesMarker, UTCTimestamp } from 'lightweight-charts';
 import {
   fetchPositionEarlierCandles,
@@ -23,8 +23,84 @@ import {
 import { DraggableDrawingToolbar } from '@/features/drawings/DraggableDrawingToolbar';
 import { DrawingObjectTreePanel } from '@/features/drawings/DrawingObjectTreePanel';
 import { useDrawingWorkspace } from '@/features/review-workspace/useDrawingWorkspace';
+import { toast } from '@/ui/feedback/toast';
 import { FILL_KIND_LABEL, formatNumber, mergeCandles } from './position-review-format';
-import { positionPnl, type ReviewPosition } from './position-review-types';
+import type { ReviewPosition } from './position-review-types';
+
+async function svgToImage(svg: SVGSVGElement): Promise<HTMLImageElement> {
+  const clone = svg.cloneNode(true) as SVGSVGElement;
+  const rect = svg.getBoundingClientRect();
+  clone.setAttribute('xmlns', 'http://www.w3.org/2000/svg');
+  clone.setAttribute('width', String(rect.width));
+  clone.setAttribute('height', String(rect.height));
+  const blob = new Blob([new XMLSerializer().serializeToString(clone)], {
+    type: 'image/svg+xml;charset=utf-8',
+  });
+  const url = URL.createObjectURL(blob);
+  try {
+    const image = new Image();
+    image.src = url;
+    await image.decode();
+    return image;
+  } finally {
+    URL.revokeObjectURL(url);
+  }
+}
+
+async function captureChartPng(
+  root: HTMLElement,
+  themeMode: 'dark' | 'light'
+): Promise<Blob> {
+  const chartArea = root.querySelector<HTMLElement>('.chart-canvas-stack');
+  if (!chartArea) throw new Error('图表尚未就绪');
+  const areaRect = chartArea.getBoundingClientRect();
+  if (areaRect.width < 1 || areaRect.height < 1) {
+    throw new Error('图表尺寸无效');
+  }
+
+  const scale = Math.max(1, Math.min(2, window.devicePixelRatio || 1));
+  const output = document.createElement('canvas');
+  output.width = Math.round(areaRect.width * scale);
+  output.height = Math.round(areaRect.height * scale);
+  const context = output.getContext('2d');
+  if (!context) throw new Error('浏览器无法创建截图画布');
+  context.scale(scale, scale);
+  context.fillStyle = themeMode === 'dark' ? '#131722' : '#ffffff';
+  context.fillRect(0, 0, areaRect.width, areaRect.height);
+
+  const layers = Array.from(
+    chartArea.querySelectorAll<HTMLCanvasElement | SVGSVGElement>('canvas, svg')
+  );
+  for (const layer of layers) {
+    const rect = layer.getBoundingClientRect();
+    if (
+      rect.width < 1 ||
+      rect.height < 1 ||
+      rect.right <= areaRect.left ||
+      rect.left >= areaRect.right ||
+      rect.bottom <= areaRect.top ||
+      rect.top >= areaRect.bottom ||
+      getComputedStyle(layer).visibility === 'hidden'
+    ) {
+      continue;
+    }
+    const x = rect.left - areaRect.left;
+    const y = rect.top - areaRect.top;
+    if (layer instanceof HTMLCanvasElement) {
+      context.drawImage(layer, x, y, rect.width, rect.height);
+    } else {
+      const image = await svgToImage(layer);
+      context.drawImage(image, x, y, rect.width, rect.height);
+    }
+  }
+
+  return new Promise<Blob>((resolve, reject) => {
+    output.toBlob(
+      (blob) => (blob ? resolve(blob) : reject(new Error('生成 PNG 失败'))),
+      'image/png'
+    );
+  });
+}
 
 export function PositionReviewChart({
   position,
@@ -50,6 +126,8 @@ export function PositionReviewChart({
   const [warning, setWarning] = useState<string | null>(null);
   const [candleVenue, setCandleVenue] = useState('bybit');
   const [reloadToken, setReloadToken] = useState(0);
+  const [copyingChart, setCopyingChart] = useState(false);
+  const chartRootRef = useRef<HTMLDivElement | null>(null);
   const failedEdgeRef = useRef<'main' | 'earlier' | 'later' | null>(null);
   const earlierRequestRef = useRef<AbortController | null>(null);
   const laterRequestRef = useRef<AbortController | null>(null);
@@ -74,6 +152,7 @@ export function PositionReviewChart({
     return cached?.candles ?? [];
   });
   const {
+    ready: drawingReady,
     activeTool,
     setActiveTool,
     magnetEnabled,
@@ -96,10 +175,35 @@ export function PositionReviewChart({
     toggleLockSelected,
     undo,
     redo,
-  } = useDrawingWorkspace(symbol, timeframe, 'memory');
+  } = useDrawingWorkspace(symbol, timeframe, 'position', {
+    venue: position.venue,
+    positionId: position.positionId,
+  });
   const selectedDrawing = drawings.find(
     (drawing) => drawing.id === selectedDrawingId
   );
+
+  const copyChart = useCallback(async () => {
+    if (!chartRootRef.current || copyingChart) return;
+    if (!navigator.clipboard?.write || typeof ClipboardItem === 'undefined') {
+      toast.error('当前浏览器不支持复制图片到剪贴板');
+      return;
+    }
+    setCopyingChart(true);
+    try {
+      const png = captureChartPng(chartRootRef.current, themeMode);
+      await navigator.clipboard.write([
+        new ClipboardItem({ 'image/png': png }),
+      ]);
+      toast.success('K 线图已复制到剪贴板');
+    } catch (cause) {
+      toast.error(
+        `复制图表失败: ${cause instanceof Error ? cause.message : '浏览器拒绝了剪贴板操作'}`
+      );
+    } finally {
+      setCopyingChart(false);
+    }
+  }, [copyingChart, themeMode]);
 
   useEffect(() => {
     earlierRequestRef.current?.abort();
@@ -154,13 +258,22 @@ export function PositionReviewChart({
         setLoadedContextKey(chartContextKey);
       })
       .catch((cause) => {
-        if (!controller.signal.aborted) {
+        if (
+          !controller.signal.aborted &&
+          contextKeyRef.current === chartContextKey
+        ) {
           failedEdgeRef.current = 'main';
           setError(cause instanceof Error ? cause.message : '加载 K 线失败');
+          setLoadedContextKey(chartContextKey);
         }
       })
       .finally(() => {
-        if (!controller.signal.aborted) setLoading(false);
+        if (
+          !controller.signal.aborted &&
+          contextKeyRef.current === chartContextKey
+        ) {
+          setLoading(false);
+        }
       });
     return () => {
       controller.abort();
@@ -256,17 +369,25 @@ export function PositionReviewChart({
     setReloadToken((value) => value + 1);
   }, [loadEarlier, loadLater]);
 
+  const contextReady = loadedContextKey === chartContextKey;
+  const displayedCandles = contextReady ? candles : [];
+  const chartLoading = loading || !contextReady;
+  const chartError = contextReady ? error : null;
+  const chartWarning = contextReady ? warning : null;
   const markers = useMemo(
-    () => buildPositionMarkers(position, timeframe, candles),
-    [candles, position, timeframe]
+    () => buildPositionMarkers(position, timeframe, displayedCandles),
+    [displayedCandles, position, timeframe]
   );
   const focusExitMs =
     closedExitTimeMs ??
-    (candles.length ? candles[candles.length - 1].timestampMs : entryTimeMs);
+    (displayedCandles.length
+      ? displayedCandles[displayedCandles.length - 1].timestampMs
+      : entryTimeMs);
 
   return (
-    <div className="bitlang-chart">
+    <div ref={chartRootRef} className="bitlang-chart">
       <DraggableDrawingToolbar
+        disabled={!drawingReady}
         activeTool={activeTool}
         magnetEnabled={magnetEnabled}
         selectedDrawingId={selectedDrawingId}
@@ -282,6 +403,7 @@ export function PositionReviewChart({
         onToggleLock={toggleLockSelected}
         onDeleteSelected={deleteSelectedDrawing}
         onClearAll={clearAllDrawings}
+        clearAllTitle="清空当前仓位所有画线"
       />
       {isObjectTreeOpen && (
         <DrawingObjectTreePanel
@@ -296,15 +418,31 @@ export function PositionReviewChart({
           onClose={toggleObjectTree}
         />
       )}
+      <button
+        type="button"
+        className="posrev-copy-chart"
+        onClick={copyChart}
+        disabled={copyingChart || displayedCandles.length === 0}
+        title="复制 K 线图到剪贴板"
+      >
+        {copyingChart ? <RefreshCw size={14} className="spin" /> : <Copy size={14} />}
+        <span>{copyingChart ? '复制中' : '复制图表'}</span>
+      </button>
       <ChartCanvas
-        candles={candles}
+        candles={displayedCandles}
         symbol={symbol}
         interval={timeframe}
+        viewportContextKey={chartContextKey}
         themeMode={themeMode}
         systemMarkers={markers}
         focusRangeMs={
-          loadedContextKey === chartContextKey && candles.length > 0
-            ? clipTradeFocusRange(entryTimeMs, focusExitMs, candles, timeframe)
+          contextReady && displayedCandles.length > 0
+            ? clipTradeFocusRange(
+                entryTimeMs,
+                focusExitMs,
+                displayedCandles,
+                timeframe
+              )
             : null
         }
         focusRevision={focusRevision}
@@ -314,10 +452,10 @@ export function PositionReviewChart({
         onLoadLater={loadLater}
         isLoadingLater={isLoadingLater}
         drawings={drawings}
-        activeDrawingTool={activeTool}
+        activeDrawingTool={drawingReady ? activeTool : 'select'}
         selectedDrawingId={selectedDrawingId}
         magnetEnabled={magnetEnabled}
-        drawingVideoId="__global__"
+        drawingVideoId={position.positionId}
         onSelectDrawing={setSelectedDrawingId}
         onSaveDrawing={saveDrawingState}
         onDeleteDrawing={deleteDrawingById}
@@ -337,26 +475,27 @@ export function PositionReviewChart({
           <span>量 {formatNumber(hoveredCandle.volume)}</span>
         </div>
       )}
-      {((loading && candles.length === 0) || error) && (
-        <div className={`bitlang-chart-status ${error ? 'error' : ''}`}>
-          {loading && candles.length === 0 && (
+      {((chartLoading && displayedCandles.length === 0) || chartError) && (
+        <div className={`bitlang-chart-status ${chartError ? 'error' : ''}`}>
+          {chartLoading && displayedCandles.length === 0 && (
             <RefreshCw size={17} className="spin" />
           )}
-          <span>{error || `正在加载 ${symbol} K 线...`}</span>
-          {error && (
+          <span>{chartError || `正在加载 ${symbol} K 线...`}</span>
+          {chartError && (
             <button type="button" onClick={retryLoad}>
               重试
             </button>
           )}
         </div>
       )}
-      {warning && !error && (
-        <div className="bitlang-chart-status warning">{warning}</div>
+      {chartWarning && !chartError && (
+        <div className="bitlang-chart-status warning">{chartWarning}</div>
       )}
-      {loading && candles.length > 0 && (
+      {chartLoading && displayedCandles.length > 0 && (
         <div className="posrev-venue-badge posrev-refreshing">更新中</div>
       )}
-      {candles.length > 0 && !(loading && candles.length > 0) && (
+      {displayedCandles.length > 0 &&
+        !(chartLoading && displayedCandles.length > 0) && (
         <div
           className={`posrev-venue-badge ${
             candleVenue === 'bitget' ? 'fallback' : ''
@@ -364,7 +503,7 @@ export function PositionReviewChart({
         >
           {candleVenueLabel(candleVenue)}
         </div>
-      )}
+        )}
     </div>
   );
 }
@@ -390,52 +529,41 @@ function buildPositionMarkers(
       );
     return timestampMsToUtcTimestamp(candle.timestampMs);
   };
-  const sideColor = position.side === 'long' ? '#089981' : '#f23645';
   const fills = position.fills ?? [];
   const markers: SeriesMarker<UTCTimestamp>[] = [];
-  const pushOpen = (timeMs: number, price: number | null, text: string) => {
-    markers.push({
-      time: markerTime(timeMs),
-      position: 'belowBar',
-      color: sideColor,
-      shape: 'arrowUp',
-      text: `${text} ${formatNumber(price, 4)}`,
-    });
-  };
-  const pushClose = (
+  const pushTradeMarker = (
     timeMs: number,
     price: number | null,
     text: string,
-    pnl: number
+    side: 'buy' | 'sell'
   ) => {
+    const isBuy = side === 'buy';
     markers.push({
       time: markerTime(timeMs),
-      position: 'aboveBar',
-      color: pnl >= 0 ? '#089981' : '#f23645',
-      shape: 'arrowDown',
+      position: isBuy ? 'belowBar' : 'aboveBar',
+      color: isBuy ? '#089981' : '#f23645',
+      shape: isBuy ? 'arrowUp' : 'arrowDown',
       text: `${text} ${formatNumber(price, 4)}`,
     });
   };
+  const openSide = position.side === 'long' ? 'buy' : 'sell';
+  const closeSide = position.side === 'long' ? 'sell' : 'buy';
 
   if (fills.length > 0) {
     for (const fill of fills) {
       const label = FILL_KIND_LABEL[fill.kind];
-      if (fill.kind === 'open' || fill.kind === 'scaleIn') {
-        pushOpen(fill.timeMs, fill.price, label);
-      } else {
-        pushClose(fill.timeMs, fill.price, label, fill.pnl ?? positionPnl(position));
-      }
+      pushTradeMarker(fill.timeMs, fill.price, label, fill.side);
     }
     if (!fills.some((fill) => fill.kind === 'open')) {
-      pushOpen(position.entryTimeMs, position.entryPrice, '开');
+      pushTradeMarker(position.entryTimeMs, position.entryPrice, '开', openSide);
     }
     if (position.exitTimeMs && !fills.some((fill) => fill.kind === 'close')) {
-      pushClose(position.exitTimeMs, position.exitPrice, '平', positionPnl(position));
+      pushTradeMarker(position.exitTimeMs, position.exitPrice, '平', closeSide);
     }
   } else {
-    pushOpen(position.entryTimeMs, position.entryPrice, '开');
+    pushTradeMarker(position.entryTimeMs, position.entryPrice, '开', openSide);
     if (position.exitTimeMs) {
-      pushClose(position.exitTimeMs, position.exitPrice, '平', positionPnl(position));
+      pushTradeMarker(position.exitTimeMs, position.exitPrice, '平', closeSide);
     }
   }
   if (!position.exitTimeMs) {

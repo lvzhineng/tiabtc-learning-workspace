@@ -39,6 +39,7 @@ interface ChartCanvasProps {
   candles: Candlestick[];
   symbol: string;
   interval: ReviewTimeframe;
+  viewportContextKey?: string;
   isLogScale?: boolean;
   themeMode?: 'dark' | 'light';
   focusTimeMs?: number | null;
@@ -286,6 +287,7 @@ export function ChartCanvas({
   candles,
   symbol,
   interval,
+  viewportContextKey = '',
   isLogScale = false,
   themeMode = 'dark',
   focusTimeMs = null,
@@ -869,7 +871,7 @@ export function ChartCanvas({
     const chart = chartRef.current;
     if (!series || !chart) return;
 
-    const seriesKey = `${symbol}:${interval}`;
+    const seriesKey = `${symbol}:${interval}:${viewportContextKey}`;
     const isSeriesContextChange = prevSeriesKeyRef.current !== seriesKey;
     if (isSeriesContextChange) {
       prevSeriesKeyRef.current = seriesKey;
@@ -1076,7 +1078,7 @@ export function ChartCanvas({
     prevFirstTimestampRef.current = firstTimestamp;
     prevLastTimestampRef.current = lastCandle.timestampMs;
     prevCandlesRef.current = candles;
-  }, [candles, focusRevision, interval, symbol]);
+  }, [candles, focusRevision, interval, symbol, viewportContextKey]);
 
   // Keep the replay cut-in candle visible after future candles are masked.
   useEffect(() => {
@@ -1211,6 +1213,7 @@ export function ChartCanvas({
           )}
         {chartReady && chartRef.current && seriesRef.current && (
           <ChartDrawingOverlay
+            key={`${drawingVideoId}:${symbol}:${interval}`}
             chart={chartRef.current}
             series={seriesRef.current}
             candles={candles}

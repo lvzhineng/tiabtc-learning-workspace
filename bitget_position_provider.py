@@ -84,6 +84,7 @@ def parse_uta_fill(row):
     exec_id = str(row.get("execId") or row.get("tradeId") or "").strip()
     if not exec_id:
         return None
+    order_id = str(row.get("orderId") or "").strip() or None
     time_ms = _to_int(row.get("createdTime") or row.get("cTime"))
     if not time_ms:
         return None
@@ -101,6 +102,7 @@ def parse_uta_fill(row):
         fee = _first_float(fee_detail.get("fee"), fee_detail.get("totalFee"))
     return {
         "execId": exec_id,
+        "orderId": order_id,
         "chartSymbol": chart_symbol,
         "unifiedSymbol": raw_symbol,
         "side": side,

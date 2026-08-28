@@ -228,7 +228,215 @@
 
 /* Chart Workspace Layout */
 .posrev-chart-workspace {
-  grid-template-rows: 64px minmax(260px, 1fr) minmax(180px, auto);
+  position: relative;
+  overflow: hidden;
+  grid-template-rows: 64px minmax(0, 1fr);
+}
+
+.posrev-chart-workspace > .bitlang-chart-header {
+  flex-wrap: nowrap;
+  min-width: 0;
+  overflow: hidden;
+}
+
+.posrev-chart-workspace > .bitlang-chart-header > div:first-child {
+  flex: 0 1 360px;
+  min-width: 0;
+}
+
+.posrev-chart-workspace > .bitlang-chart-header > div:first-child > p {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.posrev-chart-title,
+.posrev-chart-header-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.posrev-chart-title h2 {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.posrev-chart-header-actions {
+  flex: 1 1 320px;
+  justify-content: flex-end;
+  overflow: hidden;
+}
+
+.posrev-chart-header-actions .bitlang-timeframes {
+  min-width: 0;
+}
+
+.posrev-header-pnl {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.posrev-detail-toggle {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  flex-shrink: 0;
+  height: 32px;
+  padding: 0 10px;
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-sm);
+  background: var(--bg-dark-700);
+  color: var(--text-secondary);
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.posrev-detail-toggle:hover,
+.posrev-detail-toggle.active {
+  border-color: color-mix(in srgb, var(--accent-blue) 55%, var(--border-color));
+  background: color-mix(in srgb, var(--accent-blue) 14%, var(--bg-dark-700));
+  color: var(--text-primary);
+}
+
+.posrev-detail-drawer {
+  position: absolute;
+  top: 64px;
+  right: 0;
+  bottom: 0;
+  z-index: 30;
+  display: flex;
+  flex-direction: column;
+  width: min(420px, calc(100% - 24px));
+  min-width: 0;
+  border-left: 1px solid var(--border-color);
+  background: var(--bg-dark-800);
+  box-shadow: -12px 0 32px rgb(0 0 0 / 22%);
+}
+
+.posrev-detail-drawer-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-shrink: 0;
+  min-height: 52px;
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--border-color);
+}
+
+.posrev-detail-drawer-header > div {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.posrev-detail-drawer-header strong {
+  font-size: 13px;
+}
+
+.posrev-detail-drawer-header span {
+  color: var(--text-muted);
+  font-size: 11px;
+}
+
+.posrev-detail-drawer-header button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 30px;
+  height: 30px;
+  padding: 0;
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+}
+
+.posrev-detail-drawer-header button:hover {
+  border-color: var(--border-color);
+  background: var(--bg-dark-700);
+  color: var(--text-primary);
+}
+
+.posrev-detail-drawer-body {
+  min-height: 0;
+  overflow: auto;
+}
+
+.posrev-detail-drawer .posrev-panel {
+  display: block;
+  min-height: 100%;
+  padding: 0;
+  background: transparent;
+}
+
+.posrev-detail-tabs {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 4px;
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--border-color);
+  background: var(--bg-dark-800);
+}
+
+.posrev-detail-tabs button {
+  height: 30px;
+  padding: 0 6px;
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text-muted);
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.posrev-detail-tabs button:hover,
+.posrev-detail-tabs button.active {
+  border-color: color-mix(in srgb, var(--accent-blue) 45%, var(--border-color));
+  background: color-mix(in srgb, var(--accent-blue) 14%, var(--bg-dark-700));
+  color: var(--text-primary);
+}
+
+.posrev-detail-drawer .posrev-metrics-grid {
+  grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
+  padding: 12px;
+}
+
+.posrev-detail-drawer .posrev-fills {
+  margin: 0;
+  padding: 12px;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+}
+
+.posrev-detail-drawer .posrev-fills-list {
+  max-height: none;
+}
+
+.posrev-detail-drawer .posrev-annotate {
+  padding: 12px;
+}
+
+.posrev-detail-drawer .posrev-annotate textarea {
+  min-height: 220px;
+  resize: vertical;
+}
+
+.posrev-detail-empty {
+  padding: 24px 8px;
+  color: var(--text-muted);
+  font-size: 12px;
+  text-align: center;
 }
 
 .posrev-dashboard-pane {
@@ -240,7 +448,7 @@
 .posrev-venue-badge {
   position: absolute;
   top: 8px;
-  right: 10px;
+  right: 116px;
   z-index: 7;
   padding: 3px 8px;
   border: 1px solid var(--border-color);
@@ -249,6 +457,35 @@
   color: var(--text-muted);
   font-size: 11px;
   pointer-events: none;
+}
+
+.posrev-copy-chart {
+  position: absolute;
+  top: 8px;
+  right: 10px;
+  z-index: 8;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: 26px;
+  padding: 0 9px;
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-sm);
+  background: color-mix(in srgb, var(--bg-dark-800) 92%, transparent);
+  color: var(--text-secondary);
+  font: inherit;
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.posrev-copy-chart:hover:not(:disabled) {
+  border-color: var(--accent-blue);
+  color: var(--text-primary);
+}
+
+.posrev-copy-chart:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
 }
 
 /* Panel & Metrics */
@@ -264,6 +501,23 @@
 }
 
 @media (max-width: 1200px) {
+  .posrev-chart-workspace > .bitlang-chart-header > div:first-child {
+    flex-basis: 190px;
+  }
+
+  .posrev-chart-workspace > .bitlang-chart-header > div:first-child > p,
+  .posrev-header-pnl {
+    display: none;
+  }
+
+  .posrev-detail-toggle {
+    width: 30px;
+    padding: 0;
+    gap: 0;
+    overflow: hidden;
+    font-size: 0;
+  }
+
   .posrev-metrics-grid {
     grid-template-columns: repeat(3, minmax(0, 1fr)) !important;
   }

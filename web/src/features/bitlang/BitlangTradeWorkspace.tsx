@@ -699,6 +699,7 @@ function BitlangTradeChart({
     return cached?.candles ?? [];
   });
   const {
+    ready: drawingReady,
     activeTool,
     setActiveTool,
     magnetEnabled,
@@ -909,6 +910,7 @@ function BitlangTradeChart({
   return (
     <div className="bitlang-chart">
       <DraggableDrawingToolbar
+        disabled={!drawingReady}
         activeTool={activeTool}
         magnetEnabled={magnetEnabled}
         selectedDrawingId={selectedDrawingId}
@@ -956,7 +958,7 @@ function BitlangTradeChart({
         onLoadLater={loadLater}
         isLoadingLater={isLoadingLater}
         drawings={drawings}
-        activeDrawingTool={activeTool}
+        activeDrawingTool={drawingReady ? activeTool : 'select'}
         selectedDrawingId={selectedDrawingId}
         magnetEnabled={magnetEnabled}
         drawingVideoId="__global__"

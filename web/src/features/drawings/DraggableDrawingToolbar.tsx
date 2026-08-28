@@ -33,6 +33,7 @@ import {
 import '@/styles/toolbar.css';
 
 interface DraggableDrawingToolbarProps {
+  disabled?: boolean;
   activeTool: ActiveToolType;
   magnetEnabled: boolean;
   selectedDrawingId: string | null;
@@ -49,6 +50,7 @@ interface DraggableDrawingToolbarProps {
   onToggleLock: () => void;
   onDeleteSelected: () => void;
   onClearAll: () => void;
+  clearAllTitle?: string;
   onOpenPaperTrading?: () => void;
   onCreatePaperTradeFromPosition?: (params: PositionToolParams) => void;
 }
@@ -90,6 +92,7 @@ const QUICK_TOOLS: Array<{
 ];
 
 export const DraggableDrawingToolbar = memo(function DraggableDrawingToolbar({
+  disabled = false,
   activeTool,
   magnetEnabled,
   selectedDrawingId,
@@ -106,6 +109,7 @@ export const DraggableDrawingToolbar = memo(function DraggableDrawingToolbar({
   onToggleLock,
   onDeleteSelected,
   onClearAll,
+  clearAllTitle = '清空当前 Symbol 所有画线',
   onOpenPaperTrading,
   onCreatePaperTradeFromPosition,
 }: DraggableDrawingToolbarProps) {
@@ -193,6 +197,7 @@ export const DraggableDrawingToolbar = memo(function DraggableDrawingToolbar({
       <div className="toolbar-button-group">
         <button
           type="button"
+          disabled={disabled}
           className={`toolbar-btn ${activeTool === 'select' ? 'active' : ''}`}
           onClick={() => onSelectTool('select')}
           title="选择指针 (Esc)"
@@ -204,6 +209,7 @@ export const DraggableDrawingToolbar = memo(function DraggableDrawingToolbar({
           <button
             key={tool}
             type="button"
+            disabled={disabled}
             className={`toolbar-btn ${activeTool === tool ? 'active' : ''}`}
             onClick={() => onSelectTool(tool)}
             title={title}
@@ -214,6 +220,7 @@ export const DraggableDrawingToolbar = memo(function DraggableDrawingToolbar({
 
         <button
           type="button"
+          disabled={disabled}
           className={`toolbar-btn ${magnetEnabled ? 'active-toggle' : ''}`}
           onClick={onToggleMagnet}
           title={magnetEnabled ? '关闭磁吸' : '开启磁吸'}
@@ -224,6 +231,7 @@ export const DraggableDrawingToolbar = memo(function DraggableDrawingToolbar({
         {onToggleHideAllDrawings && (
           <button
             type="button"
+            disabled={disabled}
             className={`toolbar-btn ${hideAllDrawings ? 'active-toggle' : ''}`}
             onClick={onToggleHideAllDrawings}
             title={hideAllDrawings ? '显示所有画图 (Alt+V)' : '隐藏所有画图 (Alt+V)'}
@@ -235,6 +243,7 @@ export const DraggableDrawingToolbar = memo(function DraggableDrawingToolbar({
         {onToggleObjectTree && (
           <button
             type="button"
+            disabled={disabled}
             className={`toolbar-btn ${isObjectTreeOpen ? 'active' : ''}`}
             onClick={onToggleObjectTree}
             title="画图图层对象树"
@@ -243,17 +252,30 @@ export const DraggableDrawingToolbar = memo(function DraggableDrawingToolbar({
           </button>
         )}
 
-        <button type="button" className="toolbar-btn" onClick={onUndo} title="撤销 (Ctrl+Z)">
+        <button
+          type="button"
+          disabled={disabled}
+          className="toolbar-btn"
+          onClick={onUndo}
+          title="撤销 (Ctrl+Z)"
+        >
           <IconUndo />
         </button>
 
-        <button type="button" className="toolbar-btn" onClick={onRedo} title="重做 (Ctrl+Y)">
+        <button
+          type="button"
+          disabled={disabled}
+          className="toolbar-btn"
+          onClick={onRedo}
+          title="重做 (Ctrl+Y)"
+        >
           <IconRedo />
         </button>
 
         {onOpenPaperTrading && (
           <button
             type="button"
+            disabled={disabled}
             className="toolbar-btn"
             onClick={onOpenPaperTrading}
             title="打开模拟交易面板"
@@ -265,6 +287,7 @@ export const DraggableDrawingToolbar = memo(function DraggableDrawingToolbar({
         {selectedDrawingId && (
           <button
             type="button"
+            disabled={disabled}
             className={`toolbar-btn ${selectedLocked ? 'active' : ''}`}
             onClick={onToggleLock}
             title={selectedLocked ? '解锁选中画线' : '锁定选中画线'}
@@ -276,7 +299,7 @@ export const DraggableDrawingToolbar = memo(function DraggableDrawingToolbar({
         <button
           type="button"
           className="toolbar-btn"
-          disabled={!selectedDrawingId}
+          disabled={disabled || !selectedDrawingId}
           onClick={onDeleteSelected}
           title="删除选中画线 (Delete)"
         >
@@ -285,9 +308,10 @@ export const DraggableDrawingToolbar = memo(function DraggableDrawingToolbar({
 
         <button
           type="button"
+          disabled={disabled}
           className="toolbar-btn"
           onClick={onClearAll}
-          title="清空当前 Symbol 所有画线"
+          title={clearAllTitle}
         >
           <IconClear />
         </button>
@@ -295,6 +319,7 @@ export const DraggableDrawingToolbar = memo(function DraggableDrawingToolbar({
         {selectedPositionInfo && onCreatePaperTradeFromPosition && (
           <button
             type="button"
+            disabled={disabled}
             className="toolbar-paper-trade-btn"
             onClick={() => onCreatePaperTradeFromPosition(selectedPositionInfo)}
             style={{

@@ -268,6 +268,20 @@ def initialize_database():
                 updated_at TEXT NOT NULL,
                 PRIMARY KEY (venue, position_id)
             );
+            CREATE TABLE IF NOT EXISTS position_drawings (
+                venue TEXT NOT NULL,
+                position_id TEXT NOT NULL,
+                id TEXT NOT NULL,
+                symbol TEXT NOT NULL,
+                interval TEXT NOT NULL,
+                tool_type TEXT NOT NULL,
+                tool_json TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                PRIMARY KEY (venue, position_id, id)
+            );
+            CREATE INDEX IF NOT EXISTS idx_position_drawings_scope
+                ON position_drawings (venue, position_id, created_at);
             CREATE TABLE IF NOT EXISTS position_tags (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 name TEXT NOT NULL UNIQUE,
@@ -283,6 +297,7 @@ def initialize_database():
             CREATE TABLE IF NOT EXISTS position_fills (
                 venue TEXT NOT NULL,
                 exec_id TEXT NOT NULL,
+                order_id TEXT,
                 chart_symbol TEXT NOT NULL,
                 unified_symbol TEXT,
                 side TEXT NOT NULL,
@@ -376,6 +391,12 @@ def initialize_database():
                 ON exchange_positions (entry_time_ms DESC);
             """
         )
+        fill_columns = {
+            row["name"]
+            for row in connection.execute("PRAGMA table_info(position_fills)").fetchall()
+        }
+        if "order_id" not in fill_columns:
+            connection.execute("ALTER TABLE position_fills ADD COLUMN order_id TEXT")
         drawing_columns = {
             row["name"] for row in connection.execute("PRAGMA table_info(chart_drawings)").fetchall()
         }
@@ -1612,17 +1633,11 @@ def load_later_candles(symbol, interval, after_timestamp, limit, cutoff_timestam
     }
 
 
-def validate_drawing(payload):
+def _validate_drawing_content(payload):
     if not isinstance(payload, dict):
         raise ValueError("画图记录必须是对象")
-    video_id = str(payload.get("videoId", "")).strip()
-    symbol = str(payload.get("symbol", ""))
-    interval = str(payload.get("interval", ""))
     drawing_id = str(payload.get("id", "")).strip()
     tool_type = str(payload.get("toolType", ""))
-    validate_market_scope(symbol, interval)
-    if not video_id or "/" in video_id or len(video_id) > 100:
-        raise ValueError("视频 ID 无效")
     if not drawing_id or len(drawing_id) > 100 or drawing_id.startswith(SYSTEM_DRAWING_PREFIX):
         raise ValueError("画图 ID 无效")
     if tool_type not in VALID_DRAWING_TYPES:
@@ -1661,6 +1676,19 @@ def validate_drawing(payload):
         raise ValueError("画图选项无效") from None
     if len(encoded.encode("utf-8")) > MAX_DRAWING_JSON_BYTES:
         raise ValueError("画图记录过大")
+    return drawing, encoded
+
+
+def validate_drawing(payload):
+    if not isinstance(payload, dict):
+        raise ValueError("画图记录必须是对象")
+    video_id = str(payload.get("videoId", "")).strip()
+    symbol = str(payload.get("symbol", ""))
+    interval = str(payload.get("interval", ""))
+    validate_market_scope(symbol, interval)
+    if not video_id or "/" in video_id or len(video_id) > 100:
+        raise ValueError("视频 ID 无效")
+    drawing, encoded = _validate_drawing_content(payload)
     return video_id, symbol, interval, drawing, encoded
 
 
@@ -1994,6 +2022,189 @@ def delete_drawings(query):
         )
 
 
+def _validate_position_drawing_scope(venue, position_id, symbol, interval):
+    cleaned_venue = str(venue or POSITION_REVIEW_VENUE).strip().lower()
+    cleaned_position_id = str(position_id or "").strip()
+    cleaned_symbol = str(symbol or "").strip().upper()
+    cleaned_interval = str(interval or "").strip()
+    if not cleaned_venue or len(cleaned_venue) > 30:
+        raise ValueError("交易所无效")
+    if not cleaned_position_id or len(cleaned_position_id) > 80:
+        raise ValueError("仓位 ID 无效")
+    if not re.match(r"^[A-Z0-9]{3,20}USDT$", cleaned_symbol):
+        raise ValueError("仓位合约格式无效")
+    if cleaned_interval not in VALID_INTERVALS:
+        raise ValueError("不支持该 K 线周期")
+    return cleaned_venue, cleaned_position_id, cleaned_symbol, cleaned_interval
+
+
+def _ensure_position_drawing_scope_exists(connection, venue, position_id, symbol):
+    row = connection.execute(
+        """SELECT chart_symbol FROM exchange_positions
+           WHERE venue = ? AND position_id = ?""",
+        (venue, position_id),
+    ).fetchone()
+    if row is None:
+        raise ValueError("仓位不存在")
+    if row["chart_symbol"] != symbol:
+        raise ValueError("仓位合约不匹配")
+
+
+def save_position_drawing(payload):
+    if not isinstance(payload, dict):
+        raise ValueError("画图记录必须是对象")
+    venue, position_id, symbol, interval = _validate_position_drawing_scope(
+        payload.get("venue"),
+        payload.get("positionId"),
+        payload.get("symbol"),
+        payload.get("interval"),
+    )
+    drawing, encoded = _validate_drawing_content(payload)
+    now = datetime.now().astimezone().isoformat()
+    with DATABASE_LOCK, database() as connection:
+        _ensure_position_drawing_scope_exists(connection, venue, position_id, symbol)
+        existing = connection.execute(
+            """SELECT created_at FROM position_drawings
+               WHERE venue = ? AND position_id = ? AND id = ?""",
+            (venue, position_id, drawing["id"]),
+        ).fetchone()
+        created_at = existing["created_at"] if existing else now
+        connection.execute(
+            """INSERT INTO position_drawings
+               (venue, position_id, id, symbol, interval, tool_type, tool_json,
+                created_at, updated_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+               ON CONFLICT(venue, position_id, id) DO UPDATE SET
+                 symbol = excluded.symbol, interval = excluded.interval,
+                 tool_type = excluded.tool_type, tool_json = excluded.tool_json,
+                 updated_at = excluded.updated_at""",
+            (
+                venue,
+                position_id,
+                drawing["id"],
+                symbol,
+                interval,
+                drawing["toolType"],
+                encoded,
+                created_at,
+                now,
+            ),
+        )
+    return {**drawing, "interval": interval}
+
+
+def list_position_drawings(venue, position_id, symbol, interval):
+    venue, position_id, symbol, _interval = _validate_position_drawing_scope(
+        venue, position_id, symbol, interval
+    )
+    with DATABASE_LOCK, database() as connection:
+        _ensure_position_drawing_scope_exists(connection, venue, position_id, symbol)
+        rows = connection.execute(
+            """SELECT interval, tool_json FROM position_drawings
+               WHERE venue = ? AND position_id = ? AND symbol = ?
+               ORDER BY created_at ASC""",
+            (venue, position_id, symbol),
+        ).fetchall()
+    return [
+        {**json.loads(row["tool_json"]), "interval": row["interval"]}
+        for row in rows
+    ]
+
+
+def replace_position_drawings(payload):
+    if not isinstance(payload, dict):
+        raise ValueError("画图批量记录必须是对象")
+    venue, position_id, symbol, interval = _validate_position_drawing_scope(
+        payload.get("venue"),
+        payload.get("positionId"),
+        payload.get("symbol"),
+        payload.get("interval"),
+    )
+    drawings = payload.get("drawings")
+    if not isinstance(drawings, list) or len(drawings) > 500:
+        raise ValueError("画图批量记录无效")
+    validated = []
+    seen_ids = set()
+    for item in drawings:
+        if not isinstance(item, dict):
+            raise ValueError("画图记录必须是对象")
+        item_interval = str(item.get("interval", interval))
+        if item_interval not in VALID_INTERVALS:
+            raise ValueError("不支持该 K 线周期")
+        drawing, encoded = _validate_drawing_content(item)
+        if drawing["id"] in seen_ids:
+            raise ValueError("画图 ID 重复")
+        seen_ids.add(drawing["id"])
+        validated.append((item_interval, drawing, encoded))
+
+    now = datetime.now().astimezone().isoformat()
+    with DATABASE_LOCK, database() as connection:
+        _ensure_position_drawing_scope_exists(connection, venue, position_id, symbol)
+        created_times = {
+            row["id"]: row["created_at"]
+            for row in connection.execute(
+                """SELECT id, created_at FROM position_drawings
+                   WHERE venue = ? AND position_id = ?""",
+                (venue, position_id),
+            ).fetchall()
+        }
+        connection.execute(
+            "DELETE FROM position_drawings WHERE venue = ? AND position_id = ?",
+            (venue, position_id),
+        )
+        connection.executemany(
+            """INSERT INTO position_drawings
+               (venue, position_id, id, symbol, interval, tool_type, tool_json,
+                created_at, updated_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            [
+                (
+                    venue,
+                    position_id,
+                    drawing["id"],
+                    symbol,
+                    item_interval,
+                    drawing["toolType"],
+                    encoded,
+                    created_times.get(drawing["id"], now),
+                    now,
+                )
+                for item_interval, drawing, encoded in validated
+            ],
+        )
+    return [
+        {**drawing, "interval": item_interval}
+        for item_interval, drawing, _encoded in validated
+    ]
+
+
+def delete_position_drawings(query):
+    drawing_id = str(query.get("id", [""])[0]).strip()
+    venue, position_id, symbol, interval = _validate_position_drawing_scope(
+        query.get("venue", [POSITION_REVIEW_VENUE])[0],
+        query.get("positionId", [""])[0],
+        query.get("symbol", [""])[0],
+        query.get("interval", [""])[0],
+    )
+    if drawing_id and (
+        len(drawing_id) > 100 or drawing_id.startswith(SYSTEM_DRAWING_PREFIX)
+    ):
+        raise ValueError("画图 ID 无效")
+    with DATABASE_LOCK, database() as connection:
+        _ensure_position_drawing_scope_exists(connection, venue, position_id, symbol)
+        if drawing_id:
+            connection.execute(
+                """DELETE FROM position_drawings
+                   WHERE venue = ? AND position_id = ? AND id = ?""",
+                (venue, position_id, drawing_id),
+            )
+            return
+        connection.execute(
+            "DELETE FROM position_drawings WHERE venue = ? AND position_id = ?",
+            (venue, position_id),
+        )
+
+
 def _fernet():
     with CREDENTIAL_LOCK:
         RUN_DIR.mkdir(parents=True, exist_ok=True)
@@ -2178,11 +2389,27 @@ def _migrate_open_annotations(connection, closed_position):
             (closed_position["positionId"], closed_position["venue"], old_id),
         )
         connection.execute(
+            """INSERT INTO position_drawings (
+                   venue, position_id, id, symbol, interval, tool_type,
+                   tool_json, created_at, updated_at
+               )
+               SELECT venue, ?, id, symbol, interval, tool_type,
+                      tool_json, created_at, updated_at
+               FROM position_drawings
+               WHERE venue = ? AND position_id = ?
+               ON CONFLICT(venue, position_id, id) DO NOTHING""",
+            (closed_position["positionId"], closed_position["venue"], old_id),
+        )
+        connection.execute(
             "DELETE FROM position_notes WHERE venue = ? AND position_id = ?",
             (closed_position["venue"], old_id),
         )
         connection.execute(
             "DELETE FROM position_tag_map WHERE venue = ? AND position_id = ?",
+            (closed_position["venue"], old_id),
+        )
+        connection.execute(
+            "DELETE FROM position_drawings WHERE venue = ? AND position_id = ?",
             (closed_position["venue"], old_id),
         )
         connection.execute(
@@ -2194,10 +2421,11 @@ def _migrate_open_annotations(connection, closed_position):
 def _upsert_position_fill(connection, fill, synced_at):
     connection.execute(
         """INSERT INTO position_fills (
-               venue, exec_id, chart_symbol, unified_symbol, side, trade_side,
-               price, quantity, pnl, fee, time_ms, synced_at
-           ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+               venue, exec_id, order_id, chart_symbol, unified_symbol, side,
+               trade_side, price, quantity, pnl, fee, time_ms, synced_at
+           ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
            ON CONFLICT(venue, exec_id) DO UPDATE SET
+             order_id = excluded.order_id,
              chart_symbol = excluded.chart_symbol,
              unified_symbol = excluded.unified_symbol,
              side = excluded.side,
@@ -2211,6 +2439,7 @@ def _upsert_position_fill(connection, fill, synced_at):
         (
             POSITION_REVIEW_VENUE,
             fill["execId"],
+            fill.get("orderId"),
             fill["chartSymbol"],
             fill.get("unifiedSymbol"),
             fill["side"],
@@ -2228,6 +2457,7 @@ def _upsert_position_fill(connection, fill, synced_at):
 def _fill_from_row(row):
     return {
         "execId": row["exec_id"],
+        "orderId": row["order_id"],
         "chartSymbol": row["chart_symbol"],
         "unifiedSymbol": row["unified_symbol"],
         "side": row["side"],
@@ -2238,6 +2468,63 @@ def _fill_from_row(row):
         "fee": row["fee"],
         "timeMs": row["time_ms"],
     }
+
+
+def _aggregate_fill_operations(items):
+    groups = {}
+    for index, item in enumerate(items):
+        order_id = item.get("orderId")
+        key = (
+            ("order", order_id, item.get("role"))
+            if order_id
+            else ("exec", item.get("execId") or str(index))
+        )
+        groups.setdefault(key, []).append(item)
+
+    operations = []
+    for group in groups.values():
+        first = min(
+            group,
+            key=lambda item: (item.get("timeMs") or 0, item.get("execId") or ""),
+        )
+        last = max(
+            group,
+            key=lambda item: (item.get("timeMs") or 0, item.get("execId") or ""),
+        )
+        quantities = [
+            item.get("quantity") for item in group if item.get("quantity") is not None
+        ]
+        weighted_prices = [
+            (item.get("price"), item.get("quantity"))
+            for item in group
+            if item.get("price") is not None
+            and item.get("quantity") is not None
+            and item.get("quantity") > 0
+        ]
+        total_weight = sum(quantity for _, quantity in weighted_prices)
+        if total_weight > 0:
+            price = sum(price * quantity for price, quantity in weighted_prices) / total_weight
+        else:
+            price = next(
+                (item.get("price") for item in group if item.get("price") is not None),
+                None,
+            )
+        pnl_values = [item.get("pnl") for item in group if item.get("pnl") is not None]
+        fee_values = [item.get("fee") for item in group if item.get("fee") is not None]
+        operations.append(
+            {
+                **first,
+                "quantity": sum(quantities) if quantities else None,
+                "price": price,
+                "pnl": sum(pnl_values) if pnl_values else None,
+                "fee": sum(fee_values) if fee_values else None,
+                "_lastTimeMs": last.get("timeMs") or first.get("timeMs"),
+            }
+        )
+    return sorted(
+        operations,
+        key=lambda item: (item.get("timeMs") or 0, item.get("execId") or ""),
+    )
 
 
 def assign_fills_to_positions(positions, fills):
@@ -2280,10 +2567,17 @@ def assign_fills_to_positions(positions, fills):
             grouped.get(position["positionId"], []),
             key=lambda item: (item.get("timeMs") or 0, item.get("execId") or ""),
         )
+        items = _aggregate_fill_operations(items)
         close_items = [item for item in items if item.get("role") == "close"]
         last_close_id = None
         if position.get("status") == "closed" and close_items:
-            last_close_id = close_items[-1].get("execId")
+            last_close_id = max(
+                close_items,
+                key=lambda item: (
+                    item.get("_lastTimeMs") or item.get("timeMs") or 0,
+                    item.get("execId") or "",
+                ),
+            ).get("execId")
         seen_open = False
         annotated = []
         for item in items:
@@ -2309,6 +2603,47 @@ def assign_fills_to_positions(positions, fills):
             )
         assigned[position["positionId"]] = annotated
     return assigned
+
+
+def _delete_unannotated_stale_open_positions(connection, active_position_ids):
+    stale_open = connection.execute(
+        """SELECT position_id FROM exchange_positions
+           WHERE venue = ? AND status = 'open'""",
+        (POSITION_REVIEW_VENUE,),
+    ).fetchall()
+    for row in stale_open:
+        position_id = row["position_id"]
+        if position_id in active_position_ids:
+            continue
+        has_annotations = connection.execute(
+            """SELECT
+                 EXISTS(
+                   SELECT 1 FROM position_notes
+                   WHERE venue = ? AND position_id = ?
+                 )
+                 OR EXISTS(
+                   SELECT 1 FROM position_tag_map
+                   WHERE venue = ? AND position_id = ?
+                 )
+                 OR EXISTS(
+                   SELECT 1 FROM position_drawings
+                   WHERE venue = ? AND position_id = ?
+                 )""",
+            (
+                POSITION_REVIEW_VENUE,
+                position_id,
+                POSITION_REVIEW_VENUE,
+                position_id,
+                POSITION_REVIEW_VENUE,
+                position_id,
+            ),
+        ).fetchone()[0]
+        if has_annotations:
+            continue
+        connection.execute(
+            "DELETE FROM exchange_positions WHERE venue = ? AND position_id = ?",
+            (POSITION_REVIEW_VENUE, position_id),
+        )
 
 
 def sync_bitget_positions():
@@ -2357,17 +2692,7 @@ def _sync_bitget_positions():
         for position in closed:
             _migrate_open_annotations(connection, position)
             _upsert_exchange_position(connection, position, synced_at)
-        stale_open = connection.execute(
-            """SELECT position_id FROM exchange_positions
-               WHERE venue = ? AND status = 'open'""",
-            (POSITION_REVIEW_VENUE,),
-        ).fetchall()
-        for row in stale_open:
-            if row["position_id"] not in open_ids:
-                connection.execute(
-                    "DELETE FROM exchange_positions WHERE venue = ? AND position_id = ?",
-                    (POSITION_REVIEW_VENUE, row["position_id"]),
-                )
+        _delete_unannotated_stale_open_positions(connection, open_ids)
         for position in opened:
             _upsert_exchange_position(connection, position, synced_at)
         if fills_ok:
@@ -2531,7 +2856,7 @@ def _read_position_review(connection):
            ORDER BY COALESCE(p.exit_time_ms, p.entry_time_ms) DESC"""
     ).fetchall()
     fill_rows = connection.execute(
-        """SELECT exec_id, chart_symbol, unified_symbol, side, trade_side,
+        """SELECT exec_id, order_id, chart_symbol, unified_symbol, side, trade_side,
                   price, quantity, pnl, fee, time_ms
            FROM position_fills
            WHERE venue = ?
@@ -3063,6 +3388,17 @@ class StudyHandler(BaseHTTPRequestHandler):
                 return self.send_json(HTTPStatus.BAD_REQUEST, {"error": str(error)})
             except RuntimeError as error:
                 return self.send_json(HTTPStatus.BAD_GATEWAY, {"error": str(error)})
+        if parsed.path == "/api/position-review/drawings":
+            try:
+                drawings = list_position_drawings(
+                    query.get("venue", [POSITION_REVIEW_VENUE])[0],
+                    query.get("positionId", [""])[0],
+                    query.get("symbol", [""])[0],
+                    query.get("interval", [""])[0],
+                )
+                return self.send_json(HTTPStatus.OK, {"drawings": drawings})
+            except ValueError as error:
+                return self.send_json(HTTPStatus.BAD_REQUEST, {"error": str(error)})
         if parsed.path == "/api/chart/candles":
             try:
                 query = parse_qs(parsed.query)
@@ -3143,6 +3479,8 @@ class StudyHandler(BaseHTTPRequestHandler):
                 return self.send_json(HTTPStatus.OK, save_paper_trade(payload))
             if parsed.path == "/api/chart/drawings":
                 return self.send_json(HTTPStatus.OK, save_drawing(payload))
+            if parsed.path == "/api/position-review/drawings":
+                return self.send_json(HTTPStatus.OK, save_position_drawing(payload))
             if parsed.path == "/api/position-review/credentials":
                 return self.send_json(HTTPStatus.OK, save_bitget_credentials(payload))
             if parsed.path == "/api/position-review/sync":
@@ -3174,6 +3512,15 @@ class StudyHandler(BaseHTTPRequestHandler):
             try:
                 payload = self.read_json_body()
                 return self.send_json(HTTPStatus.OK, {"drawings": replace_drawings(payload)})
+            except (ValueError, json.JSONDecodeError, AttributeError) as error:
+                return self.send_json(HTTPStatus.BAD_REQUEST, {"error": str(error)})
+        if path == "/api/position-review/drawings":
+            try:
+                payload = self.read_json_body()
+                return self.send_json(
+                    HTTPStatus.OK,
+                    {"drawings": replace_position_drawings(payload)},
+                )
             except (ValueError, json.JSONDecodeError, AttributeError) as error:
                 return self.send_json(HTTPStatus.BAD_REQUEST, {"error": str(error)})
         if path == "/api/chart/config":
@@ -3215,6 +3562,9 @@ class StudyHandler(BaseHTTPRequestHandler):
                     payload = self.read_json_body()
                     raw_id = payload.get("id") or payload.get("tagId")
                 delete_position_tag(int(raw_id))
+                return self.send_json(HTTPStatus.OK, {"ok": True})
+            if parsed.path == "/api/position-review/drawings":
+                delete_position_drawings(query)
                 return self.send_json(HTTPStatus.OK, {"ok": True})
             if parsed.path != "/api/chart/drawings":
                 return self.send_error(HTTPStatus.NOT_FOUND)

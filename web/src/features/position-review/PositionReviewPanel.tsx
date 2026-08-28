@@ -40,6 +40,9 @@ export function PositionReviewPanel({
   const [tagName, setTagName] = useState('');
   const [saving, setSaving] = useState(false);
   const [tagBusy, setTagBusy] = useState(false);
+  const [activeTab, setActiveTab] = useState<'overview' | 'operations' | 'notes'>(
+    'overview'
+  );
   const positionRef = useRef(position);
   const noteSaveQueueRef = useRef<Promise<void>>(Promise.resolve());
   const pendingNoteSaveCountRef = useRef(0);
@@ -227,49 +230,84 @@ export function PositionReviewPanel({
 
   return (
     <div className="bitlang-review-panel posrev-panel">
-      <div className="bitlang-metrics posrev-metrics-grid">
-        {metrics.map((item) => (
-          <div key={item.label}>
-            <span>{item.label}</span>
-            <strong className={item.isProfit ? 'profit' : item.isLoss ? 'loss' : ''}>
-              {item.value}
-            </strong>
-          </div>
-        ))}
+      <div className="posrev-detail-tabs" role="tablist" aria-label="复盘详情分类">
+        <button
+          type="button"
+          role="tab"
+          aria-selected={activeTab === 'overview'}
+          className={activeTab === 'overview' ? 'active' : ''}
+          onClick={() => setActiveTab('overview')}
+        >
+          概览
+        </button>
+        <button
+          type="button"
+          role="tab"
+          aria-selected={activeTab === 'operations'}
+          className={activeTab === 'operations' ? 'active' : ''}
+          onClick={() => setActiveTab('operations')}
+        >
+          操作路径
+        </button>
+        <button
+          type="button"
+          role="tab"
+          aria-selected={activeTab === 'notes'}
+          className={activeTab === 'notes' ? 'active' : ''}
+          onClick={() => setActiveTab('notes')}
+        >
+          复盘笔记
+        </button>
       </div>
-      {(position.fills?.length ?? 0) > 0 && (
-        <div className="posrev-fills">
-          <div className="posrev-fills-header">成交路径</div>
-          <ul className="posrev-fills-list">
-            {(position.fills ?? []).map((fill) => {
-              const fillPnl = fill.pnl;
-              return (
-                <li key={fill.execId} className={`posrev-fill-row kind-${fill.kind}`}>
-                  <span className="posrev-fill-kind">{FILL_KIND_LABEL[fill.kind]}</span>
-                  <span className="posrev-fill-time">
-                    {formatShanghaiTimeShort(fill.timeMs)}
-                  </span>
-                  <span className="posrev-fill-qty">
-                    {formatNumber(fill.quantity, 4)} @ {formatNumber(fill.price, 4)}
-                  </span>
-                  <span
-                    className={`posrev-fill-pnl ${
-                      fillPnl == null ? '' : fillPnl >= 0 ? 'profit' : 'loss'
-                    }`}
-                  >
-                    {fill.kind === 'open' || fill.kind === 'scaleIn'
-                      ? ''
-                      : fillPnl == null
-                        ? '—'
-                        : `${fillPnl >= 0 ? '+' : ''}${formatNumber(fillPnl)}`}
-                  </span>
-                </li>
-              );
-            })}
-          </ul>
+      {activeTab === 'overview' && (
+        <div className="bitlang-metrics posrev-metrics-grid" role="tabpanel">
+          {metrics.map((item) => (
+            <div key={item.label}>
+              <span>{item.label}</span>
+              <strong className={item.isProfit ? 'profit' : item.isLoss ? 'loss' : ''}>
+                {item.value}
+              </strong>
+            </div>
+          ))}
         </div>
       )}
-      <div className="posrev-annotate">
+      {activeTab === 'operations' && (
+        <div className="posrev-fills" role="tabpanel">
+          {(position.fills?.length ?? 0) > 0 ? (
+            <ul className="posrev-fills-list">
+              {(position.fills ?? []).map((fill) => {
+                const fillPnl = fill.pnl;
+                return (
+                  <li key={fill.execId} className={`posrev-fill-row kind-${fill.kind}`}>
+                    <span className="posrev-fill-kind">{FILL_KIND_LABEL[fill.kind]}</span>
+                    <span className="posrev-fill-time">
+                      {formatShanghaiTimeShort(fill.timeMs)}
+                    </span>
+                    <span className="posrev-fill-qty">
+                      {formatNumber(fill.quantity, 4)} @ {formatNumber(fill.price, 4)}
+                    </span>
+                    <span
+                      className={`posrev-fill-pnl ${
+                        fillPnl == null ? '' : fillPnl >= 0 ? 'profit' : 'loss'
+                      }`}
+                    >
+                      {fill.kind === 'open' || fill.kind === 'scaleIn'
+                        ? ''
+                        : fillPnl == null
+                          ? '—'
+                          : `${fillPnl >= 0 ? '+' : ''}${formatNumber(fillPnl)}`}
+                    </span>
+                  </li>
+                );
+              })}
+            </ul>
+          ) : (
+            <div className="posrev-detail-empty">暂无成交操作明细</div>
+          )}
+        </div>
+      )}
+      {activeTab === 'notes' && (
+      <div className="posrev-annotate" role="tabpanel">
         <div className="posrev-annotate-header">
           <label className="posrev-note-label">
             <span>备注 {saving ? '保存中' : ''}</span>
@@ -363,6 +401,7 @@ export function PositionReviewPanel({
           </div>
         </div>
       </div>
+      )}
     </div>
   );
 }

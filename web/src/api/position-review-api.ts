@@ -1,5 +1,6 @@
 import { ApiError, requestJson } from './http';
 import type { Candlestick } from '@/domain/candle';
+import type { PersistedDrawing } from '@/domain/drawing';
 import { TIMEFRAME_SECONDS_MAP, type ReviewTimeframe } from '@/domain/timeframe';
 import {
   rememberCandleWindow,
@@ -180,6 +181,134 @@ export async function savePositionTagMap(payload: {
     method: 'POST',
     body: JSON.stringify(payload),
   });
+}
+
+export type PositionDrawingScope = {
+  venue: string;
+  positionId: string;
+};
+
+type PositionDrawingResponse = {
+  id: string;
+  toolType: string;
+  points: Array<{ timestamp: number; price: number }>;
+  options: Record<string, unknown>;
+  interval?: ReviewTimeframe;
+};
+
+function toPositionDrawing(
+  raw: PositionDrawingResponse,
+  positionId: string,
+  symbol: string,
+  interval: ReviewTimeframe
+): PersistedDrawing {
+  return {
+    id: raw.id,
+    videoId: positionId,
+    symbol,
+    interval: raw.interval || interval,
+    toolType: raw.toolType,
+    points: raw.points || [],
+    options: raw.options || {},
+  };
+}
+
+export async function fetchPositionDrawings(
+  scope: PositionDrawingScope,
+  symbol: string,
+  interval: ReviewTimeframe,
+  signal?: AbortSignal
+): Promise<PersistedDrawing[]> {
+  const params = new URLSearchParams({
+    venue: scope.venue,
+    positionId: scope.positionId,
+    symbol,
+    interval,
+  });
+  const data = await requestJson<{ drawings: PositionDrawingResponse[] }>(
+    `/api/position-review/drawings?${params}`,
+    { signal }
+  );
+  return (data.drawings || []).map((raw) =>
+    toPositionDrawing(raw, scope.positionId, symbol, interval)
+  );
+}
+
+export async function savePositionDrawing(
+  scope: PositionDrawingScope,
+  drawing: PersistedDrawing
+): Promise<PersistedDrawing> {
+  const saved = await requestJson<PositionDrawingResponse>(
+    '/api/position-review/drawings',
+    {
+      method: 'POST',
+      body: JSON.stringify({
+        venue: scope.venue,
+        positionId: scope.positionId,
+        id: drawing.id,
+        symbol: drawing.symbol,
+        interval: drawing.interval,
+        toolType: drawing.toolType,
+        points: drawing.points,
+        options: drawing.options,
+      }),
+    }
+  );
+  return toPositionDrawing(
+    saved,
+    scope.positionId,
+    drawing.symbol,
+    drawing.interval
+  );
+}
+
+export async function replacePositionDrawings(
+  scope: PositionDrawingScope,
+  symbol: string,
+  interval: ReviewTimeframe,
+  drawings: PersistedDrawing[]
+): Promise<PersistedDrawing[]> {
+  const data = await requestJson<{ drawings: PositionDrawingResponse[] }>(
+    '/api/position-review/drawings',
+    {
+      method: 'PUT',
+      body: JSON.stringify({
+        venue: scope.venue,
+        positionId: scope.positionId,
+        symbol,
+        interval,
+        drawings: drawings.map((drawing) => ({
+          id: drawing.id,
+          interval: drawing.interval,
+          toolType: drawing.toolType,
+          points: drawing.points,
+          options: drawing.options,
+        })),
+      }),
+    }
+  );
+  return (data.drawings || []).map((raw) =>
+    toPositionDrawing(raw, scope.positionId, symbol, interval)
+  );
+}
+
+export async function deletePositionDrawing(
+  scope: PositionDrawingScope,
+  symbol: string,
+  interval: ReviewTimeframe,
+  id?: string
+): Promise<void> {
+  const params = new URLSearchParams({
+    venue: scope.venue,
+    positionId: scope.positionId,
+    symbol,
+    interval,
+  });
+  if (id) params.set('id', id);
+  await requestJson<{ ok: boolean }>(
+    `/api/position-review/drawings?${params}`,
+    { method: 'DELETE' }
+  );
 }
 
 async function requestPositionCandles(

@@ -692,6 +692,171 @@ class PositionReviewStorageTests(unittest.TestCase):
         positions_after = study_server.list_position_review()
         self.assertEqual(positions_after[0]["tagIds"], [tag2["id"]])
 
+    def test_position_drawings_persist_per_position_across_timeframes(self):
+        first = {
+            **sample_drawing(),
+            "venue": "bitget",
+            "positionId": "pos-1",
+        }
+        saved = study_server.save_position_drawing(first)
+        self.assertEqual(saved["interval"], "60")
+        self.assertEqual(
+            study_server.list_position_drawings(
+                "bitget", "pos-1", "BTCUSDT", "15"
+            ),
+            [saved],
+        )
+
+        second = {
+            **sample_drawing(
+                id="drawing-2",
+                interval="15",
+                toolType="HorizontalLine",
+                points=[{"timestamp": 1700000000000, "price": 60500.0}],
+            ),
+            "venue": "bitget",
+            "positionId": "pos-1",
+        }
+        replaced = study_server.replace_position_drawings(
+            {
+                "venue": "bitget",
+                "positionId": "pos-1",
+                "symbol": "BTCUSDT",
+                "interval": "15",
+                "drawings": [saved, second],
+            }
+        )
+        self.assertEqual(
+            {(item["id"], item["interval"]) for item in replaced},
+            {("drawing-1", "60"), ("drawing-2", "15")},
+        )
+
+        study_server.delete_position_drawings(
+            {
+                "id": ["drawing-1"],
+                "venue": ["bitget"],
+                "positionId": ["pos-1"],
+                "symbol": ["BTCUSDT"],
+                "interval": ["15"],
+            }
+        )
+        remaining = study_server.list_position_drawings(
+            "bitget", "pos-1", "BTCUSDT", "60"
+        )
+        self.assertEqual([item["id"] for item in remaining], ["drawing-2"])
+
+        study_server.delete_position_drawings(
+            {
+                "venue": ["bitget"],
+                "positionId": ["pos-1"],
+                "symbol": ["BTCUSDT"],
+                "interval": ["60"],
+            }
+        )
+        self.assertEqual(
+            study_server.list_position_drawings(
+                "bitget", "pos-1", "BTCUSDT", "60"
+            ),
+            [],
+        )
+
+    def test_position_drawing_rejects_unknown_position(self):
+        with self.assertRaisesRegex(ValueError, "仓位不存在"):
+            study_server.save_position_drawing(
+                {
+                    **sample_drawing(),
+                    "venue": "bitget",
+                    "positionId": "missing",
+                }
+            )
+
+    def test_position_drawing_accepts_provider_symbol_length(self):
+        long_symbol = "ABCDEFGHIJKLMNOPQRSTUSDT"
+        with study_server.DATABASE_LOCK, study_server.database() as connection:
+            study_server._upsert_exchange_position(
+                connection,
+                {
+                    "venue": "bitget",
+                    "positionId": "long-symbol-position",
+                    "unifiedSymbol": "ABCDEFGHIJKLMNOPQRST/USDT:USDT",
+                    "chartSymbol": long_symbol,
+                    "side": "long",
+                    "status": "closed",
+                    "entryPrice": 1.0,
+                    "exitPrice": 1.1,
+                    "contracts": 1.0,
+                    "leverage": 1.0,
+                    "marginMode": "crossed",
+                    "hedged": False,
+                    "realizedPnl": 0.1,
+                    "netPnl": 0.1,
+                    "funding": 0.0,
+                    "openFee": 0.0,
+                    "closeFee": 0.0,
+                    "entryTimeMs": 1700000000000,
+                    "exitTimeMs": 1700000100000,
+                },
+                "2026-08-28T12:00:00+08:00",
+            )
+        saved = study_server.save_position_drawing(
+            {
+                **sample_drawing(symbol=long_symbol),
+                "venue": "bitget",
+                "positionId": "long-symbol-position",
+            }
+        )
+        self.assertEqual(saved["id"], "drawing-1")
+
+    def test_stale_open_with_drawings_is_kept_until_migration(self):
+        base = {
+            "venue": "bitget",
+            "unifiedSymbol": "ETH/USDT:USDT",
+            "chartSymbol": "ETHUSDT",
+            "side": "long",
+            "status": "open",
+            "entryPrice": 3000.0,
+            "exitPrice": None,
+            "contracts": 1.0,
+            "leverage": 5.0,
+            "marginMode": "crossed",
+            "hedged": False,
+            "realizedPnl": None,
+            "netPnl": None,
+            "funding": None,
+            "openFee": 0.1,
+            "closeFee": None,
+            "entryTimeMs": 1800000000000,
+            "exitTimeMs": None,
+        }
+        with study_server.DATABASE_LOCK, study_server.database() as connection:
+            study_server._upsert_exchange_position(
+                connection,
+                {**base, "positionId": "open-with-drawing"},
+                "2026-08-28T12:00:00+08:00",
+            )
+            study_server._upsert_exchange_position(
+                connection,
+                {**base, "positionId": "open-without-annotation"},
+                "2026-08-28T12:00:00+08:00",
+            )
+        study_server.save_position_drawing(
+            {
+                **sample_drawing(symbol="ETHUSDT"),
+                "venue": "bitget",
+                "positionId": "open-with-drawing",
+            }
+        )
+        with study_server.DATABASE_LOCK, study_server.database() as connection:
+            study_server._delete_unannotated_stale_open_positions(connection, set())
+            remaining = {
+                row["position_id"]
+                for row in connection.execute(
+                    "SELECT position_id FROM exchange_positions"
+                ).fetchall()
+            }
+        self.assertIn("open-with-drawing", remaining)
+        self.assertNotIn("open-without-annotation", remaining)
+
     def test_upsert_keeps_leverage_when_closed_history_omits_it(self):
         with study_server.DATABASE_LOCK, study_server.database() as connection:
             study_server._upsert_exchange_position(
@@ -759,6 +924,14 @@ class PositionReviewStorageTests(unittest.TestCase):
             study_server._upsert_exchange_position(
                 connection, open_position, "2026-08-27T12:00:00+08:00"
             )
+        study_server.save_position_drawing(
+            {
+                **sample_drawing(symbol="ETHUSDT"),
+                "venue": "bitget",
+                "positionId": open_position["positionId"],
+            }
+        )
+        with study_server.DATABASE_LOCK, study_server.database() as connection:
             study_server._migrate_open_annotations(connection, closed_position)
             study_server._upsert_exchange_position(
                 connection, closed_position, "2026-08-27T12:00:00+08:00"
@@ -768,6 +941,10 @@ class PositionReviewStorageTests(unittest.TestCase):
         }
         self.assertEqual(positions["eth-closed-1"]["leverage"], 8.0)
         self.assertNotIn("open:ETHUSDT:long:1800000000000", positions)
+        drawings = study_server.list_position_drawings(
+            "bitget", "eth-closed-1", "ETHUSDT", "60"
+        )
+        self.assertEqual([item["id"] for item in drawings], ["drawing-1"])
 
     def test_assign_fills_open_reduce_close(self):
         positions = [
@@ -817,6 +994,145 @@ class PositionReviewStorageTests(unittest.TestCase):
             [item["kind"] for item in assigned["pos-a"]],
             ["open", "reduce", "close"],
         )
+
+    def test_assign_fills_aggregates_exchange_matches_by_order(self):
+        positions = [
+            {
+                "positionId": "pos-a",
+                "chartSymbol": "BTCUSDT",
+                "side": "long",
+                "status": "closed",
+                "entryTimeMs": 1_000,
+                "exitTimeMs": 5_000,
+            }
+        ]
+        fills = [
+            {
+                "execId": "open-1",
+                "orderId": "open-order",
+                "chartSymbol": "BTCUSDT",
+                "side": "buy",
+                "tradeSide": "open",
+                "timeMs": 1_000,
+                "price": 100.0,
+                "quantity": 0.4,
+                "pnl": 0.0,
+            },
+            {
+                "execId": "open-2",
+                "orderId": "open-order",
+                "chartSymbol": "BTCUSDT",
+                "side": "buy",
+                "tradeSide": "open",
+                "timeMs": 1_001,
+                "price": 110.0,
+                "quantity": 0.6,
+                "pnl": 0.0,
+            },
+            {
+                "execId": "take-profit-1",
+                "orderId": "take-profit-order",
+                "chartSymbol": "BTCUSDT",
+                "side": "sell",
+                "tradeSide": "close",
+                "timeMs": 3_000,
+                "price": 120.0,
+                "quantity": 0.2,
+                "pnl": 4.0,
+            },
+            {
+                "execId": "take-profit-2",
+                "orderId": "take-profit-order",
+                "chartSymbol": "BTCUSDT",
+                "side": "sell",
+                "tradeSide": "close",
+                "timeMs": 3_001,
+                "price": 121.0,
+                "quantity": 0.3,
+                "pnl": 6.0,
+            },
+            {
+                "execId": "close-1",
+                "orderId": "close-order",
+                "chartSymbol": "BTCUSDT",
+                "side": "sell",
+                "tradeSide": "close",
+                "timeMs": 5_000,
+                "price": 130.0,
+                "quantity": 0.5,
+                "pnl": 15.0,
+            },
+        ]
+
+        assigned = study_server.assign_fills_to_positions(positions, fills)["pos-a"]
+
+        self.assertEqual([item["kind"] for item in assigned], ["open", "reduce", "close"])
+        self.assertEqual([item["quantity"] for item in assigned], [1.0, 0.5, 0.5])
+        self.assertAlmostEqual(assigned[0]["price"], 106.0)
+        self.assertAlmostEqual(assigned[1]["price"], 120.6)
+        self.assertEqual(assigned[1]["pnl"], 10.0)
+
+    def test_assign_fills_uses_last_match_time_for_interleaved_close_orders(self):
+        positions = [
+            {
+                "positionId": "pos-a",
+                "chartSymbol": "BTCUSDT",
+                "side": "long",
+                "status": "closed",
+                "entryTimeMs": 1_000,
+                "exitTimeMs": 6_000,
+            }
+        ]
+        fills = [
+            {
+                "execId": "open",
+                "orderId": "open-order",
+                "chartSymbol": "BTCUSDT",
+                "side": "buy",
+                "tradeSide": "open",
+                "timeMs": 1_000,
+                "price": 100.0,
+                "quantity": 1.0,
+                "pnl": 0.0,
+            },
+            {
+                "execId": "close-a-1",
+                "orderId": "close-order-a",
+                "chartSymbol": "BTCUSDT",
+                "side": "sell",
+                "tradeSide": "close",
+                "timeMs": 3_000,
+                "price": 110.0,
+                "quantity": 0.2,
+                "pnl": 2.0,
+            },
+            {
+                "execId": "close-b",
+                "orderId": "close-order-b",
+                "chartSymbol": "BTCUSDT",
+                "side": "sell",
+                "tradeSide": "close",
+                "timeMs": 5_000,
+                "price": 115.0,
+                "quantity": 0.3,
+                "pnl": 4.5,
+            },
+            {
+                "execId": "close-a-2",
+                "orderId": "close-order-a",
+                "chartSymbol": "BTCUSDT",
+                "side": "sell",
+                "tradeSide": "close",
+                "timeMs": 6_000,
+                "price": 120.0,
+                "quantity": 0.5,
+                "pnl": 10.0,
+            },
+        ]
+        assigned = study_server.assign_fills_to_positions(positions, fills)["pos-a"]
+        kinds_by_exec = {item["execId"]: item["kind"] for item in assigned}
+        self.assertEqual(kinds_by_exec["close-a-1"], "close")
+        self.assertEqual(kinds_by_exec["close-b"], "reduce")
 
     def test_assign_fills_does_not_cross_adjacent_positions(self):
         positions = [
@@ -898,6 +1214,7 @@ class PositionReviewStorageTests(unittest.TestCase):
             }
         )
         self.assertEqual(parsed["execId"], "1")
+        self.assertEqual(parsed["orderId"], "1")
         self.assertEqual(parsed["chartSymbol"], "BTCUSDT")
         self.assertEqual(parsed["side"], "sell")
         self.assertEqual(parsed["tradeSide"], "close")

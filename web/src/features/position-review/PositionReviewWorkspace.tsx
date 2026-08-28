@@ -14,8 +14,10 @@ import {
   ChevronUp,
   KeyRound,
   LayoutDashboard,
+  PanelRightOpen,
   RefreshCw,
   Search,
+  X,
 } from 'lucide-react';
 import {
   fetchPositionReviewState,
@@ -114,6 +116,7 @@ export function PositionReviewWorkspace({
   const [showMoreFilters, setShowMoreFilters] = useState(false);
   const [showUsSessionBands, setShowUsSessionBands] = useState(false);
   const [showWeekendBands, setShowWeekendBands] = useState(false);
+  const [showDetails, setShowDetails] = useState(false);
   const [viewMode, setViewMode] = useState<'chart' | 'dashboard'>(() => {
     return new URLSearchParams(window.location.search).get('view') === 'dashboard'
       ? 'dashboard'
@@ -247,6 +250,7 @@ export function PositionReviewWorkspace({
     pageTrades.find((item) => item.positionId === selectedId) ||
     pageTrades[0] ||
     null;
+  const selectedPnl = selected ? positionPnl(selected) : 0;
 
   useEffect(() => {
     if (page !== safePage) setPage(safePage);
@@ -856,7 +860,30 @@ export function PositionReviewWorkspace({
           <>
             <header className="bitlang-chart-header">
               <div>
-                <h2>{selected.chartSymbol}</h2>
+                <div className="posrev-chart-title">
+                  <h2>{selected.chartSymbol}</h2>
+                  <span className={`posrev-side-badge ${selected.side}`}>
+                    {selected.side === 'long' ? '多' : '空'}
+                    {selected.leverage ? ` ${Math.round(selected.leverage)}x` : ''}
+                  </span>
+                  <strong
+                    className={`posrev-header-pnl ${
+                      selectedPnl >= 0 ? 'profit' : 'loss'
+                    }`}
+                  >
+                    {selectedPnl >= 0 ? '+' : ''}
+                    {formatNumber(selectedPnl)} USDT
+                  </strong>
+                  <button
+                    type="button"
+                    className={`posrev-detail-toggle ${showDetails ? 'active' : ''}`}
+                    aria-expanded={showDetails}
+                    onClick={() => setShowDetails((value) => !value)}
+                  >
+                    <PanelRightOpen size={14} />
+                    复盘详情
+                  </button>
+                </div>
                 <p>
                   {formatShanghaiTime(selected.entryTimeMs)}
                   {selected.exitTimeMs
@@ -865,51 +892,52 @@ export function PositionReviewWorkspace({
                   {` · 持仓时长 ${formatHoldingDuration(selected.entryTimeMs, selected.exitTimeMs)}`}
                 </p>
               </div>
-              <div className="bitlang-timeframes">
-                <button
-                  type="button"
-                  className={autoTimeframe ? 'active' : ''}
-                  onClick={() => {
-                    setAutoTimeframe(true);
-                    setFocusRevision((revision) => revision + 1);
-                  }}
-                  title="按持仓时长自动选择周期"
-                >
-                  自动
-                </button>
-                {TIMEFRAMES.map((item) => (
+              <div className="posrev-chart-header-actions">
+                <div className="bitlang-timeframes">
                   <button
                     type="button"
-                    key={item}
-                    className={item === effectiveTimeframe ? 'active' : ''}
+                    className={autoTimeframe ? 'active' : ''}
                     onClick={() => {
-                      if (!autoTimeframe && item === timeframe) return;
-                      applyManualTimeframe(item);
+                      setAutoTimeframe(true);
+                      setFocusRevision((revision) => revision + 1);
                     }}
+                    title="按持仓时长自动选择周期"
                   >
-                    {timeframeLabel(item)}
+                    自动
                   </button>
-                ))}
-                <button
-                  type="button"
-                  className={showUsSessionBands ? 'active' : ''}
-                  onClick={() => setShowUsSessionBands((value) => !value)}
-                  title="美股常规交易时段（纽约 09:30–16:00）"
-                >
-                  美盘
-                </button>
-                <button
-                  type="button"
-                  className={showWeekendBands ? 'active' : ''}
-                  onClick={() => setShowWeekendBands((value) => !value)}
-                  title="美盘周末"
-                >
-                  周末
-                </button>
+                  {TIMEFRAMES.map((item) => (
+                    <button
+                      type="button"
+                      key={item}
+                      className={item === effectiveTimeframe ? 'active' : ''}
+                      onClick={() => {
+                        if (!autoTimeframe && item === timeframe) return;
+                        applyManualTimeframe(item);
+                      }}
+                    >
+                      {timeframeLabel(item)}
+                    </button>
+                  ))}
+                  <button
+                    type="button"
+                    className={showUsSessionBands ? 'active' : ''}
+                    onClick={() => setShowUsSessionBands((value) => !value)}
+                    title="美股常规交易时段（纽约 09:30–16:00）"
+                  >
+                    美盘
+                  </button>
+                  <button
+                    type="button"
+                    className={showWeekendBands ? 'active' : ''}
+                    onClick={() => setShowWeekendBands((value) => !value)}
+                    title="美盘周末"
+                  >
+                    周末
+                  </button>
+                </div>
               </div>
             </header>
             <PositionReviewChart
-              key={`${selected.chartSymbol}:${effectiveTimeframe}`}
               position={selected}
               timeframe={effectiveTimeframe}
               themeMode={themeMode}
@@ -917,14 +945,34 @@ export function PositionReviewWorkspace({
               showUsSessionBands={showUsSessionBands}
               showWeekendBands={showWeekendBands}
             />
-            <PositionReviewPanel
-              key={selected.positionId}
-              position={selected}
-              tags={tags}
-              onChange={updateSelected}
-              onTagsCreated={(tag) => setTags((current) => [...current, tag])}
-              onTagDeleted={handleTagDeleted}
-            />
+            {showDetails && (
+              <aside className="posrev-detail-drawer" aria-label="仓位复盘详情">
+                <header className="posrev-detail-drawer-header">
+                  <div>
+                    <strong>复盘详情</strong>
+                    <span>{selected.chartSymbol}</span>
+                  </div>
+                  <button
+                    type="button"
+                    aria-label="关闭复盘详情"
+                    title="关闭"
+                    onClick={() => setShowDetails(false)}
+                  >
+                    <X size={16} />
+                  </button>
+                </header>
+                <div className="posrev-detail-drawer-body">
+                  <PositionReviewPanel
+                    key={selected.positionId}
+                    position={selected}
+                    tags={tags}
+                    onChange={updateSelected}
+                    onTagsCreated={(tag) => setTags((current) => [...current, tag])}
+                    onTagDeleted={handleTagDeleted}
+                  />
+                </div>
+              </aside>
+            )}
           </>
         ) : (
           <div className="bitlang-state">
