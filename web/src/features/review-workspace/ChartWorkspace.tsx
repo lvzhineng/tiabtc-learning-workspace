@@ -9,7 +9,7 @@ import {
   type PerpetualSymbolSearchItem,
 } from '@/api/market-api';
 import { ChartCanvas } from '@/chart/ChartCanvas';
-import { computeReadoutInfo, type ReadoutInfo } from '@/chart/candlestick-readout';
+import { computeReadoutInfo, findExactTimestampValue, type ReadoutInfo } from '@/chart/candlestick-readout';
 import type { ReplayState } from '@/features/replay/replay-state';
 import {
   filterVisibleCandles,
@@ -28,6 +28,7 @@ import type { PaperTrade } from '@/domain/paper-trade';
 import { calculateRR } from '@/features/paper-trading/paper-trade-logic';
 import { PaperTradingPanel } from '@/features/paper-trading/PaperTradingPanel';
 import { useCandleWorkspaceData } from './useCandleWorkspaceData';
+import { useChartFlowData } from './useChartFlowData';
 import { useDrawingWorkspace } from './useDrawingWorkspace';
 import { usePaperTrading } from './usePaperTrading';
 import { ChartReadoutBar } from './ChartReadoutBar';
@@ -35,6 +36,7 @@ import { PerpetualSymbolSearchDialog } from './PerpetualSymbolSearchDialog';
 import {
   AlertCircle,
   ChevronDown,
+  LineChart,
   RefreshCw,
   Search,
   Video,
@@ -111,6 +113,7 @@ export function ChartWorkspace({
   const [isLogScale, setIsLogScale] = useState<boolean>(false);
   const [showUsSessionBands, setShowUsSessionBands] = useState(false);
   const [showWeekendBands, setShowWeekendBands] = useState(false);
+  const [showOiCvd, setShowOiCvd] = useState(false);
   const [chartFocusTimeMs, setChartFocusTimeMs] = useState<number | null>(
     restoredTimestampMs
   );
@@ -200,9 +203,12 @@ export function ChartWorkspace({
     candles,
     loading,
     isLoadingEarlier,
+    isLoadingLater,
     offlineWarning,
     error,
     loadEarlier: handleLoadEarlier,
+    loadLater: handleLoadLater,
+    retryLoad: handleRetryLoad,
     prefetchFuture: prefetchFutureCandles,
   } = useCandleWorkspaceData(
     activeSymbol,
@@ -223,6 +229,29 @@ export function ChartWorkspace({
     }
     setTimeframeSwitchAnchorTimeMs(null);
   }, [candles.length, loading, timeframeSwitchAnchorTimeMs]);
+
+  // A newly listed symbol can inherit a historical cursor from the previous
+  // chart. If the loaded bars all start after that cursor, drop the stale
+  // focus so the live tip is visible.
+  useEffect(() => {
+    if (loading || candles.length === 0 || chartFocusTimeMs === null) {
+      return;
+    }
+    if (chartFocusTimeMs >= candles[0].timestampMs) {
+      return;
+    }
+    const latestTimeMs = candles[candles.length - 1].timestampMs;
+    setChartFocusTimeMs(null);
+    setTimeframeSwitchAnchorTimeMs(null);
+    lastPositionTimeMsRef.current = latestTimeMs;
+    scheduleStoredReviewLocation(activeTimeframe, latestTimeMs);
+  }, [
+    activeTimeframe,
+    candles,
+    chartFocusTimeMs,
+    loading,
+    scheduleStoredReviewLocation,
+  ]);
 
   const {
     activeTool,
@@ -296,8 +325,19 @@ export function ChartWorkspace({
   );
 
   const handleSymbolChange = useCallback(
-    (nextSymbol: string) => {
+    (nextSymbol: string, options?: { resetToLatest?: boolean }) => {
       if (nextSymbol === activeSymbol) return;
+      const resetToLatest =
+        options?.resetToLatest === true && replayState.status === 'idle';
+      if (resetToLatest) {
+        const latestTimeMs = Date.now();
+        setTimeframeSwitchAnchorTimeMs(null);
+        setChartFocusTimeMs(null);
+        lastPositionTimeMsRef.current = latestTimeMs;
+        scheduleStoredReviewLocation(activeTimeframe, latestTimeMs);
+        setActiveSymbol(nextSymbol);
+        return;
+      }
       const replayAnchorTimeMs =
         replayState.status === 'idle' ? null : replayState.cursorTimeMs;
       const anchorTimeMs =
@@ -589,13 +629,19 @@ export function ChartWorkspace({
           ? current
           : [...current, selectedSymbol]
       );
-      handleSymbolChange(selectedSymbol);
+      handleSymbolChange(selectedSymbol, { resetToLatest: !alreadyAdded });
     },
     [handleSymbolChange, symbols]
   );
 
   useEffect(() => {
     const handleOpenSearchShortcut = (event: KeyboardEvent) => {
+      if (
+        event.defaultPrevented ||
+        document.querySelector('[aria-modal="true"]')
+      ) {
+        return;
+      }
       if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'k') {
         event.preventDefault();
         setShowSymbolSearch(true);
@@ -639,6 +685,31 @@ export function ChartWorkspace({
         : candles,
     [activeTimeframe, candles, replayCursorTimeMs]
   );
+  const flowFromMs =
+    visibleCandles.length > 0 ? visibleCandles[0].timestampMs : null;
+  const flowToMs =
+    visibleCandles.length > 0
+      ? visibleCandles[visibleCandles.length - 1].timestampMs
+      : null;
+  const {
+    oiPoints,
+    cvdPoints,
+    warning: flowWarning,
+  } = useChartFlowData(
+    showOiCvd,
+    activeSymbol,
+    activeTimeframe,
+    flowFromMs,
+    flowToMs
+  );
+  const cvdLinePoints = useMemo(
+    () =>
+      cvdPoints.map((point) => ({
+        timestampMs: point.timestampMs,
+        value: point.cvd,
+      })),
+    [cvdPoints]
+  );
   const replayVisibleDrawings = useMemo(
     () =>
       replayCursorTimeMs === null
@@ -655,10 +726,16 @@ export function ChartWorkspace({
 
   const displayCandle =
     hoveredCandle || (visibleCandles.length > 0 ? visibleCandles[visibleCandles.length - 1] : null);
-  const readoutInfo: ReadoutInfo | null = useMemo(
-    () => computeReadoutInfo(displayCandle),
-    [displayCandle]
-  );
+  const readoutInfo: ReadoutInfo | null = useMemo(() => {
+    if (!displayCandle) return null;
+    const oiValue = showOiCvd
+      ? findExactTimestampValue(oiPoints, displayCandle.timestampMs)
+      : null;
+    const cvdValue = showOiCvd
+      ? findExactTimestampValue(cvdLinePoints, displayCandle.timestampMs)
+      : null;
+    return computeReadoutInfo(displayCandle, { oi: oiValue, cvd: cvdValue });
+  }, [cvdLinePoints, displayCandle, oiPoints, showOiCvd]);
 
   const selectedDrawing = useMemo(
     () => drawings.find((drawing) => drawing.id === selectedDrawingId),
@@ -820,6 +897,17 @@ export function ChartWorkspace({
 
           <button
             type="button"
+            className={`ui-btn ${showOiCvd ? 'ui-btn-active' : ''}`}
+            onClick={() => setShowOiCvd((enabled) => !enabled)}
+            title="BTCUSDT 15m OI / 15m 涨跌成交量 CVD，副图显示"
+            aria-pressed={showOiCvd}
+          >
+            <LineChart size={13} />
+            <span>OI / CVD</span>
+          </button>
+
+          <button
+            type="button"
             className={`ui-btn ${showUsSessionBands ? 'ui-btn-active' : ''}`}
             onClick={() => setShowUsSessionBands((enabled) => !enabled)}
             title="标注美股常规交易时段（纽约 09:30–16:00）"
@@ -861,10 +949,20 @@ export function ChartWorkspace({
         </div>
       )}
 
+      {showOiCvd && flowWarning && (
+        <div className="review-banner-warning">
+          <AlertCircle size={14} />
+          <span>{flowWarning}</span>
+        </div>
+      )}
+
       {error && (
         <div className="review-banner-error">
           <AlertCircle size={14} />
           <span>加载失败: {error}</span>
+          <button type="button" className="review-retry-btn" onClick={handleRetryLoad}>
+            重试
+          </button>
         </div>
       )}
 
@@ -895,6 +993,8 @@ export function ChartWorkspace({
           onViewportAnchorChange={handleViewportAnchorChange}
           onLoadEarlier={handleLoadEarlier}
           isLoadingEarlier={isLoadingEarlier}
+          onLoadLater={replayState.status === 'idle' ? handleLoadLater : undefined}
+          isLoadingLater={isLoadingLater}
           drawings={replayVisibleDrawings}
           activeDrawingTool={activeTool}
           selectedDrawingId={selectedDrawingId}
@@ -906,6 +1006,9 @@ export function ChartWorkspace({
           onToggleLockDrawing={toggleLockDrawing}
           onDrawingComplete={() => setActiveTool('select')}
           showVolume
+          showOiCvd={showOiCvd}
+          oiPoints={oiPoints}
+          cvdPoints={cvdLinePoints}
           showUsSessionBands={showUsSessionBands}
           showWeekendBands={showWeekendBands}
         />

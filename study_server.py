@@ -14,6 +14,9 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, unquote, urlparse
 
+from cryptography.fernet import Fernet, InvalidToken
+
+from bitget_position_provider import BitgetUtaPositionProvider, classify_fill_role
 from market_data_provider import CcxtBybitMarketDataProvider
 
 
@@ -24,7 +27,7 @@ DATABASE_FILE = DEFAULT_DATABASE_FILE
 SEED_DATABASE_FILE = ROOT / "data" / "tiabtc-review-seed.sqlite"
 HOST = "127.0.0.1"
 PORT = 8765
-API_VERSION = 10
+API_VERSION = 11
 VALID_STATUSES = {"unlearned", "learning", "learned"}
 VALID_SYMBOLS = {"BTCUSDT", "ETHUSDT", "SOLUSDT", "BNBUSDT", "DOGEUSDT", "XRPUSDT"}
 VALID_INTERVALS = {"1", "5", "15", "60", "240", "D", "W"}
@@ -56,16 +59,43 @@ INTERVAL_MILLISECONDS = {
 }
 FETCH_FAILURE_COOLDOWN_SECONDS = 60
 TRAILING_REFRESH_COOLDOWN_SECONDS = 90
+MAX_INTERNAL_HOLE_BARS = 4
+CANDLE_DISCONTINUITY_RATIO = 0.0005
+RANGE_REPAIR_COOLDOWN_SECONDS = 600
 DATABASE_LOCK = threading.RLock()
 STATE_LOCK = threading.RLock()
+CREDENTIAL_LOCK = threading.Lock()
+POSITION_SYNC_LOCK = threading.Lock()
 MARKET_FETCH_LOCKS_GUARD = threading.Lock()
 MARKET_FETCH_LOCKS = {}
 MARKET_FETCH_FAILURES = {}
 MARKET_TRAILING_REFRESH_AT = {}
 MARKET_TRAILING_REFRESH_BOUNDARY = {}
 MARKET_TRAILING_REFRESHING = set()
+MARKET_RANGE_REPAIR_AT = {}
 MARKET_DATA_PROVIDER = CcxtBybitMarketDataProvider()
+FLOW_WARMUP_SYMBOL = "BTCUSDT"
+FLOW_OI_HISTORY_START_MS = 1_577_836_800_000  # 2020-01-01 UTC
+OI_15M_MS = 15 * 60 * 1000
+FLOW_WARMUP_LOCK = threading.Lock()
+FLOW_WARMUP_STATE = {"warming": False}
 MARKET_REFRESHING = set()
+RUN_DIR = ROOT / ".run"
+CREDENTIAL_KEY_FILE = RUN_DIR / "credential-key"
+POSITION_REVIEW_VENUE = "bitget"
+FILL_MATCH_PAD_MS = 2000
+TAG_COLORS = ("#3b82f6", "#10b981", "#f59e0b", "#ef4444", "#8b5cf6", "#14b8a6")
+MAX_CANDLES_PER_RESPONSE = 3000
+CACHE_AUDIT_MAX_RANGES = 1000
+CACHE_AUDIT_MAX_CANDLES_PER_RANGE = 20000
+
+
+class SyncInProgressError(RuntimeError):
+    """Rejected a concurrent Bitget position-review sync."""
+
+
+VENUE_MARKET_FETCH_LOCKS = {}
+VENUE_MARKET_FETCH_FAILURES = {}
 
 
 def _load_state_unlocked():
@@ -208,6 +238,142 @@ def initialize_database():
                 closed_at TEXT
             );
             INSERT OR IGNORE INTO app_settings (key, value) VALUES ('offline_mode', 'true');
+            CREATE TABLE IF NOT EXISTS exchange_positions (
+                venue TEXT NOT NULL,
+                position_id TEXT NOT NULL,
+                unified_symbol TEXT NOT NULL,
+                chart_symbol TEXT NOT NULL,
+                side TEXT NOT NULL,
+                status TEXT NOT NULL,
+                entry_price REAL,
+                exit_price REAL,
+                contracts REAL,
+                leverage REAL,
+                margin_mode TEXT,
+                hedged INTEGER NOT NULL DEFAULT 0,
+                realized_pnl REAL,
+                net_pnl REAL,
+                funding REAL,
+                open_fee REAL,
+                close_fee REAL,
+                entry_time_ms INTEGER NOT NULL,
+                exit_time_ms INTEGER,
+                synced_at TEXT NOT NULL,
+                PRIMARY KEY (venue, position_id)
+            );
+            CREATE TABLE IF NOT EXISTS position_notes (
+                venue TEXT NOT NULL,
+                position_id TEXT NOT NULL,
+                note TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                PRIMARY KEY (venue, position_id)
+            );
+            CREATE TABLE IF NOT EXISTS position_tags (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                name TEXT NOT NULL UNIQUE,
+                color TEXT NOT NULL
+            );
+            CREATE TABLE IF NOT EXISTS position_tag_map (
+                venue TEXT NOT NULL,
+                position_id TEXT NOT NULL,
+                tag_id INTEGER NOT NULL,
+                PRIMARY KEY (venue, position_id, tag_id),
+                FOREIGN KEY (tag_id) REFERENCES position_tags(id)
+            );
+            CREATE TABLE IF NOT EXISTS position_fills (
+                venue TEXT NOT NULL,
+                exec_id TEXT NOT NULL,
+                chart_symbol TEXT NOT NULL,
+                unified_symbol TEXT,
+                side TEXT NOT NULL,
+                trade_side TEXT,
+                price REAL,
+                quantity REAL,
+                pnl REAL,
+                fee REAL,
+                time_ms INTEGER NOT NULL,
+                synced_at TEXT NOT NULL,
+                PRIMARY KEY (venue, exec_id)
+            );
+            CREATE INDEX IF NOT EXISTS idx_position_fills_symbol_time
+                ON position_fills (venue, chart_symbol, time_ms);
+            CREATE TABLE IF NOT EXISTS venue_market_candles (
+                venue TEXT NOT NULL,
+                symbol TEXT NOT NULL,
+                interval TEXT NOT NULL,
+                timestamp INTEGER NOT NULL,
+                open REAL NOT NULL,
+                high REAL NOT NULL,
+                low REAL NOT NULL,
+                close REAL NOT NULL,
+                volume REAL NOT NULL,
+                PRIMARY KEY (venue, symbol, interval, timestamp)
+            );
+            CREATE TABLE IF NOT EXISTS venue_market_cache_ranges (
+                venue TEXT NOT NULL,
+                symbol TEXT NOT NULL,
+                interval TEXT NOT NULL,
+                start_timestamp INTEGER NOT NULL,
+                end_timestamp INTEGER NOT NULL,
+                fetched_at TEXT NOT NULL,
+                PRIMARY KEY (venue, symbol, interval, start_timestamp, end_timestamp)
+            );
+            CREATE TABLE IF NOT EXISTS market_oi_1h (
+                symbol TEXT NOT NULL,
+                timestamp INTEGER NOT NULL,
+                open_interest REAL NOT NULL,
+                PRIMARY KEY (symbol, timestamp)
+            );
+            CREATE TABLE IF NOT EXISTS market_oi_1h_cache_ranges (
+                symbol TEXT NOT NULL,
+                start_timestamp INTEGER NOT NULL,
+                end_timestamp INTEGER NOT NULL,
+                fetched_at TEXT NOT NULL,
+                PRIMARY KEY (symbol, start_timestamp, end_timestamp)
+            );
+            CREATE TABLE IF NOT EXISTS market_oi_15m (
+                symbol TEXT NOT NULL,
+                timestamp INTEGER NOT NULL,
+                open_interest REAL NOT NULL,
+                PRIMARY KEY (symbol, timestamp)
+            );
+            CREATE TABLE IF NOT EXISTS market_oi_15m_cache_ranges (
+                symbol TEXT NOT NULL,
+                start_timestamp INTEGER NOT NULL,
+                end_timestamp INTEGER NOT NULL,
+                fetched_at TEXT NOT NULL,
+                PRIMARY KEY (symbol, start_timestamp, end_timestamp)
+            );
+            CREATE TABLE IF NOT EXISTS market_oi_5m (
+                symbol TEXT NOT NULL,
+                timestamp INTEGER NOT NULL,
+                open_interest REAL NOT NULL,
+                PRIMARY KEY (symbol, timestamp)
+            );
+            CREATE TABLE IF NOT EXISTS market_oi_cache_ranges (
+                symbol TEXT NOT NULL,
+                start_timestamp INTEGER NOT NULL,
+                end_timestamp INTEGER NOT NULL,
+                fetched_at TEXT NOT NULL,
+                PRIMARY KEY (symbol, start_timestamp, end_timestamp)
+            );
+            CREATE TABLE IF NOT EXISTS market_cvd_5m (
+                symbol TEXT NOT NULL,
+                timestamp INTEGER NOT NULL,
+                buy_volume REAL NOT NULL,
+                sell_volume REAL NOT NULL,
+                delta REAL NOT NULL,
+                PRIMARY KEY (symbol, timestamp)
+            );
+            CREATE TABLE IF NOT EXISTS market_cvd_days (
+                symbol TEXT NOT NULL,
+                day_utc TEXT NOT NULL,
+                status TEXT NOT NULL,
+                fetched_at TEXT NOT NULL,
+                PRIMARY KEY (symbol, day_utc)
+            );
+            CREATE INDEX IF NOT EXISTS idx_exchange_positions_entry
+                ON exchange_positions (entry_time_ms DESC);
             """
         )
         drawing_columns = {
@@ -323,8 +489,213 @@ def market_range_chunks(interval, start_timestamp, end_timestamp, limit=1000):
         cursor = chunk_end + 1
 
 
+def candle_row_timestamp(candle):
+    if isinstance(candle, dict):
+        return int(candle["timestamp"])
+    return int(candle[2])
+
+
+def merge_touching_ranges(ranges):
+    if not ranges:
+        return []
+    ordered = sorted((int(start), int(end)) for start, end in ranges)
+    merged = [list(ordered[0])]
+    for start, end in ordered[1:]:
+        if start <= merged[-1][1] + 1:
+            merged[-1][1] = max(merged[-1][1], end)
+        else:
+            merged.append([start, end])
+    return [(start, end) for start, end in merged]
+
+
+def market_cache_coverage_ranges(interval, start_timestamp, end_timestamp, candles):
+    """Mark only closed, contiguous bars as cached.
+
+    The current open bar is stored for display but must stay uncached so the
+    next close can overwrite a partial snapshot. Internal holes stay uncached
+    so a later request can fill them instead of treating empty space as data.
+    """
+    interval_ms = INTERVAL_MILLISECONDS[interval]
+    last_closed = latest_closed_candle_timestamp(interval)
+    start_timestamp = int(start_timestamp)
+    coverage_end = min(int(end_timestamp), last_closed + interval_ms - 1)
+    if coverage_end < start_timestamp:
+        return []
+
+    closed_timestamps = sorted(
+        {
+            timestamp
+            for timestamp in (candle_row_timestamp(candle) for candle in candles)
+            if start_timestamp <= timestamp <= last_closed
+        }
+    )
+    if not closed_timestamps:
+        return [(start_timestamp, coverage_end)]
+
+    segments = []
+    run_start = run_end = closed_timestamps[0]
+    for timestamp in closed_timestamps[1:]:
+        if timestamp == run_end + interval_ms:
+            run_end = timestamp
+        else:
+            segments.append((run_start, run_end + interval_ms - 1))
+            run_start = run_end = timestamp
+    segments.append((run_start, run_end + interval_ms - 1))
+
+    first_ts = closed_timestamps[0]
+    prefix_ms = first_ts - start_timestamp
+    if prefix_ms > MAX_INTERNAL_HOLE_BARS * interval_ms:
+        segments.append((start_timestamp, first_ts - 1))
+    return merge_touching_ranges(segments)
+
+
+def closed_range_defects(interval, start_timestamp, end_timestamp, candles):
+    """Find small cache holes and frozen partial bars inside a closed window."""
+    interval_ms = INTERVAL_MILLISECONDS[interval]
+    last_closed = latest_closed_candle_timestamp(interval)
+    lo = int(start_timestamp)
+    hi = min(int(end_timestamp), last_closed)
+    closed = [
+        candle
+        for candle in candles
+        if lo <= int(candle["timestamp"]) <= hi
+    ]
+    if len(closed) < 2:
+        return []
+    defects = []
+    for previous, current in zip(closed, closed[1:]):
+        prev_ts = int(previous["timestamp"])
+        curr_ts = int(current["timestamp"])
+        delta = curr_ts - prev_ts
+        if delta <= 0:
+            continue
+        gap_bars = delta // interval_ms - 1
+        if 1 <= gap_bars <= MAX_INTERNAL_HOLE_BARS:
+            defects.append((prev_ts + interval_ms, curr_ts - 1))
+            continue
+        if gap_bars != 0:
+            continue
+        prev_close = float(previous["close"])
+        curr_open = float(current["open"])
+        if prev_close <= 0:
+            continue
+        if abs(curr_open - prev_close) / prev_close < CANDLE_DISCONTINUITY_RATIO:
+            continue
+        defects.append((prev_ts, curr_ts + interval_ms - 1))
+    return merge_touching_ranges(defects)
+
+
+def unrepaired_ranges(symbol, interval, ranges):
+    now_monotonic = time.monotonic()
+    pending = []
+    for start, end in ranges:
+        key = (symbol, interval, int(start), int(end))
+        last_at = MARKET_RANGE_REPAIR_AT.get(key, 0)
+        if now_monotonic - last_at < RANGE_REPAIR_COOLDOWN_SECONDS:
+            continue
+        pending.append((int(start), int(end)))
+    return pending
+
+
+def remember_repaired_ranges(symbol, interval, ranges):
+    now_monotonic = time.monotonic()
+    for start, end in ranges:
+        MARKET_RANGE_REPAIR_AT[(symbol, interval, int(start), int(end))] = now_monotonic
+
+
+def historical_missing_cached_ranges(symbol, interval, start_timestamp, end_timestamp):
+    interval_ms = INTERVAL_MILLISECONDS[interval]
+    last_closed = latest_closed_candle_timestamp(interval)
+    hist_end = min(int(end_timestamp), last_closed + interval_ms - 1)
+    if int(start_timestamp) > hist_end:
+        return []
+    return missing_cached_ranges(symbol, interval, start_timestamp, hist_end)
+
+
+def fetch_and_save_candle_ranges(symbol, interval, ranges):
+    fetched_count = 0
+    chunk_count = 0
+    for missing_start, missing_end in ranges:
+        for chunk_start, chunk_end in market_range_chunks(
+            interval,
+            missing_start,
+            missing_end,
+        ):
+            fetched = fetch_market_candles(
+                symbol,
+                interval,
+                chunk_start,
+                chunk_end,
+            )
+            save_candles(
+                symbol,
+                interval,
+                chunk_start,
+                chunk_end,
+                fetched,
+            )
+            fetched_count += len(fetched)
+            chunk_count += 1
+    return fetched_count, chunk_count
+
+
+def merge_market_cache_range(
+    connection, symbol, interval, start_timestamp, end_timestamp, fetched_at
+):
+    merged_start = start_timestamp
+    merged_end = end_timestamp
+    while True:
+        overlapping_ranges = connection.execute(
+            """SELECT start_timestamp, end_timestamp
+               FROM market_cache_ranges
+               WHERE symbol = ? AND interval = ?
+                 AND end_timestamp >= ? AND start_timestamp <= ?""",
+            (
+                symbol,
+                interval,
+                merged_start - 1,
+                merged_end + 1,
+            ),
+        ).fetchall()
+        expanded_start = min(
+            [merged_start]
+            + [int(row["start_timestamp"]) for row in overlapping_ranges]
+        )
+        expanded_end = max(
+            [merged_end]
+            + [int(row["end_timestamp"]) for row in overlapping_ranges]
+        )
+        if expanded_start == merged_start and expanded_end == merged_end:
+            break
+        merged_start = expanded_start
+        merged_end = expanded_end
+    connection.execute(
+        """DELETE FROM market_cache_ranges
+           WHERE symbol = ? AND interval = ?
+             AND end_timestamp >= ? AND start_timestamp <= ?""",
+        (
+            symbol,
+            interval,
+            merged_start - 1,
+            merged_end + 1,
+        ),
+    )
+    connection.execute(
+        """INSERT INTO market_cache_ranges
+           (symbol, interval, start_timestamp, end_timestamp, fetched_at)
+           VALUES (?, ?, ?, ?, ?)""",
+        (symbol, interval, merged_start, merged_end, fetched_at),
+    )
+
+
 def save_candles(symbol, interval, start_timestamp, end_timestamp, candles):
     fetched_at = datetime.now().astimezone().isoformat()
+    coverage_ranges = market_cache_coverage_ranges(
+        interval,
+        start_timestamp,
+        end_timestamp,
+        candles,
+    )
     with DATABASE_LOCK, database() as connection:
         connection.executemany(
             """INSERT INTO market_candles
@@ -335,50 +706,15 @@ def save_candles(symbol, interval, start_timestamp, end_timestamp, candles):
                  close = excluded.close, volume = excluded.volume""",
             candles,
         )
-        merged_start = start_timestamp
-        merged_end = end_timestamp
-        while True:
-            overlapping_ranges = connection.execute(
-                """SELECT start_timestamp, end_timestamp
-                   FROM market_cache_ranges
-                   WHERE symbol = ? AND interval = ?
-                     AND end_timestamp >= ? AND start_timestamp <= ?""",
-                (
-                    symbol,
-                    interval,
-                    merged_start - 1,
-                    merged_end + 1,
-                ),
-            ).fetchall()
-            expanded_start = min(
-                [merged_start]
-                + [int(row["start_timestamp"]) for row in overlapping_ranges]
-            )
-            expanded_end = max(
-                [merged_end]
-                + [int(row["end_timestamp"]) for row in overlapping_ranges]
-            )
-            if expanded_start == merged_start and expanded_end == merged_end:
-                break
-            merged_start = expanded_start
-            merged_end = expanded_end
-        connection.execute(
-            """DELETE FROM market_cache_ranges
-               WHERE symbol = ? AND interval = ?
-                 AND end_timestamp >= ? AND start_timestamp <= ?""",
-            (
+        for range_start, range_end in coverage_ranges:
+            merge_market_cache_range(
+                connection,
                 symbol,
                 interval,
-                merged_start - 1,
-                merged_end + 1,
-            ),
-        )
-        connection.execute(
-            """INSERT INTO market_cache_ranges
-               (symbol, interval, start_timestamp, end_timestamp, fetched_at)
-               VALUES (?, ?, ?, ?, ?)""",
-            (symbol, interval, merged_start, merged_end, fetched_at),
-        )
+                range_start,
+                range_end,
+                fetched_at,
+            )
 
 
 def list_candles(symbol, interval, start_timestamp, end_timestamp):
@@ -403,6 +739,306 @@ def list_candles(symbol, interval, start_timestamp, end_timestamp):
     ]
 
 
+def missing_oi_cached_ranges(symbol, start_timestamp, end_timestamp):
+    with DATABASE_LOCK, database() as connection:
+        rows = connection.execute(
+            """SELECT start_timestamp, end_timestamp FROM market_oi_15m_cache_ranges
+               WHERE symbol = ?
+                 AND end_timestamp >= ? AND start_timestamp <= ?
+               ORDER BY start_timestamp ASC""",
+            (symbol, start_timestamp, end_timestamp),
+        ).fetchall()
+
+    missing = []
+    cursor = start_timestamp
+    for row in rows:
+        range_start = max(start_timestamp, int(row["start_timestamp"]))
+        range_end = min(end_timestamp, int(row["end_timestamp"]))
+        if range_end < cursor:
+            continue
+        if range_start > cursor:
+            missing.append((cursor, range_start - 1))
+        cursor = max(cursor, range_end + 1)
+        if cursor > end_timestamp:
+            break
+    if cursor <= end_timestamp:
+        missing.append((cursor, end_timestamp))
+    return missing
+
+
+def save_open_interest(symbol, start_timestamp, end_timestamp, rows):
+    fetched_at = datetime.now().astimezone().isoformat()
+    with DATABASE_LOCK, database() as connection:
+        connection.executemany(
+            """INSERT INTO market_oi_15m (symbol, timestamp, open_interest)
+               VALUES (?, ?, ?)
+               ON CONFLICT(symbol, timestamp) DO UPDATE SET
+                 open_interest = excluded.open_interest""",
+            rows,
+        )
+        merged_start = start_timestamp
+        merged_end = end_timestamp
+        while True:
+            overlapping_ranges = connection.execute(
+                """SELECT start_timestamp, end_timestamp
+                   FROM market_oi_15m_cache_ranges
+                   WHERE symbol = ?
+                     AND end_timestamp >= ? AND start_timestamp <= ?""",
+                (symbol, merged_start - 1, merged_end + 1),
+            ).fetchall()
+            expanded_start = min(
+                [merged_start]
+                + [int(row["start_timestamp"]) for row in overlapping_ranges]
+            )
+            expanded_end = max(
+                [merged_end]
+                + [int(row["end_timestamp"]) for row in overlapping_ranges]
+            )
+            if expanded_start == merged_start and expanded_end == merged_end:
+                break
+            merged_start = expanded_start
+            merged_end = expanded_end
+        connection.execute(
+            """DELETE FROM market_oi_15m_cache_ranges
+               WHERE symbol = ?
+                 AND end_timestamp >= ? AND start_timestamp <= ?""",
+            (symbol, merged_start - 1, merged_end + 1),
+        )
+        connection.execute(
+            """INSERT INTO market_oi_15m_cache_ranges
+               (symbol, start_timestamp, end_timestamp, fetched_at)
+               VALUES (?, ?, ?, ?)""",
+            (symbol, merged_start, merged_end, fetched_at),
+        )
+
+
+def list_open_interest(symbol, start_timestamp, end_timestamp):
+    with DATABASE_LOCK, database() as connection:
+        rows = connection.execute(
+            """SELECT timestamp, open_interest
+               FROM market_oi_15m
+               WHERE symbol = ? AND timestamp BETWEEN ? AND ?
+               ORDER BY timestamp ASC""",
+            (symbol, start_timestamp, end_timestamp),
+        ).fetchall()
+    return {int(row[0]): float(row[1]) for row in rows}
+
+
+def warmup_open_interest(symbol, start_timestamp, end_timestamp):
+    for missing_start, missing_end in missing_oi_cached_ranges(
+        symbol,
+        start_timestamp,
+        end_timestamp,
+    ):
+        chunks = list(
+            market_range_chunks("15", missing_start, missing_end, limit=200)
+        )
+        saw_data = False
+        for chunk_start, chunk_end in reversed(chunks):
+            fetched = MARKET_DATA_PROVIDER.fetch_open_interest_15m(
+                symbol,
+                chunk_start,
+                chunk_end,
+            )
+            save_open_interest(symbol, chunk_start, chunk_end, fetched)
+            if fetched:
+                saw_data = True
+                continue
+            older_end = chunk_start - 1
+            if older_end >= missing_start:
+                save_open_interest(symbol, missing_start, older_end, [])
+            break
+        else:
+            if not saw_data:
+                save_open_interest(symbol, missing_start, missing_end, [])
+
+
+def warmup_flow_candles_15m(symbol, start_timestamp, end_timestamp):
+    with market_fetch_lock(symbol, "15"):
+        for missing_start, missing_end in missing_cached_ranges(
+            symbol,
+            "15",
+            start_timestamp,
+            end_timestamp,
+        ):
+            for chunk_start, chunk_end in market_range_chunks(
+                "15",
+                missing_start,
+                missing_end,
+            ):
+                fetched = fetch_market_candles(
+                    symbol,
+                    "15",
+                    chunk_start,
+                    chunk_end,
+                )
+                save_candles(symbol, "15", chunk_start, chunk_end, fetched)
+
+
+def flow_warmup_state():
+    with FLOW_WARMUP_LOCK:
+        return dict(FLOW_WARMUP_STATE)
+
+
+def warm_up_flow_cache():
+    with FLOW_WARMUP_LOCK:
+        if FLOW_WARMUP_STATE["warming"]:
+            return
+        FLOW_WARMUP_STATE["warming"] = True
+    try:
+        symbol = FLOW_WARMUP_SYMBOL
+        flow_end = current_open_candle_timestamp("15")
+        flow_start = FLOW_OI_HISTORY_START_MS // OI_15M_MS * OI_15M_MS
+        print(
+            f"[flow] 开始预热 {symbol} 15m OI 与 15m K 线，自 2020-01-01 至当前，已缓存区间会跳过",
+            flush=True,
+        )
+        try:
+            warmup_flow_candles_15m(symbol, flow_start, flow_end)
+            with DATABASE_LOCK, database() as connection:
+                candle_count = connection.execute(
+                    """SELECT COUNT(*) FROM market_candles
+                       WHERE symbol = ? AND interval = '15'""",
+                    (symbol,),
+                ).fetchone()[0]
+            print(f"[flow] 15m K 线预热完成 {symbol}，共 {candle_count} 行", flush=True)
+        except Exception as error:
+            print(f"[flow] 15m K 线预热失败 {symbol}：{error}", flush=True)
+        try:
+            warmup_open_interest(symbol, flow_start, flow_end)
+            with DATABASE_LOCK, database() as connection:
+                row_count = connection.execute(
+                    "SELECT COUNT(*) FROM market_oi_15m WHERE symbol = ?",
+                    (symbol,),
+                ).fetchone()[0]
+            print(f"[flow] 15m OI 预热完成 {symbol}，共 {row_count} 行", flush=True)
+        except Exception as error:
+            print(f"[flow] 15m OI 预热失败 {symbol}：{error}", flush=True)
+    finally:
+        with FLOW_WARMUP_LOCK:
+            FLOW_WARMUP_STATE["warming"] = False
+
+
+def candle_signed_cvd(candles):
+    points = []
+    cumulative = 0.0
+    for candle in candles:
+        volume = float(candle["volume"])
+        delta = volume if candle["close"] >= candle["open"] else -volume
+        cumulative += delta
+        points.append(
+            {
+                "timestamp": candle["timestamp"],
+                "delta": delta,
+                "cvd": cumulative,
+            }
+        )
+    return points
+
+
+def resample_step_series(interval, start_timestamp, end_timestamp, value_by_ts, source_ms):
+    interval_ms = INTERVAL_MILLISECONDS[interval]
+    first = current_open_candle_timestamp(interval, start_timestamp)
+    last = current_open_candle_timestamp(interval, end_timestamp)
+    output = []
+    timestamp = first
+    while timestamp <= last:
+        if interval_ms <= source_ms:
+            source_ts = timestamp // source_ms * source_ms
+            value = value_by_ts.get(source_ts)
+            if value is not None:
+                output.append({"timestamp": timestamp, "value": value})
+        else:
+            bucket_end = timestamp + interval_ms - 1
+            last_value = None
+            source_ts = timestamp // source_ms * source_ms
+            if source_ts < timestamp:
+                source_ts += source_ms
+            while source_ts <= bucket_end:
+                if source_ts in value_by_ts:
+                    last_value = value_by_ts[source_ts]
+                source_ts += source_ms
+            if last_value is not None:
+                output.append({"timestamp": timestamp, "value": last_value})
+        timestamp += interval_ms
+    return output
+
+
+def resample_cvd_series(interval, start_timestamp, end_timestamp, cvd_points):
+    cvd_by_ts = {int(point["timestamp"]): float(point["cvd"]) for point in cvd_points}
+    delta_by_ts = {int(point["timestamp"]): float(point["delta"]) for point in cvd_points}
+    stepped = resample_step_series(
+        interval,
+        start_timestamp,
+        end_timestamp,
+        cvd_by_ts,
+        OI_15M_MS,
+    )
+    interval_ms = INTERVAL_MILLISECONDS[interval]
+    output = []
+    for point in stepped:
+        timestamp = point["timestamp"]
+        if interval_ms <= OI_15M_MS:
+            source_ts = timestamp // OI_15M_MS * OI_15M_MS
+            delta = delta_by_ts.get(source_ts, 0.0) if timestamp == source_ts else 0.0
+        else:
+            bucket_end = timestamp + interval_ms - 1
+            delta = 0.0
+            source_ts = timestamp // OI_15M_MS * OI_15M_MS
+            if source_ts < timestamp:
+                source_ts += OI_15M_MS
+            while source_ts <= bucket_end:
+                delta += delta_by_ts.get(source_ts, 0.0)
+                source_ts += OI_15M_MS
+        output.append(
+            {
+                "timestamp": timestamp,
+                "delta": delta,
+                "cvd": point["value"],
+            }
+        )
+    return output
+
+
+def load_chart_flow(symbol, interval, start_timestamp, end_timestamp):
+    validate_market_scope(symbol, interval)
+    start_timestamp = int(start_timestamp)
+    end_timestamp = int(end_timestamp)
+    if start_timestamp <= 0 or end_timestamp <= 0 or start_timestamp > end_timestamp:
+        raise ValueError("OI/CVD 时间范围无效")
+    bar_start = start_timestamp // OI_15M_MS * OI_15M_MS
+    bar_end = end_timestamp // OI_15M_MS * OI_15M_MS
+    oi_by_ts = list_open_interest(symbol, bar_start, bar_end)
+    oi_out = resample_step_series(
+        interval,
+        start_timestamp,
+        end_timestamp,
+        oi_by_ts,
+        OI_15M_MS,
+    )
+    cvd_out = resample_cvd_series(
+        interval,
+        start_timestamp,
+        end_timestamp,
+        candle_signed_cvd(list_candles(symbol, "15", bar_start, bar_end)),
+    )
+    warming = bool(flow_warmup_state().get("warming"))
+    warning = ""
+    if warming and symbol == FLOW_WARMUP_SYMBOL and not oi_out:
+        warning = "正在预热 BTCUSDT 15m 持仓量"
+    elif symbol != FLOW_WARMUP_SYMBOL:
+        warning = "OI 仅预热 BTCUSDT；CVD 来自 15m K 线涨跌成交量近似"
+    elif not oi_out:
+        warning = "BTCUSDT 暂无 15m OI 缓存；CVD 来自 15m K 线涨跌成交量近似"
+    return {
+        "interval": interval,
+        "oi": oi_out,
+        "cvd": cvd_out,
+        "warming": warming,
+        "warning": warning,
+    }
+
+
 def market_fetch_lock(symbol, interval):
     key = (symbol, interval)
     with MARKET_FETCH_LOCKS_GUARD:
@@ -418,6 +1054,10 @@ def warm_up_market_provider():
 
 
 def schedule_candle_refresh(symbol, interval, start_timestamp, end_timestamp):
+    if not historical_missing_cached_ranges(
+        symbol, interval, start_timestamp, end_timestamp
+    ):
+        return
     fetch_key = (symbol, interval)
     with MARKET_FETCH_LOCKS_GUARD:
         if fetch_key in MARKET_REFRESHING:
@@ -427,13 +1067,15 @@ def schedule_candle_refresh(symbol, interval, start_timestamp, end_timestamp):
     def refresh():
         try:
             with market_fetch_lock(symbol, interval):
-                if cached_range_contains(symbol, interval, start_timestamp, end_timestamp):
+                if not historical_missing_cached_ranges(
+                    symbol, interval, start_timestamp, end_timestamp
+                ):
                     return
                 failed_at, failed_message = MARKET_FETCH_FAILURES.get(fetch_key, (0, ""))
                 if failed_message and time.monotonic() - failed_at < FETCH_FAILURE_COOLDOWN_SECONDS:
                     return
                 try:
-                    for missing_start, missing_end in missing_cached_ranges(
+                    for missing_start, missing_end in historical_missing_cached_ranges(
                         symbol,
                         interval,
                         start_timestamp,
@@ -655,8 +1297,19 @@ def load_candle_range(
     offline = get_offline_mode() if offline is None else offline
     covered = cached_range_contains(symbol, interval, start_timestamp, end_timestamp)
     candles = list_candles(symbol, interval, start_timestamp, end_timestamp)
+    defects = (
+        []
+        if offline
+        else closed_range_defects(
+            interval,
+            start_timestamp,
+            end_timestamp,
+            candles,
+        )
+    )
     if (
         not covered
+        and not defects
         and not offline
         and candles
         and not wait_for_refresh
@@ -665,16 +1318,35 @@ def load_candle_range(
         schedule_candle_refresh(symbol, interval, start_timestamp, end_timestamp)
         schedule_trailing_refresh(symbol, interval, start_timestamp, end_timestamp)
         return candles, source, warning
-    if not covered and not offline:
+    if (not covered or defects) and not offline:
         fetch_key = (symbol, interval)
         with market_fetch_lock(symbol, interval):
-            missing_ranges = missing_cached_ranges(
-                symbol,
-                interval,
-                start_timestamp,
-                end_timestamp,
+            missing_ranges = (
+                []
+                if covered
+                else historical_missing_cached_ranges(
+                    symbol,
+                    interval,
+                    start_timestamp,
+                    end_timestamp,
+                )
             )
-            if missing_ranges:
+            if defects:
+                candles = list_candles(
+                    symbol,
+                    interval,
+                    start_timestamp,
+                    end_timestamp,
+                )
+                defects = closed_range_defects(
+                    interval,
+                    start_timestamp,
+                    end_timestamp,
+                    candles,
+                )
+            repair_ranges = unrepaired_ranges(symbol, interval, defects)
+            fetch_ranges = merge_touching_ranges(missing_ranges + repair_ranges)
+            if fetch_ranges:
                 failed_at, failed_message = MARKET_FETCH_FAILURES.get(fetch_key, (0, ""))
                 cooldown_remaining = FETCH_FAILURE_COOLDOWN_SECONDS - (time.monotonic() - failed_at)
                 if failed_message and cooldown_remaining > 0:
@@ -684,27 +1356,12 @@ def load_candle_range(
                     fetched_count = 0
                     chunk_count = 0
                     try:
-                        for missing_start, missing_end in missing_ranges:
-                            for chunk_start, chunk_end in market_range_chunks(
-                                interval,
-                                missing_start,
-                                missing_end,
-                            ):
-                                fetched = fetch_market_candles(
-                                    symbol,
-                                    interval,
-                                    chunk_start,
-                                    chunk_end,
-                                )
-                                save_candles(
-                                    symbol,
-                                    interval,
-                                    chunk_start,
-                                    chunk_end,
-                                    fetched,
-                                )
-                                fetched_count += len(fetched)
-                                chunk_count += 1
+                        fetched_count, chunk_count = fetch_and_save_candle_ranges(
+                            symbol,
+                            interval,
+                            fetch_ranges,
+                        )
+                        remember_repaired_ranges(symbol, interval, repair_ranges)
                         MARKET_FETCH_FAILURES.pop(fetch_key, None)
                         source = "bybit"
                     except RuntimeError as error:
@@ -717,8 +1374,9 @@ def load_candle_range(
                         )
                         print(
                             f"[market] {symbol} {interval} "
-                            f"missing={len(missing_ranges)} chunks={chunk_count} "
-                            f"candles={fetched_count} elapsed={elapsed_milliseconds}ms",
+                            f"missing={len(missing_ranges)} defects={len(defects)} "
+                            f"chunks={chunk_count} candles={fetched_count} "
+                            f"elapsed={elapsed_milliseconds}ms",
                             flush=True,
                         )
             covered = not missing_cached_ranges(
@@ -765,10 +1423,12 @@ def load_candle_range(
 
 def load_chart_candles(symbol, interval, anchor_timestamp):
     validate_market_scope(symbol, interval)
-    if anchor_timestamp < 1_500_000_000_000 or anchor_timestamp > int(time.time() * 1000) + 31 * 86_400_000:
+    now_timestamp = int(time.time() * 1000)
+    if anchor_timestamp < 1_500_000_000_000 or anchor_timestamp > now_timestamp + 31 * 86_400_000:
         raise ValueError("视频时间无效")
+    interval_ms = INTERVAL_MILLISECONDS[interval]
     effective_cutoff = anchor_timestamp
-    start_timestamp = anchor_timestamp - INTERVAL_MILLISECONDS[interval] * 500
+    start_timestamp = anchor_timestamp - interval_ms * 500
     loaded_cutoff = effective_cutoff
     candles, source, warning = load_candle_range(
         symbol,
@@ -777,16 +1437,61 @@ def load_chart_candles(symbol, interval, anchor_timestamp):
         loaded_cutoff,
         wait_for_refresh=True,
     )
+    # Newly listed (or newly added) symbols often inherit the previous chart's
+    # historical cursor. An empty window is cached as covered, so retry around
+    # now instead of leaving the chart blank.
+    if not candles and not warning and anchor_timestamp < now_timestamp - interval_ms:
+        live_cutoff = now_timestamp
+        live_start = live_cutoff - interval_ms * 500
+        live_candles, live_source, live_warning = load_candle_range(
+            symbol,
+            interval,
+            live_start,
+            live_cutoff,
+            wait_for_refresh=True,
+        )
+        if live_candles:
+            candles = live_candles
+            source = live_source
+            warning = live_warning
+            effective_cutoff = live_cutoff
+            loaded_cutoff = live_cutoff
+        elif live_warning:
+            warning = live_warning
     return {
         "candles": candles,
         "anchor": anchor_timestamp,
-        "requestedCutoff": effective_cutoff,
+        "requestedCutoff": anchor_timestamp,
         "effectiveCutoff": effective_cutoff,
         "loadedCutoff": loaded_cutoff,
         "hasMoreLater": loaded_cutoff < effective_cutoff,
         "source": source,
         "warning": warning,
     }
+
+
+def trade_candle_window(entry_timestamp, exit_timestamp, interval, now_timestamp=None):
+    if now_timestamp is None:
+        now_timestamp = int(time.time() * 1000)
+    interval_ms = INTERVAL_MILLISECONDS[interval]
+    exit_timestamp = min(exit_timestamp, now_timestamp)
+    holding_bars = max(
+        1,
+        math.ceil((exit_timestamp - entry_timestamp) / interval_ms),
+    )
+    padding_bars = 200 if holding_bars < 400 else 50
+    start_timestamp = entry_timestamp - interval_ms * padding_bars
+    end_timestamp = min(now_timestamp, exit_timestamp + interval_ms * padding_bars)
+    span_bars = max(1, math.ceil((end_timestamp - start_timestamp) / interval_ms) + 1)
+    if span_bars <= MAX_CANDLES_PER_RESPONSE:
+        return start_timestamp, end_timestamp, False
+    pad = min(padding_bars, 40)
+    start_timestamp = entry_timestamp - interval_ms * pad
+    end_timestamp = min(
+        now_timestamp,
+        start_timestamp + interval_ms * (MAX_CANDLES_PER_RESPONSE - 1),
+    )
+    return start_timestamp, end_timestamp, True
 
 
 def load_bitlang_trade_candles(symbol, interval, entry_timestamp, exit_timestamp):
@@ -802,16 +1507,8 @@ def load_bitlang_trade_candles(symbol, interval, entry_timestamp, exit_timestamp
     ):
         raise ValueError("交割单开平仓时间无效")
 
-    interval_milliseconds = INTERVAL_MILLISECONDS[interval]
-    holding_bars = max(
-        1,
-        math.ceil((exit_timestamp - entry_timestamp) / interval_milliseconds),
-    )
-    padding_bars = 200 if holding_bars < 400 else 50
-    start_timestamp = entry_timestamp - interval_milliseconds * padding_bars
-    end_timestamp = min(
-        now_timestamp,
-        exit_timestamp + interval_milliseconds * padding_bars,
+    start_timestamp, end_timestamp, truncated = trade_candle_window(
+        entry_timestamp, exit_timestamp, interval, now_timestamp
     )
     candles, source, warning = load_candle_range(
         symbol,
@@ -823,6 +1520,7 @@ def load_bitlang_trade_candles(symbol, interval, entry_timestamp, exit_timestamp
         "candles": candles,
         "source": source,
         "warning": warning,
+        "truncated": truncated,
         "entry": entry_timestamp,
         "exit": exit_timestamp,
     }
@@ -1169,6 +1867,7 @@ def add_custom_symbol(symbol_str):
         raise ValueError(f"校验该合约失败：{err}")
     if not candles:
         raise ValueError("交易所未返回该合约的 K 线，请检查合约代码")
+    save_candles(symbol, "60", start_ts, now_ts, candles)
 
     now = datetime.now().astimezone().isoformat()
     name = f"{symbol} 永续"
@@ -1295,6 +1994,977 @@ def delete_drawings(query):
         )
 
 
+def _fernet():
+    with CREDENTIAL_LOCK:
+        RUN_DIR.mkdir(parents=True, exist_ok=True)
+        if CREDENTIAL_KEY_FILE.exists():
+            key = CREDENTIAL_KEY_FILE.read_bytes().strip()
+        else:
+            key = Fernet.generate_key()
+            CREDENTIAL_KEY_FILE.write_bytes(key)
+            try:
+                os.chmod(CREDENTIAL_KEY_FILE, 0o600)
+            except OSError:
+                pass
+    return Fernet(key)
+
+
+def _encrypt_secret(value):
+    return _fernet().encrypt(str(value).encode("utf-8")).decode("ascii")
+
+
+def _decrypt_secret(value):
+    try:
+        return _fernet().decrypt(str(value).encode("ascii")).decode("utf-8")
+    except (InvalidToken, ValueError) as error:
+        raise RuntimeError("本地密钥无法解密，请重新保存 Bitget API") from error
+
+
+def _app_setting(key, default=None):
+    with DATABASE_LOCK, database() as connection:
+        row = connection.execute(
+            "SELECT value FROM app_settings WHERE key = ?",
+            (key,),
+        ).fetchone()
+    if row is None:
+        return default
+    return row["value"]
+
+
+def _set_app_setting(key, value):
+    with DATABASE_LOCK, database() as connection:
+        connection.execute(
+            "INSERT INTO app_settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+            (key, value),
+        )
+
+
+def bitget_credentials_configured():
+    return bool(
+        _app_setting("bitget_api_key_enc")
+        and _app_setting("bitget_api_secret_enc")
+        and _app_setting("bitget_api_passphrase_enc")
+    )
+
+
+def save_bitget_credentials(payload):
+    if not isinstance(payload, dict):
+        raise ValueError("密钥格式无效")
+    api_key = str(payload.get("apiKey") or "").strip()
+    secret = str(payload.get("secret") or "").strip()
+    passphrase = str(payload.get("passphrase") or "").strip()
+    if not api_key or not secret or not passphrase:
+        raise ValueError("需要 API Key、Secret 和 Passphrase")
+    if len(api_key) > 200 or len(secret) > 200 or len(passphrase) > 200:
+        raise ValueError("密钥长度超出限制")
+    encrypted = (
+        ("bitget_api_key_enc", _encrypt_secret(api_key)),
+        ("bitget_api_secret_enc", _encrypt_secret(secret)),
+        ("bitget_api_passphrase_enc", _encrypt_secret(passphrase)),
+    )
+    with CREDENTIAL_LOCK, DATABASE_LOCK, database() as connection:
+        connection.executemany(
+            "INSERT INTO app_settings (key, value) VALUES (?, ?) "
+            "ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+            encrypted,
+        )
+    return {"configured": True}
+
+
+def load_bitget_credentials():
+    with DATABASE_LOCK, database() as connection:
+        rows = connection.execute(
+            "SELECT key, value FROM app_settings WHERE key IN (?, ?, ?)",
+            (
+                "bitget_api_key_enc",
+                "bitget_api_secret_enc",
+                "bitget_api_passphrase_enc",
+            ),
+        ).fetchall()
+    values = {row["key"]: row["value"] for row in rows}
+    api_key = values.get("bitget_api_key_enc")
+    secret = values.get("bitget_api_secret_enc")
+    passphrase = values.get("bitget_api_passphrase_enc")
+    if not api_key or not secret or not passphrase:
+        raise ValueError("尚未配置 Bitget 只读 API")
+    return {
+        "apiKey": _decrypt_secret(api_key),
+        "secret": _decrypt_secret(secret),
+        "password": _decrypt_secret(passphrase),
+    }
+
+
+def _upsert_exchange_position(connection, position, synced_at):
+    connection.execute(
+        """INSERT INTO exchange_positions (
+               venue, position_id, unified_symbol, chart_symbol, side, status,
+               entry_price, exit_price, contracts, leverage, margin_mode, hedged,
+               realized_pnl, net_pnl, funding, open_fee, close_fee,
+               entry_time_ms, exit_time_ms, synced_at
+           ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+           ON CONFLICT(venue, position_id) DO UPDATE SET
+             unified_symbol = excluded.unified_symbol,
+             chart_symbol = excluded.chart_symbol,
+             side = excluded.side,
+             status = excluded.status,
+             entry_price = excluded.entry_price,
+             exit_price = excluded.exit_price,
+             contracts = excluded.contracts,
+             leverage = COALESCE(excluded.leverage, leverage),
+             margin_mode = excluded.margin_mode,
+             hedged = excluded.hedged,
+             realized_pnl = excluded.realized_pnl,
+             net_pnl = excluded.net_pnl,
+             funding = excluded.funding,
+             open_fee = excluded.open_fee,
+             close_fee = excluded.close_fee,
+             entry_time_ms = excluded.entry_time_ms,
+             exit_time_ms = excluded.exit_time_ms,
+             synced_at = excluded.synced_at""",
+        (
+            position["venue"],
+            position["positionId"],
+            position["unifiedSymbol"],
+            position["chartSymbol"],
+            position["side"],
+            position["status"],
+            position.get("entryPrice"),
+            position.get("exitPrice"),
+            position.get("contracts"),
+            position.get("leverage"),
+            position.get("marginMode"),
+            1 if position.get("hedged") else 0,
+            position.get("realizedPnl"),
+            position.get("netPnl"),
+            position.get("funding"),
+            position.get("openFee"),
+            position.get("closeFee"),
+            position["entryTimeMs"],
+            position.get("exitTimeMs"),
+            synced_at,
+        ),
+    )
+
+
+def _migrate_open_annotations(connection, closed_position):
+    rows = connection.execute(
+        """SELECT position_id, leverage FROM exchange_positions
+           WHERE venue = ? AND status = 'open' AND chart_symbol = ? AND side = ?
+             AND ABS(entry_time_ms - ?) < 2000 AND position_id <> ?""",
+        (
+            closed_position["venue"],
+            closed_position["chartSymbol"],
+            closed_position["side"],
+            closed_position["entryTimeMs"],
+            closed_position["positionId"],
+        ),
+    ).fetchall()
+    for row in rows:
+        old_id = row["position_id"]
+        if closed_position.get("leverage") is None and row["leverage"] is not None:
+            closed_position["leverage"] = row["leverage"]
+        connection.execute(
+            """INSERT INTO position_notes (venue, position_id, note, updated_at)
+               SELECT venue, ?, note, updated_at FROM position_notes
+               WHERE venue = ? AND position_id = ?
+               ON CONFLICT(venue, position_id) DO NOTHING""",
+            (closed_position["positionId"], closed_position["venue"], old_id),
+        )
+        connection.execute(
+            """INSERT INTO position_tag_map (venue, position_id, tag_id)
+               SELECT venue, ?, tag_id FROM position_tag_map
+               WHERE venue = ? AND position_id = ?
+               ON CONFLICT(venue, position_id, tag_id) DO NOTHING""",
+            (closed_position["positionId"], closed_position["venue"], old_id),
+        )
+        connection.execute(
+            "DELETE FROM position_notes WHERE venue = ? AND position_id = ?",
+            (closed_position["venue"], old_id),
+        )
+        connection.execute(
+            "DELETE FROM position_tag_map WHERE venue = ? AND position_id = ?",
+            (closed_position["venue"], old_id),
+        )
+        connection.execute(
+            "DELETE FROM exchange_positions WHERE venue = ? AND position_id = ?",
+            (closed_position["venue"], old_id),
+        )
+
+
+def _upsert_position_fill(connection, fill, synced_at):
+    connection.execute(
+        """INSERT INTO position_fills (
+               venue, exec_id, chart_symbol, unified_symbol, side, trade_side,
+               price, quantity, pnl, fee, time_ms, synced_at
+           ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+           ON CONFLICT(venue, exec_id) DO UPDATE SET
+             chart_symbol = excluded.chart_symbol,
+             unified_symbol = excluded.unified_symbol,
+             side = excluded.side,
+             trade_side = excluded.trade_side,
+             price = excluded.price,
+             quantity = excluded.quantity,
+             pnl = excluded.pnl,
+             fee = excluded.fee,
+             time_ms = excluded.time_ms,
+             synced_at = excluded.synced_at""",
+        (
+            POSITION_REVIEW_VENUE,
+            fill["execId"],
+            fill["chartSymbol"],
+            fill.get("unifiedSymbol"),
+            fill["side"],
+            fill.get("tradeSide"),
+            fill.get("price"),
+            fill.get("quantity"),
+            fill.get("pnl"),
+            fill.get("fee"),
+            fill["timeMs"],
+            synced_at,
+        ),
+    )
+
+
+def _fill_from_row(row):
+    return {
+        "execId": row["exec_id"],
+        "chartSymbol": row["chart_symbol"],
+        "unifiedSymbol": row["unified_symbol"],
+        "side": row["side"],
+        "tradeSide": row["trade_side"],
+        "price": row["price"],
+        "quantity": row["quantity"],
+        "pnl": row["pnl"],
+        "fee": row["fee"],
+        "timeMs": row["time_ms"],
+    }
+
+
+def assign_fills_to_positions(positions, fills):
+    now_ms = int(time.time() * 1000)
+    grouped = {position["positionId"]: [] for position in positions}
+    positions_by_symbol = {}
+    for position in positions:
+        positions_by_symbol.setdefault(position.get("chartSymbol"), []).append(position)
+    for fill in fills or []:
+        candidates = []
+        fill_time = fill.get("timeMs")
+        if fill_time is None:
+            continue
+        for position in positions_by_symbol.get(fill.get("chartSymbol"), []):
+            entry_ms = position.get("entryTimeMs")
+            if entry_ms is None:
+                continue
+            exit_ms = position.get("exitTimeMs") or now_ms
+            if fill_time < entry_ms - FILL_MATCH_PAD_MS:
+                continue
+            if fill_time > exit_ms + FILL_MATCH_PAD_MS:
+                continue
+            role = classify_fill_role(fill, position)
+            if not role:
+                continue
+            candidates.append((position, role))
+        eligible = [
+            item
+            for item in candidates
+            if item[0]["entryTimeMs"] <= fill_time + FILL_MATCH_PAD_MS
+        ]
+        if not eligible:
+            continue
+        chosen, role = max(eligible, key=lambda item: item[0]["entryTimeMs"])
+        grouped[chosen["positionId"]].append({**fill, "role": role})
+
+    assigned = {}
+    for position in positions:
+        items = sorted(
+            grouped.get(position["positionId"], []),
+            key=lambda item: (item.get("timeMs") or 0, item.get("execId") or ""),
+        )
+        close_items = [item for item in items if item.get("role") == "close"]
+        last_close_id = None
+        if position.get("status") == "closed" and close_items:
+            last_close_id = close_items[-1].get("execId")
+        seen_open = False
+        annotated = []
+        for item in items:
+            role = item.get("role")
+            if role == "open":
+                kind = "open" if not seen_open else "scaleIn"
+                seen_open = True
+            elif position.get("status") == "closed" and item.get("execId") == last_close_id:
+                kind = "close"
+            else:
+                kind = "reduce"
+            annotated.append(
+                {
+                    "execId": item.get("execId"),
+                    "timeMs": item.get("timeMs"),
+                    "side": item.get("side"),
+                    "tradeSide": item.get("tradeSide"),
+                    "kind": kind,
+                    "price": item.get("price"),
+                    "quantity": item.get("quantity"),
+                    "pnl": item.get("pnl"),
+                }
+            )
+        assigned[position["positionId"]] = annotated
+    return assigned
+
+
+def sync_bitget_positions():
+    if not POSITION_SYNC_LOCK.acquire(blocking=False):
+        raise SyncInProgressError("仓位同步正在进行，请稍后再试")
+    try:
+        return _sync_bitget_positions()
+    finally:
+        POSITION_SYNC_LOCK.release()
+
+
+def _sync_bitget_positions():
+    credentials = load_bitget_credentials()
+    provider = BitgetUtaPositionProvider(
+        credentials["apiKey"],
+        credentials["secret"],
+        credentials["password"],
+    )
+    now_ms = int(time.time() * 1000)
+    window_ms = 30 * 24 * 60 * 60 * 1000
+    closed = []
+    seen_ids = set()
+    for index in range(3):
+        until_ms = now_ms - index * window_ms
+        since_ms = until_ms - window_ms
+        for position in provider.fetch_closed_positions(since_ms, until_ms):
+            if position["positionId"] in seen_ids:
+                continue
+            seen_ids.add(position["positionId"])
+            closed.append(position)
+    opened = provider.fetch_open_positions()
+    open_ids = {item["positionId"] for item in opened}
+    balance = provider.fetch_balance_usdt()
+    fills = []
+    fills_ok = True
+    try:
+        for index in range(3):
+            until_ms = now_ms - index * window_ms
+            since_ms = until_ms - window_ms
+            fills.extend(provider.fetch_fills(since_ms, until_ms))
+    except RuntimeError as error:
+        fills_ok = False
+        print(f"[position-review] 成交明细同步失败，保留已有成交：{error}", flush=True)
+    synced_at = datetime.now().astimezone().isoformat()
+    with DATABASE_LOCK, database() as connection:
+        for position in closed:
+            _migrate_open_annotations(connection, position)
+            _upsert_exchange_position(connection, position, synced_at)
+        stale_open = connection.execute(
+            """SELECT position_id FROM exchange_positions
+               WHERE venue = ? AND status = 'open'""",
+            (POSITION_REVIEW_VENUE,),
+        ).fetchall()
+        for row in stale_open:
+            if row["position_id"] not in open_ids:
+                connection.execute(
+                    "DELETE FROM exchange_positions WHERE venue = ? AND position_id = ?",
+                    (POSITION_REVIEW_VENUE, row["position_id"]),
+                )
+        for position in opened:
+            _upsert_exchange_position(connection, position, synced_at)
+        if fills_ok:
+            for fill in fills:
+                _upsert_position_fill(connection, fill, synced_at)
+        connection.execute(
+            "INSERT INTO app_settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+            ("bitget_last_synced_at", synced_at),
+        )
+        connection.execute(
+            "INSERT INTO app_settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+            ("bitget_usdt_total", json.dumps(balance.get("total"))),
+        )
+    return {
+        "configured": True,
+        "syncedAt": synced_at,
+        "closedCount": len(closed),
+        "openCount": len(opened),
+        "balance": balance,
+        "positions": list_position_review(),
+        "tags": list_position_tags(),
+    }
+
+
+def _read_position_tags(connection):
+    rows = connection.execute(
+        "SELECT id, name, color FROM position_tags ORDER BY name COLLATE NOCASE"
+    ).fetchall()
+    return [{"id": row["id"], "name": row["name"], "color": row["color"]} for row in rows]
+
+
+def list_position_tags():
+    with DATABASE_LOCK, database() as connection:
+        return _read_position_tags(connection)
+
+
+def create_position_tag(name):
+    cleaned = str(name or "").strip()
+    if not cleaned or len(cleaned) > 32:
+        raise ValueError("标签名称为 1–32 个字符")
+    color = TAG_COLORS[sum(ord(char) for char in cleaned) % len(TAG_COLORS)]
+    with DATABASE_LOCK, database() as connection:
+        try:
+            connection.execute(
+                "INSERT INTO position_tags (name, color) VALUES (?, ?)",
+                (cleaned, color),
+            )
+        except sqlite3.IntegrityError as error:
+            raise ValueError("标签已存在") from error
+        row = connection.execute(
+            "SELECT id, name, color FROM position_tags WHERE name = ?",
+            (cleaned,),
+        ).fetchone()
+    return {"id": row["id"], "name": row["name"], "color": row["color"]}
+
+
+def delete_position_tag(tag_id):
+    try:
+        cleaned_id = int(tag_id)
+    except (TypeError, ValueError):
+        raise ValueError("标签 ID 无效")
+    if cleaned_id <= 0:
+        raise ValueError("标签 ID 无效")
+    with DATABASE_LOCK, database() as connection:
+        connection.execute(
+            "DELETE FROM position_tag_map WHERE tag_id = ?",
+            (cleaned_id,),
+        )
+        connection.execute(
+            "DELETE FROM position_tags WHERE id = ?",
+            (cleaned_id,),
+        )
+    return {"ok": True}
+
+
+def save_position_note(payload):
+    venue = str(payload.get("venue") or POSITION_REVIEW_VENUE)
+    position_id = str(payload.get("positionId") or "").strip()
+    note = payload.get("note") or ""
+    if not position_id or len(position_id) > 80:
+        raise ValueError("仓位 ID 无效")
+    if not isinstance(note, str) or len(note) > 20000:
+        raise ValueError("备注过长")
+    updated_at = datetime.now().astimezone().isoformat()
+    with DATABASE_LOCK, database() as connection:
+        exists = connection.execute(
+            "SELECT 1 FROM exchange_positions WHERE venue = ? AND position_id = ?",
+            (venue, position_id),
+        ).fetchone()
+        if exists is None:
+            raise ValueError("仓位不存在")
+        if note.strip():
+            connection.execute(
+                """INSERT INTO position_notes (venue, position_id, note, updated_at)
+                   VALUES (?, ?, ?, ?)
+                   ON CONFLICT(venue, position_id) DO UPDATE SET
+                     note = excluded.note, updated_at = excluded.updated_at""",
+                (venue, position_id, note, updated_at),
+            )
+        else:
+            connection.execute(
+                "DELETE FROM position_notes WHERE venue = ? AND position_id = ?",
+                (venue, position_id),
+            )
+    return {"ok": True, "updatedAt": updated_at}
+
+
+def save_position_tag_map(payload):
+    venue = str(payload.get("venue") or POSITION_REVIEW_VENUE)
+    position_id = str(payload.get("positionId") or "").strip()
+    tag_ids = payload.get("tagIds") or []
+    if not position_id:
+        raise ValueError("仓位 ID 无效")
+    if not isinstance(tag_ids, list) or len(tag_ids) > 20:
+        raise ValueError("标签数量无效")
+    cleaned_ids = []
+    seen_ids = set()
+    for item in tag_ids:
+        tag_id = int(item)
+        if tag_id <= 0:
+            raise ValueError("标签无效")
+        if tag_id in seen_ids:
+            continue
+        seen_ids.add(tag_id)
+        cleaned_ids.append(tag_id)
+    with DATABASE_LOCK, database() as connection:
+        exists = connection.execute(
+            "SELECT 1 FROM exchange_positions WHERE venue = ? AND position_id = ?",
+            (venue, position_id),
+        ).fetchone()
+        if exists is None:
+            raise ValueError("仓位不存在")
+        connection.execute(
+            "DELETE FROM position_tag_map WHERE venue = ? AND position_id = ?",
+            (venue, position_id),
+        )
+        for tag_id in cleaned_ids:
+            tag_exists = connection.execute(
+                "SELECT 1 FROM position_tags WHERE id = ?",
+                (tag_id,),
+            ).fetchone()
+            if tag_exists is None:
+                raise ValueError("标签不存在")
+            connection.execute(
+                "INSERT INTO position_tag_map (venue, position_id, tag_id) VALUES (?, ?, ?)",
+                (venue, position_id, tag_id),
+            )
+    return {"ok": True, "tagIds": cleaned_ids}
+
+
+def _read_position_review(connection):
+    rows = connection.execute(
+        """SELECT p.*, n.note,
+                  GROUP_CONCAT(m.tag_id) AS tag_ids
+           FROM exchange_positions p
+           LEFT JOIN position_notes n
+             ON n.venue = p.venue AND n.position_id = p.position_id
+           LEFT JOIN position_tag_map m
+             ON m.venue = p.venue AND m.position_id = p.position_id
+           GROUP BY p.venue, p.position_id
+           ORDER BY COALESCE(p.exit_time_ms, p.entry_time_ms) DESC"""
+    ).fetchall()
+    fill_rows = connection.execute(
+        """SELECT exec_id, chart_symbol, unified_symbol, side, trade_side,
+                  price, quantity, pnl, fee, time_ms
+           FROM position_fills
+           WHERE venue = ?
+           ORDER BY time_ms ASC""",
+        (POSITION_REVIEW_VENUE,),
+    ).fetchall()
+    positions = []
+    for row in rows:
+        tag_ids = []
+        if row["tag_ids"]:
+            tag_ids = [int(item) for item in str(row["tag_ids"]).split(",") if item]
+        positions.append(
+            {
+                "venue": row["venue"],
+                "positionId": row["position_id"],
+                "unifiedSymbol": row["unified_symbol"],
+                "chartSymbol": row["chart_symbol"],
+                "side": row["side"],
+                "status": row["status"],
+                "entryPrice": row["entry_price"],
+                "exitPrice": row["exit_price"],
+                "contracts": row["contracts"],
+                "leverage": row["leverage"],
+                "marginMode": row["margin_mode"],
+                "hedged": bool(row["hedged"]),
+                "realizedPnl": row["realized_pnl"],
+                "netPnl": row["net_pnl"],
+                "funding": row["funding"],
+                "openFee": row["open_fee"],
+                "closeFee": row["close_fee"],
+                "entryTimeMs": row["entry_time_ms"],
+                "exitTimeMs": row["exit_time_ms"],
+                "note": row["note"] or "",
+                "tagIds": tag_ids,
+            }
+        )
+    grouped = assign_fills_to_positions(
+        positions, [_fill_from_row(row) for row in fill_rows]
+    )
+    for position in positions:
+        position["fills"] = grouped.get(position["positionId"], [])
+    return positions
+
+
+def list_position_review():
+    with DATABASE_LOCK, database() as connection:
+        return _read_position_review(connection)
+
+
+def get_position_review_state():
+    with DATABASE_LOCK, database() as connection:
+        settings = {
+            row["key"]: row["value"]
+            for row in connection.execute(
+                """SELECT key, value FROM app_settings
+                   WHERE key IN (?, ?, ?, ?, ?)""",
+                (
+                    "bitget_api_key_enc",
+                    "bitget_api_secret_enc",
+                    "bitget_api_passphrase_enc",
+                    "bitget_last_synced_at",
+                    "bitget_usdt_total",
+                ),
+            ).fetchall()
+        }
+        positions = _read_position_review(connection)
+        tags = _read_position_tags(connection)
+    usdt_raw = settings.get("bitget_usdt_total")
+    usdt_total = None
+    if usdt_raw not in (None, ""):
+        try:
+            usdt_total = json.loads(usdt_raw)
+        except json.JSONDecodeError:
+            usdt_total = None
+    return {
+        "configured": bool(
+            settings.get("bitget_api_key_enc")
+            and settings.get("bitget_api_secret_enc")
+            and settings.get("bitget_api_passphrase_enc")
+        ),
+        "syncedAt": settings.get("bitget_last_synced_at"),
+        "balance": {"total": usdt_total} if usdt_total is not None else None,
+        "positions": positions,
+        "tags": tags,
+    }
+
+
+def resolve_position_candle_venue(symbol):
+    # Prefer CCXT Bybit whenever the compact USDT perpetual exists there.
+    # Only fall back to Bitget after the Bybit catalog has loaded and the
+    # symbol is confirmed missing. An unloaded catalog must not send BTCUSDT
+    # etc. to Bitget.
+    presence = MARKET_DATA_PROVIDER.usdt_perpetual_presence(symbol)
+    if presence == "absent":
+        return "bitget"
+    return "bybit"
+
+
+def venue_market_fetch_lock(venue, symbol, interval):
+    key = (venue, symbol, interval)
+    with MARKET_FETCH_LOCKS_GUARD:
+        return VENUE_MARKET_FETCH_LOCKS.setdefault(key, threading.Lock())
+
+
+def missing_venue_cached_ranges(venue, symbol, interval, start_timestamp, end_timestamp):
+    with DATABASE_LOCK, database() as connection:
+        rows = connection.execute(
+            """SELECT start_timestamp, end_timestamp
+               FROM venue_market_cache_ranges
+               WHERE venue = ? AND symbol = ? AND interval = ?
+               ORDER BY start_timestamp ASC""",
+            (venue, symbol, interval),
+        ).fetchall()
+    missing = []
+    cursor = start_timestamp
+    for row in rows:
+        range_start = max(start_timestamp, int(row["start_timestamp"]))
+        range_end = min(end_timestamp, int(row["end_timestamp"]))
+        if range_end < cursor:
+            continue
+        if range_start > cursor:
+            missing.append((cursor, range_start - 1))
+        cursor = max(cursor, range_end + 1)
+        if cursor > end_timestamp:
+            break
+    if cursor <= end_timestamp:
+        missing.append((cursor, end_timestamp))
+    return missing
+
+
+def merge_venue_market_cache_range(
+    connection,
+    venue,
+    symbol,
+    interval,
+    start_timestamp,
+    end_timestamp,
+    fetched_at,
+):
+    merged_start = start_timestamp
+    merged_end = end_timestamp
+    while True:
+        overlapping_ranges = connection.execute(
+            """SELECT start_timestamp, end_timestamp
+               FROM venue_market_cache_ranges
+               WHERE venue = ? AND symbol = ? AND interval = ?
+                 AND end_timestamp >= ? AND start_timestamp <= ?""",
+            (venue, symbol, interval, merged_start - 1, merged_end + 1),
+        ).fetchall()
+        expanded_start = min(
+            [merged_start]
+            + [int(row["start_timestamp"]) for row in overlapping_ranges]
+        )
+        expanded_end = max(
+            [merged_end]
+            + [int(row["end_timestamp"]) for row in overlapping_ranges]
+        )
+        if expanded_start == merged_start and expanded_end == merged_end:
+            break
+        merged_start = expanded_start
+        merged_end = expanded_end
+    connection.execute(
+        """DELETE FROM venue_market_cache_ranges
+           WHERE venue = ? AND symbol = ? AND interval = ?
+             AND end_timestamp >= ? AND start_timestamp <= ?""",
+        (venue, symbol, interval, merged_start - 1, merged_end + 1),
+    )
+    connection.execute(
+        """INSERT INTO venue_market_cache_ranges
+           (venue, symbol, interval, start_timestamp, end_timestamp, fetched_at)
+           VALUES (?, ?, ?, ?, ?, ?)""",
+        (venue, symbol, interval, merged_start, merged_end, fetched_at),
+    )
+
+
+def save_venue_candles(venue, symbol, interval, start_timestamp, end_timestamp, candles):
+    fetched_at = datetime.now().astimezone().isoformat()
+    coverage_ranges = market_cache_coverage_ranges(
+        interval,
+        start_timestamp,
+        end_timestamp,
+        candles,
+    )
+    with DATABASE_LOCK, database() as connection:
+        connection.executemany(
+            """INSERT INTO venue_market_candles
+               (venue, symbol, interval, timestamp, open, high, low, close, volume)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+               ON CONFLICT(venue, symbol, interval, timestamp) DO UPDATE SET
+                 open = excluded.open, high = excluded.high, low = excluded.low,
+                 close = excluded.close, volume = excluded.volume""",
+            [(venue, *candle) for candle in candles],
+        )
+        for range_start, range_end in coverage_ranges:
+            merge_venue_market_cache_range(
+                connection,
+                venue,
+                symbol,
+                interval,
+                range_start,
+                range_end,
+                fetched_at,
+            )
+
+
+def list_venue_candles(venue, symbol, interval, start_timestamp, end_timestamp):
+    with DATABASE_LOCK, database() as connection:
+        rows = connection.execute(
+            """SELECT timestamp, open, high, low, close, volume
+               FROM venue_market_candles
+               WHERE venue = ? AND symbol = ? AND interval = ?
+                 AND timestamp BETWEEN ? AND ?
+               ORDER BY timestamp ASC""",
+            (venue, symbol, interval, start_timestamp, end_timestamp),
+        ).fetchall()
+    return [
+        {
+            "timestamp": row[0],
+            "open": row[1],
+            "high": row[2],
+            "low": row[3],
+            "close": row[4],
+            "volume": row[5],
+        }
+        for row in rows
+    ]
+
+
+def load_bitget_candle_range(symbol, interval, start_timestamp, end_timestamp):
+    venue = "bitget"
+    fetch_key = (venue, symbol, interval)
+    missing_ranges = missing_venue_cached_ranges(
+        venue, symbol, interval, start_timestamp, end_timestamp
+    )
+    warning = ""
+    source = "sqlite"
+    if missing_ranges:
+        with venue_market_fetch_lock(venue, symbol, interval):
+            missing_ranges = missing_venue_cached_ranges(
+                venue, symbol, interval, start_timestamp, end_timestamp
+            )
+            if missing_ranges:
+                failed_at, failed_message = VENUE_MARKET_FETCH_FAILURES.get(
+                    fetch_key, (0, "")
+                )
+                if failed_message and time.monotonic() - failed_at < FETCH_FAILURE_COOLDOWN_SECONDS:
+                    warning = f"{failed_message}（稍后再试，避免重复等待）"
+                else:
+                    try:
+                        credentials = load_bitget_credentials()
+                        provider = BitgetUtaPositionProvider(
+                            credentials["apiKey"],
+                            credentials["secret"],
+                            credentials["password"],
+                        )
+                        interval_milliseconds = INTERVAL_MILLISECONDS[interval]
+                        for missing_start, missing_end in missing_ranges:
+                            for chunk_start, chunk_end in market_range_chunks(
+                                interval, missing_start, missing_end, limit=200
+                            ):
+                                fetched = provider.fetch_candles(
+                                    symbol,
+                                    interval,
+                                    interval_milliseconds,
+                                    chunk_start,
+                                    chunk_end,
+                                )
+                                save_venue_candles(
+                                    venue,
+                                    symbol,
+                                    interval,
+                                    chunk_start,
+                                    chunk_end,
+                                    fetched,
+                                )
+                        VENUE_MARKET_FETCH_FAILURES.pop(fetch_key, None)
+                        source = "bitget"
+                    except (ValueError, RuntimeError) as error:
+                        VENUE_MARKET_FETCH_FAILURES[fetch_key] = (
+                            time.monotonic(),
+                            str(error),
+                        )
+                        warning = str(error)
+    candles = list_venue_candles(venue, symbol, interval, start_timestamp, end_timestamp)
+    return candles, source, warning
+
+
+def load_position_review_candles(symbol, interval, entry_timestamp, exit_timestamp):
+    if not isinstance(symbol, str) or not re.fullmatch(r"[A-Z0-9]{3,20}USDT", symbol):
+        raise ValueError("仓位交易对无法映射为 USDT 永续合约")
+    if interval not in VALID_INTERVALS:
+        raise ValueError("不支持该 K 线周期")
+    now_timestamp = int(time.time() * 1000)
+    if entry_timestamp < 1_230_768_000_000:
+        raise ValueError("仓位开仓时间无效")
+    if exit_timestamp is None or exit_timestamp <= 0:
+        exit_timestamp = now_timestamp
+    if exit_timestamp < entry_timestamp:
+        raise ValueError("仓位平仓时间无效")
+    exit_timestamp = min(exit_timestamp, now_timestamp)
+    start_timestamp, end_timestamp, truncated = trade_candle_window(
+        entry_timestamp, exit_timestamp, interval, now_timestamp
+    )
+    candle_venue = resolve_position_candle_venue(symbol)
+    print(
+        f"[market] position-review {symbol} {interval} venue={candle_venue}",
+        flush=True,
+    )
+    if candle_venue == "bybit":
+        candles, source, warning = load_candle_range(
+            symbol, interval, start_timestamp, end_timestamp
+        )
+        return {
+            "candles": candles,
+            "source": source,
+            "candleVenue": "bybit",
+            "warning": warning,
+            "truncated": truncated,
+            "entry": entry_timestamp,
+            "exit": exit_timestamp,
+        }
+    candles, source, warning = load_bitget_candle_range(
+        symbol, interval, start_timestamp, end_timestamp
+    )
+    return {
+        "candles": candles,
+        "source": source,
+        "candleVenue": "bitget",
+        "warning": warning,
+        "truncated": truncated,
+        "entry": entry_timestamp,
+        "exit": exit_timestamp,
+    }
+
+
+def audit_venue_market_cache(sample_limit=200):
+    inconsistent = []
+    consistent_count = 0
+    inconsistent_total = 0
+    with DATABASE_LOCK, database() as connection:
+        range_count = int(
+            connection.execute(
+                "SELECT COUNT(*) FROM venue_market_cache_ranges"
+            ).fetchone()[0]
+        )
+        ranges = connection.execute(
+            """SELECT venue, symbol, interval, start_timestamp, end_timestamp, fetched_at
+               FROM venue_market_cache_ranges
+               ORDER BY fetched_at DESC, venue, symbol, interval, start_timestamp
+               LIMIT ?""",
+            (CACHE_AUDIT_MAX_RANGES,),
+        ).fetchall()
+        audited_range_count = len(ranges)
+        for row in ranges:
+            venue = row["venue"]
+            symbol = row["symbol"]
+            interval = row["interval"]
+            start_timestamp = int(row["start_timestamp"])
+            end_timestamp = int(row["end_timestamp"])
+            interval_ms = INTERVAL_MILLISECONDS.get(interval)
+            issues = []
+            if end_timestamp < start_timestamp:
+                issues.append("invalid_range")
+                timestamps = []
+            elif not interval_ms:
+                issues.append("unknown_interval")
+                timestamps = []
+            else:
+                expected_candle_count = math.ceil(
+                    (end_timestamp - start_timestamp + 1) / interval_ms
+                )
+                if expected_candle_count > CACHE_AUDIT_MAX_CANDLES_PER_RANGE:
+                    issues.append("range_scan_limit_exceeded")
+                    timestamps = []
+                else:
+                    candle_rows = connection.execute(
+                        """SELECT timestamp FROM venue_market_candles
+                           WHERE venue = ? AND symbol = ? AND interval = ?
+                             AND timestamp BETWEEN ? AND ?
+                           ORDER BY timestamp ASC
+                           LIMIT ?""",
+                        (
+                            venue,
+                            symbol,
+                            interval,
+                            start_timestamp,
+                            end_timestamp,
+                            CACHE_AUDIT_MAX_CANDLES_PER_RANGE,
+                        ),
+                    ).fetchall()
+                    timestamps = [int(item["timestamp"]) for item in candle_rows]
+                    if not timestamps:
+                        issues.append("range_empty")
+                    else:
+                        if timestamps[0] > start_timestamp:
+                            issues.append("starts_late")
+                        if timestamps[-1] + interval_ms - 1 < end_timestamp:
+                            issues.append("ends_early")
+                        gap_count = 0
+                        for index in range(1, len(timestamps)):
+                            if timestamps[index] - timestamps[index - 1] > interval_ms:
+                                gap_count += 1
+                        if gap_count:
+                            issues.append(f"internal_gaps:{gap_count}")
+            if issues:
+                inconsistent_total += 1
+                if len(inconsistent) < sample_limit:
+                    inconsistent.append(
+                        {
+                            "venue": venue,
+                            "symbol": symbol,
+                            "interval": interval,
+                            "startTimestamp": start_timestamp,
+                            "endTimestamp": end_timestamp,
+                            "candleCount": len(timestamps),
+                            "issues": issues,
+                            "fetchedAt": row["fetched_at"],
+                        }
+                    )
+            else:
+                consistent_count += 1
+    return {
+        "readOnly": True,
+        "repaired": False,
+        "rangeCount": range_count,
+        "auditedRangeCount": audited_range_count,
+        "scanTruncated": audited_range_count < range_count,
+        "consistentCount": consistent_count,
+        "inconsistentCount": inconsistent_total,
+        "inconsistent": inconsistent,
+    }
+
+
 class StudyHandler(BaseHTTPRequestHandler):
     def do_GET(self):
         parsed = urlparse(self.path)
@@ -1321,6 +2991,7 @@ class StudyHandler(BaseHTTPRequestHandler):
                         "apiOnlyBackend",
                         "warmCcxtMarkets",
                         "perpetualSymbolSearch",
+                        "positionReview",
                     ],
                 },
             )
@@ -1359,6 +3030,29 @@ class StudyHandler(BaseHTTPRequestHandler):
                 return self.send_json(
                     HTTPStatus.OK,
                     load_bitlang_trade_candles(
+                        symbol,
+                        interval,
+                        entry,
+                        exit_timestamp,
+                    ),
+                )
+            except ValueError as error:
+                return self.send_json(HTTPStatus.BAD_REQUEST, {"error": str(error)})
+            except RuntimeError as error:
+                return self.send_json(HTTPStatus.BAD_GATEWAY, {"error": str(error)})
+        if parsed.path == "/api/position-review":
+            return self.send_json(HTTPStatus.OK, get_position_review_state())
+        if parsed.path == "/api/position-review/cache-audit":
+            return self.send_json(HTTPStatus.OK, audit_venue_market_cache())
+        if parsed.path == "/api/position-review/candles":
+            try:
+                symbol = query.get("symbol", [""])[0]
+                interval = query.get("interval", [""])[0]
+                entry = int(query.get("entry", ["0"])[0])
+                exit_timestamp = int(query.get("exit", ["0"])[0])
+                return self.send_json(
+                    HTTPStatus.OK,
+                    load_position_review_candles(
                         symbol,
                         interval,
                         entry,
@@ -1408,6 +3102,24 @@ class StudyHandler(BaseHTTPRequestHandler):
                 return self.send_json(HTTPStatus.BAD_REQUEST, {"error": str(error)})
             except RuntimeError as error:
                 return self.send_json(HTTPStatus.BAD_GATEWAY, {"error": str(error)})
+        if parsed.path == "/api/chart/flow":
+            try:
+                query = parse_qs(parsed.query)
+                symbol = query.get("symbol", [""])[0]
+                interval = query.get("interval", [""])[0]
+                start_timestamp = int(query.get("from", ["0"])[0])
+                end_timestamp = int(query.get("to", ["0"])[0])
+                return self.send_json(
+                    HTTPStatus.OK,
+                    load_chart_flow(
+                        symbol,
+                        interval,
+                        start_timestamp,
+                        end_timestamp,
+                    ),
+                )
+            except ValueError as error:
+                return self.send_json(HTTPStatus.BAD_REQUEST, {"error": str(error)})
         if parsed.path == "/api/chart/drawings":
             try:
                 query = parse_qs(parsed.query)
@@ -1431,8 +3143,29 @@ class StudyHandler(BaseHTTPRequestHandler):
                 return self.send_json(HTTPStatus.OK, save_paper_trade(payload))
             if parsed.path == "/api/chart/drawings":
                 return self.send_json(HTTPStatus.OK, save_drawing(payload))
+            if parsed.path == "/api/position-review/credentials":
+                return self.send_json(HTTPStatus.OK, save_bitget_credentials(payload))
+            if parsed.path == "/api/position-review/sync":
+                return self.send_json(HTTPStatus.OK, sync_bitget_positions())
+            if parsed.path == "/api/position-review/notes":
+                return self.send_json(HTTPStatus.OK, save_position_note(payload))
+            if parsed.path == "/api/position-review/tags":
+                return self.send_json(
+                    HTTPStatus.CREATED,
+                    create_position_tag(payload.get("name")),
+                )
+            if parsed.path == "/api/position-review/position-tags":
+                return self.send_json(HTTPStatus.OK, save_position_tag_map(payload))
+            if parsed.path == "/api/position-review/tags/delete":
+                tag_id = payload.get("id") or payload.get("tagId")
+                delete_position_tag(int(tag_id))
+                return self.send_json(HTTPStatus.OK, {"ok": True})
+        except SyncInProgressError as error:
+            return self.send_json(HTTPStatus.CONFLICT, {"error": str(error)})
         except (ValueError, TypeError, OverflowError, AttributeError, json.JSONDecodeError) as error:
             return self.send_json(HTTPStatus.BAD_REQUEST, {"error": str(error)})
+        except RuntimeError as error:
+            return self.send_json(HTTPStatus.BAD_GATEWAY, {"error": str(error)})
         return self.send_error(HTTPStatus.NOT_FOUND)
 
     def do_PUT(self):
@@ -1476,11 +3209,18 @@ class StudyHandler(BaseHTTPRequestHandler):
             if parsed.path == "/api/paper-trades":
                 delete_paper_trades(query.get("id", [None])[0])
                 return self.send_json(HTTPStatus.OK, {"ok": True})
+            if parsed.path == "/api/position-review/tags":
+                raw_id = query.get("id", [None])[0]
+                if raw_id is None:
+                    payload = self.read_json_body()
+                    raw_id = payload.get("id") or payload.get("tagId")
+                delete_position_tag(int(raw_id))
+                return self.send_json(HTTPStatus.OK, {"ok": True})
             if parsed.path != "/api/chart/drawings":
                 return self.send_error(HTTPStatus.NOT_FOUND)
             delete_drawings(query)
             return self.send_json(HTTPStatus.OK, {"ok": True})
-        except ValueError as error:
+        except (ValueError, TypeError) as error:
             return self.send_json(HTTPStatus.BAD_REQUEST, {"error": str(error)})
 
     def read_json_body(self):
@@ -1516,6 +3256,11 @@ if __name__ == "__main__":
         threading.Thread(
             target=warm_up_market_provider,
             name="ccxt-market-warmup",
+            daemon=True,
+        ).start()
+        threading.Thread(
+            target=warm_up_flow_cache,
+            name="bybit-flow-warmup",
             daemon=True,
         ).start()
     print(f"学习页已启动：http://{HOST}:{PORT}/")

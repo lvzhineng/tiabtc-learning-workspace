@@ -112,6 +112,155 @@ class DrawingStorageTests(unittest.TestCase):
         self.assertFalse(study_server.cached_range_contains("BTCUSDT", "60", 900, 3800))
         self.assertFalse(study_server.cached_range_contains("BTCUSDT", "60", 1200, 4100))
 
+    def test_position_review_prefers_bybit_until_catalog_confirms_absence(self):
+        with mock.patch.object(
+            study_server.MARKET_DATA_PROVIDER,
+            "usdt_perpetual_presence",
+            return_value="unknown",
+        ):
+            self.assertEqual(
+                study_server.resolve_position_candle_venue("BTCUSDT"),
+                "bybit",
+            )
+        with mock.patch.object(
+            study_server.MARKET_DATA_PROVIDER,
+            "usdt_perpetual_presence",
+            return_value="present",
+        ):
+            self.assertEqual(
+                study_server.resolve_position_candle_venue("INTCUSDT"),
+                "bybit",
+            )
+        with mock.patch.object(
+            study_server.MARKET_DATA_PROVIDER,
+            "usdt_perpetual_presence",
+            return_value="absent",
+        ):
+            self.assertEqual(
+                study_server.resolve_position_candle_venue("SHIBUSDT"),
+                "bitget",
+            )
+
+    def test_bybit_presence_is_unknown_before_catalog_loads(self):
+        from market_data_provider import CcxtBybitMarketDataProvider
+
+        provider = CcxtBybitMarketDataProvider()
+        provider.exchange.markets = {}
+        with mock.patch.object(provider, "_schedule_catalog_refresh"):
+            self.assertEqual(provider.usdt_perpetual_presence("BTCUSDT"), "unknown")
+        provider._perpetual_catalog = [
+            {
+                "symbol": "BTCUSDT",
+                "base": "BTC",
+                "quote": "USDT",
+                "name": "BTC/USDT 永续",
+            }
+        ]
+        provider._perpetual_catalog_loaded_at = 1.0
+        self.assertEqual(provider.usdt_perpetual_presence("BTCUSDT"), "present")
+        self.assertEqual(provider.usdt_perpetual_presence("SHIBUSDT"), "absent")
+        self.assertTrue(provider.has_usdt_perpetual_symbol("BTCUSDT"))
+        self.assertFalse(provider.has_usdt_perpetual_symbol("SHIBUSDT"))
+
+    def test_save_candles_does_not_cover_open_bar_or_internal_holes(self):
+        now = 1_787_809_200_000
+        interval = "15"
+        interval_ms = study_server.INTERVAL_MILLISECONDS[interval]
+        with mock.patch.object(study_server.time, "time", return_value=now / 1000):
+            open_ts = study_server.current_open_candle_timestamp(interval, now)
+            last_closed = open_ts - interval_ms
+            older = last_closed - interval_ms * 2
+            skipped = last_closed - interval_ms
+            candles = [
+                ("BTCUSDT", interval, older, 100, 101, 99, 100.5, 10),
+                ("BTCUSDT", interval, last_closed, 100.5, 102, 100, 101, 12),
+                ("BTCUSDT", interval, open_ts, 101, 101.2, 100.8, 101.1, 0.4),
+            ]
+            study_server.save_candles(
+                "BTCUSDT",
+                interval,
+                older,
+                open_ts + interval_ms - 1,
+                candles,
+            )
+            self.assertTrue(
+                study_server.cached_range_contains("BTCUSDT", interval, older, older)
+            )
+            self.assertFalse(
+                study_server.cached_range_contains("BTCUSDT", interval, skipped, skipped)
+            )
+            self.assertTrue(
+                study_server.cached_range_contains(
+                    "BTCUSDT", interval, last_closed, last_closed
+                )
+            )
+            self.assertFalse(
+                study_server.cached_range_contains("BTCUSDT", interval, open_ts, open_ts)
+            )
+
+    def test_load_candle_range_repairs_claimed_hole_and_stale_partial(self):
+        now = 1_787_809_200_000
+        interval = "15"
+        interval_ms = study_server.INTERVAL_MILLISECONDS[interval]
+        study_server.MARKET_RANGE_REPAIR_AT.clear()
+        study_server.MARKET_FETCH_FAILURES.pop(("BTCUSDT", interval), None)
+        with mock.patch.object(study_server.time, "time", return_value=now / 1000):
+            last_closed = study_server.latest_closed_candle_timestamp(interval, now)
+            first_ts = last_closed - interval_ms * 2
+            hole_ts = last_closed - interval_ms
+            with study_server.database() as connection:
+                connection.executemany(
+                    "INSERT INTO market_candles VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                    [
+                        ("BTCUSDT", interval, first_ts, 100, 101, 99, 100.5, 20),
+                        ("BTCUSDT", interval, last_closed, 90, 91, 89, 90.5, 25),
+                    ],
+                )
+                connection.execute(
+                    "INSERT INTO market_cache_ranges VALUES (?, ?, ?, ?, ?)",
+                    (
+                        "BTCUSDT",
+                        interval,
+                        first_ts,
+                        last_closed + interval_ms - 1,
+                        "now",
+                    ),
+                )
+
+            def fetch_missing(symbol, interval_name, start_timestamp, end_timestamp):
+                self.assertEqual(symbol, "BTCUSDT")
+                self.assertEqual(interval_name, interval)
+                return [
+                    ("BTCUSDT", interval, hole_ts, 100.5, 101, 100, 100.8, 18),
+                    ("BTCUSDT", interval, last_closed, 100.8, 101.2, 100.4, 101, 22),
+                ]
+
+            with mock.patch.object(
+                study_server,
+                "fetch_market_candles",
+                side_effect=fetch_missing,
+            ), mock.patch.object(
+                study_server,
+                "request_needs_trailing_refresh",
+                return_value=False,
+            ):
+                candles, source, warning = study_server.load_candle_range(
+                    "BTCUSDT",
+                    interval,
+                    first_ts,
+                    last_closed,
+                    offline=False,
+                    wait_for_refresh=True,
+                )
+
+        timestamps = [candle["timestamp"] for candle in candles]
+        self.assertEqual(timestamps, [first_ts, hole_ts, last_closed])
+        self.assertEqual(source, "bybit")
+        self.assertEqual(warning, "")
+        repaired = next(candle for candle in candles if candle["timestamp"] == last_closed)
+        self.assertEqual(repaired["open"], 100.8)
+        self.assertEqual(repaired["close"], 101)
+
     def test_offline_mode_never_fetches_missing_ranges(self):
         original_fetch = study_server.fetch_market_candles
         study_server.fetch_market_candles = lambda *args: self.fail("offline mode used network")
@@ -288,8 +437,40 @@ class DrawingStorageTests(unittest.TestCase):
         self.assertEqual(payload["loadedCutoff"], anchor)
         self.assertFalse(payload["hasMoreLater"])
         self.assertNotIn("futureDays", payload)
-        self.assertEqual(load_range.call_args.args[3], anchor)
-        self.assertTrue(load_range.call_args.kwargs["wait_for_refresh"])
+        self.assertEqual(load_range.call_args_list[0].args[3], anchor)
+        self.assertTrue(load_range.call_args_list[0].kwargs["wait_for_refresh"])
+        self.assertEqual(load_range.call_count, 2)
+
+    def test_empty_historical_chart_retries_around_now(self):
+        anchor = 1_620_518_400_000
+        now = 1_787_209_200_000
+        latest = {
+            "timestamp": now - 86_400_000,
+            "open": 1,
+            "high": 2,
+            "low": 0.5,
+            "close": 1.5,
+            "volume": 10,
+        }
+
+        def load_range(symbol, interval, start_timestamp, end_timestamp, **kwargs):
+            if end_timestamp >= now - 1:
+                return ([latest], "bybit", "")
+            return ([], "sqlite", "")
+
+        with (
+            mock.patch.object(study_server.time, "time", return_value=now / 1000),
+            mock.patch.object(
+                study_server, "load_candle_range", side_effect=load_range
+            ) as mocked_range,
+        ):
+            payload = study_server.load_chart_candles("BTCUSDT", "D", anchor)
+
+        self.assertEqual(payload["candles"], [latest])
+        self.assertEqual(payload["requestedCutoff"], anchor)
+        self.assertEqual(payload["effectiveCutoff"], now)
+        self.assertEqual(payload["source"], "bybit")
+        self.assertEqual(mocked_range.call_count, 2)
 
     def test_replay_requires_complete_range_and_excludes_open_candle(self):
         now = 1_786_268_536_566
@@ -441,6 +622,304 @@ class DrawingStorageTests(unittest.TestCase):
                     "createdAt": "2026-08-09T12:00:00",
                 }
             )
+
+
+class PositionReviewStorageTests(unittest.TestCase):
+    def setUp(self):
+        self.temporary_directory = tempfile.TemporaryDirectory()
+        self.original_database_file = study_server.DATABASE_FILE
+        self.original_state_file = study_server.STATE_FILE
+        study_server.DATABASE_FILE = Path(self.temporary_directory.name) / "review.sqlite"
+        study_server.STATE_FILE = Path(self.temporary_directory.name) / "learning-state.json"
+        study_server.initialize_database()
+        with study_server.DATABASE_LOCK, study_server.database() as connection:
+            study_server._upsert_exchange_position(
+                connection,
+                {
+                    "venue": "bitget",
+                    "positionId": "pos-1",
+                    "unifiedSymbol": "BTC/USDT:USDT",
+                    "chartSymbol": "BTCUSDT",
+                    "side": "long",
+                    "status": "closed",
+                    "entryPrice": 60000.0,
+                    "exitPrice": 62000.0,
+                    "contracts": 1.0,
+                    "leverage": 10.0,
+                    "marginMode": "crossed",
+                    "hedged": False,
+                    "realizedPnl": 200.0,
+                    "netPnl": 195.0,
+                    "funding": -2.0,
+                    "openFee": 1.5,
+                    "closeFee": 1.5,
+                    "entryTimeMs": 1700000000000,
+                    "exitTimeMs": 1700010000000,
+                },
+                "2026-08-26T12:00:00+08:00",
+            )
+
+    def tearDown(self):
+        study_server.DATABASE_FILE = self.original_database_file
+        study_server.STATE_FILE = self.original_state_file
+        self.temporary_directory.cleanup()
+
+    def test_create_list_and_delete_tag(self):
+        tag1 = study_server.create_position_tag("突破追单")
+        tag2 = study_server.create_position_tag("假突破止损")
+        tags = study_server.list_position_tags()
+        self.assertEqual(len(tags), 2)
+        tag_names = {t["name"] for t in tags}
+        self.assertIn("突破追单", tag_names)
+        self.assertIn("假突破止损", tag_names)
+
+        # map tag to position
+        study_server.save_position_tag_map({
+            "venue": "bitget",
+            "positionId": "pos-1",
+            "tagIds": [tag1["id"], tag2["id"]],
+        })
+        positions = study_server.list_position_review()
+        self.assertEqual(len(positions), 1)
+        self.assertEqual(set(positions[0]["tagIds"]), {tag1["id"], tag2["id"]})
+
+        # delete tag1 and verify cascade
+        study_server.delete_position_tag(tag1["id"])
+        tags_after = study_server.list_position_tags()
+        self.assertEqual(len(tags_after), 1)
+        self.assertEqual(tags_after[0]["name"], "假突破止损")
+
+        positions_after = study_server.list_position_review()
+        self.assertEqual(positions_after[0]["tagIds"], [tag2["id"]])
+
+    def test_upsert_keeps_leverage_when_closed_history_omits_it(self):
+        with study_server.DATABASE_LOCK, study_server.database() as connection:
+            study_server._upsert_exchange_position(
+                connection,
+                {
+                    "venue": "bitget",
+                    "positionId": "pos-1",
+                    "unifiedSymbol": "BTC/USDT:USDT",
+                    "chartSymbol": "BTCUSDT",
+                    "side": "long",
+                    "status": "closed",
+                    "entryPrice": 60000.0,
+                    "exitPrice": 62000.0,
+                    "contracts": 1.0,
+                    "leverage": None,
+                    "marginMode": "crossed",
+                    "hedged": False,
+                    "realizedPnl": 200.0,
+                    "netPnl": 195.0,
+                    "funding": -2.0,
+                    "openFee": 1.5,
+                    "closeFee": 1.5,
+                    "entryTimeMs": 1700000000000,
+                    "exitTimeMs": 1700010000000,
+                },
+                "2026-08-27T12:00:00+08:00",
+            )
+        positions = study_server.list_position_review()
+        self.assertEqual(positions[0]["leverage"], 10.0)
+
+    def test_migrate_copies_leverage_from_open_row(self):
+        open_position = {
+            "venue": "bitget",
+            "positionId": "open:ETHUSDT:long:1800000000000",
+            "unifiedSymbol": "ETH/USDT:USDT",
+            "chartSymbol": "ETHUSDT",
+            "side": "long",
+            "status": "open",
+            "entryPrice": 3000.0,
+            "exitPrice": None,
+            "contracts": 2.0,
+            "leverage": 8.0,
+            "marginMode": "crossed",
+            "hedged": False,
+            "realizedPnl": None,
+            "netPnl": None,
+            "funding": None,
+            "openFee": 0.5,
+            "closeFee": None,
+            "entryTimeMs": 1800000000000,
+            "exitTimeMs": None,
+        }
+        closed_position = {
+            **open_position,
+            "positionId": "eth-closed-1",
+            "status": "closed",
+            "exitPrice": 3100.0,
+            "leverage": None,
+            "realizedPnl": 200.0,
+            "netPnl": 198.0,
+            "closeFee": 0.5,
+            "exitTimeMs": 1800010000000,
+        }
+        with study_server.DATABASE_LOCK, study_server.database() as connection:
+            study_server._upsert_exchange_position(
+                connection, open_position, "2026-08-27T12:00:00+08:00"
+            )
+            study_server._migrate_open_annotations(connection, closed_position)
+            study_server._upsert_exchange_position(
+                connection, closed_position, "2026-08-27T12:00:00+08:00"
+            )
+        positions = {
+            item["positionId"]: item for item in study_server.list_position_review()
+        }
+        self.assertEqual(positions["eth-closed-1"]["leverage"], 8.0)
+        self.assertNotIn("open:ETHUSDT:long:1800000000000", positions)
+
+    def test_assign_fills_open_reduce_close(self):
+        positions = [
+            {
+                "positionId": "pos-a",
+                "chartSymbol": "BTCUSDT",
+                "side": "long",
+                "status": "closed",
+                "entryTimeMs": 1_000,
+                "exitTimeMs": 5_000,
+            }
+        ]
+        fills = [
+            {
+                "execId": "f-open",
+                "chartSymbol": "BTCUSDT",
+                "side": "buy",
+                "tradeSide": "open",
+                "timeMs": 1_000,
+                "price": 100.0,
+                "quantity": 1.0,
+                "pnl": 0.0,
+            },
+            {
+                "execId": "f-reduce",
+                "chartSymbol": "BTCUSDT",
+                "side": "sell",
+                "tradeSide": "close",
+                "timeMs": 3_000,
+                "price": 110.0,
+                "quantity": 0.4,
+                "pnl": 4.0,
+            },
+            {
+                "execId": "f-close",
+                "chartSymbol": "BTCUSDT",
+                "side": "sell",
+                "tradeSide": "close",
+                "timeMs": 5_000,
+                "price": 120.0,
+                "quantity": 0.6,
+                "pnl": 12.0,
+            },
+        ]
+        assigned = study_server.assign_fills_to_positions(positions, fills)
+        self.assertEqual(
+            [item["kind"] for item in assigned["pos-a"]],
+            ["open", "reduce", "close"],
+        )
+
+    def test_assign_fills_does_not_cross_adjacent_positions(self):
+        positions = [
+            {
+                "positionId": "first",
+                "chartSymbol": "BTCUSDT",
+                "side": "long",
+                "status": "closed",
+                "entryTimeMs": 1_000,
+                "exitTimeMs": 5_000,
+            },
+            {
+                "positionId": "second",
+                "chartSymbol": "BTCUSDT",
+                "side": "long",
+                "status": "closed",
+                "entryTimeMs": 6_000,
+                "exitTimeMs": 9_000,
+            },
+        ]
+        fills = [
+            {
+                "execId": "a-open",
+                "chartSymbol": "BTCUSDT",
+                "side": "buy",
+                "tradeSide": "open",
+                "timeMs": 1_100,
+                "price": 100.0,
+                "quantity": 1.0,
+                "pnl": 0.0,
+            },
+            {
+                "execId": "b-open",
+                "chartSymbol": "BTCUSDT",
+                "side": "buy",
+                "tradeSide": "open",
+                "timeMs": 6_100,
+                "price": 130.0,
+                "quantity": 1.0,
+                "pnl": 0.0,
+            },
+            {
+                "execId": "b-close",
+                "chartSymbol": "BTCUSDT",
+                "side": "sell",
+                "tradeSide": "close",
+                "timeMs": 8_800,
+                "price": 140.0,
+                "quantity": 1.0,
+                "pnl": 10.0,
+            },
+        ]
+        assigned = study_server.assign_fills_to_positions(positions, fills)
+        self.assertEqual([item["execId"] for item in assigned["first"]], ["a-open"])
+        self.assertEqual(
+            [item["execId"] for item in assigned["second"]],
+            ["b-open", "b-close"],
+        )
+        self.assertEqual([item["kind"] for item in assigned["second"]], ["open", "close"])
+
+    def test_parse_uta_fill_from_bitget_sample(self):
+        from bitget_position_provider import parse_uta_fill
+
+        parsed = parse_uta_fill(
+            {
+                "execId": "1",
+                "execPnl": "12.50000000",
+                "orderId": "1",
+                "symbol": "BTCUSDT",
+                "category": "USDT-FUTURES",
+                "side": "sell",
+                "orderType": "limit",
+                "tradeSide": "close",
+                "execPrice": "27000.50",
+                "execQty": "0.01",
+                "execValue": "270.005",
+                "feeDetail": [{"feeCoin": "USDT", "fee": "0.108002"}],
+                "createdTime": "1697685948870",
+            }
+        )
+        self.assertEqual(parsed["execId"], "1")
+        self.assertEqual(parsed["chartSymbol"], "BTCUSDT")
+        self.assertEqual(parsed["side"], "sell")
+        self.assertEqual(parsed["tradeSide"], "close")
+        self.assertEqual(parsed["price"], 27000.50)
+        self.assertEqual(parsed["quantity"], 0.01)
+        self.assertEqual(parsed["pnl"], 12.5)
+        self.assertEqual(parsed["fee"], 0.108002)
+        self.assertEqual(parsed["timeMs"], 1697685948870)
+        self.assertIsNone(
+            parse_uta_fill(
+                {
+                    "execId": "spot-1",
+                    "symbol": "BTCUSDT",
+                    "category": "SPOT",
+                    "side": "buy",
+                    "tradeSide": "open",
+                    "execPrice": "27000.50",
+                    "execQty": "0.01",
+                    "createdTime": "1697685948870",
+                }
+            )
+        )
 
 
 if __name__ == "__main__":

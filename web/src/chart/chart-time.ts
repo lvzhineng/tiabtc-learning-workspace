@@ -43,7 +43,7 @@ export function parseVideoPublishedTimeMs(dateStr: string, timeStr?: string): nu
 
 export function formatChartTime(
   timestampMs: number,
-  _timeframe: ReviewTimeframe
+  _timeframe: ReviewTimeframe = '60'
 ): string {
   const date = new Date(timestampMs);
   const parts = shanghaiParts(date);
@@ -106,17 +106,26 @@ function shanghaiParts(
     day: '2-digit',
     hour: '2-digit',
     minute: '2-digit',
-    weekday: 'short',
     hourCycle: 'h23',
   }).formatToParts(date);
 
   const get = (type: string) => parts.find((p) => p.type === type)?.value ?? '00';
+  const year = get('year');
+  const month = get('month');
+  const day = get('day');
+  const hour = get('hour');
+  const minute = get('minute');
+
+  const weekdays = ['周日', '周一', '周二', '周三', '周四', '周五', '周六'];
+  const shanghaiDay = new Date(`${year}-${month}-${day}T12:00:00+08:00`).getDay();
+  const weekday = weekdays[shanghaiDay] || '周一';
+
   return {
-    year: get('year'),
-    month: get('month'),
-    day: get('day'),
-    hour: get('hour'),
-    minute: get('minute'),
-    weekday: get('weekday'),
+    year,
+    month,
+    day,
+    hour,
+    minute,
+    weekday,
   };
 }

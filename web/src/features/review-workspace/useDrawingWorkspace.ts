@@ -23,6 +23,8 @@ import type {
   ActiveToolType,
   DrawingToolState,
 } from '@/features/drawings/drawing-types';
+import { confirmDialog } from '@/ui/feedback/confirm';
+import { toast } from '@/ui/feedback/toast';
 
 type DrawingWorkspace = {
   activeTool: ActiveToolType;
@@ -207,7 +209,7 @@ export function useDrawingWorkspace(
               : current.filter((drawing) => drawing.id !== toolState.id)
           );
         }
-        alert(
+        toast.error(
           `保存画图记录失败: ${
             saveError instanceof Error
               ? saveError.message
@@ -228,7 +230,15 @@ export function useDrawingWorkspace(
     const target = drawingsRef.current.find(
       (drawing) => drawing.id === selectedDrawingId
     );
-    if (!target || !window.confirm('确认删除当前选中的画图吗？')) return;
+    if (!target) return;
+    const workspaceRevision = workspaceRevisionRef.current;
+    const confirmed = await confirmDialog({
+      title: '删除画图',
+      message: '确认删除当前选中的画图吗？',
+      confirmText: '确认删除',
+      isDanger: true,
+    });
+    if (!confirmed || workspaceRevisionRef.current !== workspaceRevision) return;
 
     if (persistence === 'memory') {
       const current = drawingsRef.current;
@@ -248,14 +258,16 @@ export function useDrawingWorkspace(
         symbol,
         timeframe
       );
+      if (workspaceRevisionRef.current !== workspaceRevision) return;
       const current = drawingsRef.current;
       commitLocalChange(
         current.filter((drawing) => drawing.id !== selectedDrawingId),
         current
       );
       setSelectedDrawingId(null);
+      toast.success('已删除画图');
     } catch (deleteError) {
-      alert(
+      toast.error(
         `删除画图记录失败: ${
           deleteError instanceof Error ? deleteError.message : '网络异常'
         }`
@@ -271,20 +283,23 @@ export function useDrawingWorkspace(
 
   const clearAllDrawings = useCallback(async () => {
     const current = drawingsRef.current;
-    if (
-      current.length === 0 ||
-      !window.confirm(
+    if (current.length === 0) return;
+    const workspaceRevision = workspaceRevisionRef.current;
+    const confirmed = await confirmDialog({
+      title: '清空画图',
+      message:
         persistence === 'memory'
           ? `确认要清空当前 Symbol (${symbol}) 的所有临时画图吗？`
-          : `确认要清空当前 Symbol (${symbol}) 的所有画图记录吗？此操作无法撤销。`
-      )
-    ) {
-      return;
-    }
+          : `确认要清空当前 Symbol (${symbol}) 的所有画图记录吗？此操作无法撤销。`,
+      confirmText: '确认清空',
+      isDanger: true,
+    });
+    if (!confirmed || workspaceRevisionRef.current !== workspaceRevision) return;
 
     if (persistence === 'memory') {
       commitLocalChange([], current);
       setSelectedDrawingId(null);
+      toast.success('已清空临时画图');
       return;
     }
 
@@ -295,10 +310,12 @@ export function useDrawingWorkspace(
         )
       );
       await clearAllDrawingsForSymbol(DRAWING_SCOPE, symbol, timeframe);
+      if (workspaceRevisionRef.current !== workspaceRevision) return;
       commitLocalChange([], drawingsRef.current);
       setSelectedDrawingId(null);
+      toast.success('已清空所有画图记录');
     } catch (clearError) {
-      alert(
+      toast.error(
         `清空画图失败: ${
           clearError instanceof Error ? clearError.message : '网络异常'
         }`
@@ -311,7 +328,15 @@ export function useDrawingWorkspace(
       const target = drawingsRef.current.find(
         (drawing) => drawing.id === targetId
       );
-      if (!target || !window.confirm('确认删除此画图吗？')) return;
+      if (!target) return;
+      const workspaceRevision = workspaceRevisionRef.current;
+      const confirmed = await confirmDialog({
+        title: '删除画图',
+        message: '确认删除此画图吗？',
+        confirmText: '确认删除',
+        isDanger: true,
+      });
+      if (!confirmed || workspaceRevisionRef.current !== workspaceRevision) return;
 
       if (persistence === 'memory') {
         const current = drawingsRef.current;
@@ -320,6 +345,7 @@ export function useDrawingWorkspace(
           current
         );
         if (selectedDrawingId === targetId) setSelectedDrawingId(null);
+        toast.success('已删除画图');
         return;
       }
 
@@ -331,14 +357,16 @@ export function useDrawingWorkspace(
           symbol,
           timeframe
         );
+        if (workspaceRevisionRef.current !== workspaceRevision) return;
         const current = drawingsRef.current;
         commitLocalChange(
           current.filter((drawing) => drawing.id !== targetId),
           current
         );
         if (selectedDrawingId === targetId) setSelectedDrawingId(null);
+        toast.success('已删除画图');
       } catch (deleteError) {
-        alert(
+        toast.error(
           `删除画图记录失败: ${
             deleteError instanceof Error ? deleteError.message : '网络异常'
           }`
@@ -446,7 +474,7 @@ export function useDrawingWorkspace(
       replaceLocalDrawings(restored);
       reconcileSelection(restored);
     } catch (undoError) {
-      alert(
+      toast.error(
         `撤销画图失败: ${
           undoError instanceof Error ? undoError.message : '网络异常'
         }`
@@ -494,7 +522,7 @@ export function useDrawingWorkspace(
       replaceLocalDrawings(restored);
       reconcileSelection(restored);
     } catch (redoError) {
-      alert(
+      toast.error(
         `重做画图失败: ${
           redoError instanceof Error ? redoError.message : '网络异常'
         }`
@@ -514,6 +542,12 @@ export function useDrawingWorkspace(
 
   useEffect(() => {
     const handleShortcut = (event: KeyboardEvent) => {
+      if (
+        event.defaultPrevented ||
+        document.querySelector('[aria-modal="true"]')
+      ) {
+        return;
+      }
       const target = event.target as HTMLElement | null;
       if (
         target &&

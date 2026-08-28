@@ -4,6 +4,12 @@ import {
   TIMEFRAME_SECONDS_MAP,
   type ReviewTimeframe,
 } from '@/domain/timeframe';
+import {
+  rememberCandleWindow,
+  sliceCachedCandleWindow,
+  boundedTradeWindowMs,
+  TRUNCATED_WINDOW_HINT,
+} from './candle-window-cache';
 
 type RawCandle = {
   timestamp: number;
@@ -19,6 +25,7 @@ type RawCandleResponse = {
   source?: 'sqlite' | 'bybit';
   warning?: string;
   error?: string;
+  truncated?: boolean;
 };
 
 type RawSymbol = {
@@ -46,6 +53,7 @@ export type PerpetualSymbolSearchResponse = {
 export type CandleBatch = {
   candles: Candlestick[];
   warning: string | null;
+  truncated?: boolean;
 };
 
 type ConfigResponse = {
@@ -133,6 +141,19 @@ function parseRawCandles(
 
   if (needsSort) {
     result.sort((left, right) => left.timestampMs - right.timestampMs);
+    let writeIndex = 0;
+    for (const candle of result) {
+      if (
+        writeIndex > 0 &&
+        result[writeIndex - 1].timestampMs === candle.timestampMs
+      ) {
+        result[writeIndex - 1] = candle;
+      } else {
+        result[writeIndex] = candle;
+        writeIndex += 1;
+      }
+    }
+    result.length = writeIndex;
   }
 
   return result;
@@ -193,12 +214,15 @@ function requestCandles(
   if (!request) {
     request = requestJson<RawCandleResponse>(path)
       .then((data) => {
+        const truncated = Boolean(data.truncated);
+        const warning =
+          typeof data.warning === 'string' && data.warning.trim()
+            ? data.warning.trim()
+            : null;
         const batch = {
           candles: parseRawCandles(data, symbol, interval),
-          warning:
-            typeof data.warning === 'string' && data.warning.trim()
-              ? data.warning.trim()
-              : null,
+          warning,
+          truncated,
         } satisfies CandleBatch;
         rememberCandles(path, batch);
         return batch;
@@ -277,18 +301,44 @@ export async function fetchBitlangTradeCandles(
   exitTimeMs: number,
   signal?: AbortSignal
 ): Promise<CandleBatch> {
+  const window = boundedTradeWindowMs(entryTimeMs, exitTimeMs, interval);
+  const cached = sliceCachedCandleWindow(
+    'bitlang',
+    symbol,
+    interval,
+    window.fromMs,
+    window.toMs
+  );
+  if (cached) {
+    return waitForCandleRequest(
+      Promise.resolve({
+        candles: cached.candles,
+        warning: window.truncated ? TRUNCATED_WINDOW_HINT : null,
+        truncated: window.truncated,
+      }),
+      signal
+    );
+  }
   const params = new URLSearchParams({
     symbol,
     interval,
     entry: entryTimeMs.toString(),
     exit: exitTimeMs.toString(),
   });
-  return requestCandles(
+  const batch = await requestCandles(
     `/api/bitlang/candles?${params}`,
     symbol,
     interval,
     signal
   );
+  if (!batch.warning) {
+    rememberCandleWindow('bitlang', symbol, interval, batch.candles, 'bybit');
+  }
+  return {
+    ...batch,
+    warning:
+      batch.warning || (batch.truncated ? TRUNCATED_WINDOW_HINT : null),
+  };
 }
 
 export async function fetchBitlangEarlierCandles(
@@ -311,12 +361,16 @@ export async function fetchBitlangEarlierCandles(
     entry: entryTimeMs.toString(),
     exit: exitTimeMs.toString(),
   });
-  return requestCandles(
+  const batch = await requestCandles(
     `/api/bitlang/candles?${params}`,
     symbol,
     interval,
     signal
   );
+  if (!batch.warning) {
+    rememberCandleWindow('bitlang', symbol, interval, batch.candles, 'bybit');
+  }
+  return batch;
 }
 
 export async function fetchBitlangLaterCandles(
@@ -339,12 +393,16 @@ export async function fetchBitlangLaterCandles(
     entry: entryTimeMs.toString(),
     exit: exitTimeMs.toString(),
   });
-  return requestCandles(
+  const batch = await requestCandles(
     `/api/bitlang/candles?${params}`,
     symbol,
     interval,
     signal
   );
+  if (!batch.warning) {
+    rememberCandleWindow('bitlang', symbol, interval, batch.candles, 'bybit');
+  }
+  return batch;
 }
 
 export async function fetchEarlierCandles(
@@ -411,4 +469,99 @@ export async function fetchReplayCandles(
     signal,
     LIVE_CANDLE_CACHE_TTL_MS
   );
+}
+
+export type ChartFlowPoint = {
+  timestampMs: number;
+  value: number;
+};
+
+export type ChartCvdPoint = {
+  timestampMs: number;
+  delta: number;
+  cvd: number;
+};
+
+export type ChartFlowBatch = {
+  interval: ReviewTimeframe;
+  oi: ChartFlowPoint[];
+  cvd: ChartCvdPoint[];
+  warming: boolean;
+  warning: string | null;
+};
+
+type RawFlowPoint = {
+  timestamp?: number;
+  value?: number;
+  delta?: number;
+  cvd?: number;
+};
+
+type RawFlowResponse = {
+  interval?: string;
+  oi?: RawFlowPoint[];
+  cvd?: RawFlowPoint[];
+  warming?: boolean;
+  warning?: string;
+  error?: string;
+};
+
+function parseFlowPoints(rawList: RawFlowPoint[] | undefined): ChartFlowPoint[] {
+  if (!rawList || !Array.isArray(rawList)) return [];
+  const result: ChartFlowPoint[] = [];
+  for (const raw of rawList) {
+    const timestampMs = Number(raw.timestamp);
+    const value = Number(raw.value);
+    if (Number.isFinite(timestampMs) && timestampMs > 0 && Number.isFinite(value)) {
+      result.push({ timestampMs, value });
+    }
+  }
+  return result;
+}
+
+function parseCvdPoints(rawList: RawFlowPoint[] | undefined): ChartCvdPoint[] {
+  if (!rawList || !Array.isArray(rawList)) return [];
+  const result: ChartCvdPoint[] = [];
+  for (const raw of rawList) {
+    const timestampMs = Number(raw.timestamp);
+    const delta = Number(raw.delta);
+    const cvd = Number(raw.cvd);
+    if (
+      Number.isFinite(timestampMs) &&
+      timestampMs > 0 &&
+      Number.isFinite(delta) &&
+      Number.isFinite(cvd)
+    ) {
+      result.push({ timestampMs, delta, cvd });
+    }
+  }
+  return result;
+}
+
+export async function fetchChartFlow(
+  symbol: string,
+  interval: ReviewTimeframe,
+  fromMs: number,
+  toMs: number,
+  signal?: AbortSignal
+): Promise<ChartFlowBatch> {
+  const params = new URLSearchParams({
+    symbol,
+    interval,
+    from: fromMs.toString(),
+    to: toMs.toString(),
+  });
+  const data = await requestJson<RawFlowResponse>(`/api/chart/flow?${params}`, {
+    signal,
+  });
+  return {
+    interval,
+    oi: parseFlowPoints(data.oi),
+    cvd: parseCvdPoints(data.cvd),
+    warming: Boolean(data.warming),
+    warning:
+      typeof data.warning === 'string' && data.warning.trim()
+        ? data.warning.trim()
+        : null,
+  };
 }

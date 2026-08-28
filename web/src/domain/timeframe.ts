@@ -23,3 +23,13 @@ export const TIMEFRAME_SECONDS_MAP: Record<ReviewTimeframe, number> = {
 export function timeframeToDisplay(tf: ReviewTimeframe): string {
   return TIMEFRAME_DISPLAY_MAP[tf] || tf;
 }
+
+/** Pick a review timeframe from holding duration. Never suggests 1m. */
+export function suggestReviewTimeframe(holdingMs: number): ReviewTimeframe {
+  const minutes = Math.max(0, holdingMs) / 60_000;
+  if (minutes <= 45) return '5';
+  if (minutes <= 6 * 60) return '15';
+  if (minutes <= 36 * 60) return '60';
+  if (minutes <= 10 * 24 * 60) return '240';
+  return 'D';
+}

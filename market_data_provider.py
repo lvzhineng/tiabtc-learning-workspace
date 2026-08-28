@@ -171,6 +171,34 @@ class CcxtBybitMarketDataProvider:
         matches.sort(key=lambda entry: entry[0])
         return [dict(item) for _key, item in matches[:limit]]
 
+    def usdt_perpetual_presence(self, symbol):
+        """Return 'present', 'absent', or 'unknown' for a compact USDT perpetual."""
+        normalized = str(symbol or "").strip().upper()
+        if not re.fullmatch(r"[A-Z0-9]{3,15}USDT", normalized):
+            return "absent"
+        with self._catalog_state_lock:
+            catalog = list(self._perpetual_catalog)
+            catalog_loaded = self._perpetual_catalog_loaded_at > 0
+        if any(item["symbol"] == normalized for item in catalog):
+            return "present"
+        markets = self.exchange.markets or {}
+        for market in markets.values():
+            if (
+                str(market.get("id") or "").strip().upper() == normalized
+                and market.get("swap")
+                and market.get("linear") is True
+                and str(market.get("quote") or "").upper() == "USDT"
+                and market.get("active") is not False
+            ):
+                return "present"
+        if catalog_loaded:
+            return "absent"
+        self._schedule_catalog_refresh()
+        return "unknown"
+
+    def has_usdt_perpetual_symbol(self, symbol):
+        return self.usdt_perpetual_presence(symbol) == "present"
+
     @staticmethod
     def to_ccxt_symbol(symbol):
         normalized = str(symbol or "").strip().upper()
@@ -249,4 +277,84 @@ class CcxtBybitMarketDataProvider:
         return [
             candles_by_timestamp[timestamp]
             for timestamp in sorted(candles_by_timestamp)
+        ]
+
+    def fetch_open_interest_15m(self, symbol, start_timestamp, end_timestamp):
+        return self._fetch_open_interest_bars(
+            symbol,
+            "15m",
+            900_000,
+            start_timestamp,
+            end_timestamp,
+        )
+
+    def fetch_open_interest_1h(self, symbol, start_timestamp, end_timestamp):
+        return self._fetch_open_interest_bars(
+            symbol,
+            "1h",
+            3_600_000,
+            start_timestamp,
+            end_timestamp,
+        )
+
+    def _fetch_open_interest_bars(
+        self,
+        symbol,
+        timeframe,
+        bar_ms,
+        start_timestamp,
+        end_timestamp,
+    ):
+        if start_timestamp > end_timestamp:
+            return []
+
+        ccxt_symbol = self.to_ccxt_symbol(symbol)
+        cursor = start_timestamp // bar_ms * bar_ms
+        end_aligned = end_timestamp // bar_ms * bar_ms
+        rows_by_timestamp = {}
+
+        while cursor <= end_aligned:
+            remaining = max(1, (end_aligned - cursor) // bar_ms + 1)
+            page_limit = min(200, remaining)
+            page_until = min(
+                end_aligned,
+                cursor + (page_limit - 1) * bar_ms,
+            )
+            try:
+                with self.request_lock:
+                    rows = self.exchange.fetch_open_interest_history(
+                        ccxt_symbol,
+                        timeframe,
+                        cursor,
+                        page_limit,
+                        {
+                            "category": "linear",
+                            "until": page_until,
+                        },
+                    )
+            except (ccxt.BaseError, OSError, TimeoutError, ConnectionError) as error:
+                raise RuntimeError(f"CCXT Bybit OI 请求失败：{error}") from error
+
+            for row in rows or []:
+                timestamp = int(row.get("timestamp") or 0)
+                amount = row.get("openInterestAmount")
+                if amount is None:
+                    info = row.get("info") or {}
+                    amount = info.get("openInterest")
+                if timestamp < cursor or timestamp > end_aligned or amount is None:
+                    continue
+                rows_by_timestamp[timestamp] = (
+                    symbol,
+                    timestamp,
+                    float(amount),
+                )
+
+            next_cursor = page_until + bar_ms
+            if next_cursor <= cursor:
+                break
+            cursor = next_cursor
+
+        return [
+            rows_by_timestamp[timestamp]
+            for timestamp in sorted(rows_by_timestamp)
         ]

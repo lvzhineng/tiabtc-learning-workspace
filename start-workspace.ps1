@@ -1,5 +1,5 @@
 ﻿param(
-    [ValidateSet("review", "learning", "bitlang")]
+    [ValidateSet("review", "learning", "bitlang", "positions", "dashboard")]
     [string]$Page = "learning",
     [switch]$NoBrowser
 )
@@ -9,12 +9,16 @@ $workspaceRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
 $webRoot = Join-Path $workspaceRoot "web"
 $runtimeRoot = Join-Path $workspaceRoot ".run"
 $backendUrl = "http://127.0.0.1:8765/api/health"
-$expectedBackendVersion = '"version": 10'
+$expectedBackendVersion = '"version": 11'
 $frontendBaseUrl = "http://127.0.0.1:3000/"
 $frontendUrl = if ($Page -eq "review") {
     "${frontendBaseUrl}?tab=review"
 } elseif ($Page -eq "bitlang") {
     "${frontendBaseUrl}?tab=bitlang"
+} elseif ($Page -eq "positions") {
+    "${frontendBaseUrl}?tab=positions"
+} elseif ($Page -eq "dashboard") {
+    "${frontendBaseUrl}?tab=positions&view=dashboard"
 } else {
     $frontendBaseUrl
 }
@@ -115,12 +119,12 @@ if (-not $npmCommand) {
 
 New-Item -ItemType Directory -Path $runtimeRoot -Force | Out-Null
 
-& $pythonCommand.Source -c "import ccxt" 2>$null
+& $pythonCommand.Source -c "import ccxt, cryptography; assert tuple(map(int, ccxt.__version__.split('.')[:3])) >= (4, 5, 56)" 2>$null
 if ($LASTEXITCODE -ne 0) {
-    Write-Host "首次运行，正在安装 CCXT 行情依赖..." -ForegroundColor Yellow
+    Write-Host "正在安装或更新后端 Python 依赖..." -ForegroundColor Yellow
     & $pythonCommand.Source -m pip install -r (Join-Path $workspaceRoot "requirements.txt")
     if ($LASTEXITCODE -ne 0) {
-        throw "CCXT 行情依赖安装失败。"
+        throw "后端 Python 依赖安装失败。"
     }
 }
 

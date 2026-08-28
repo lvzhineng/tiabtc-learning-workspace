@@ -17,9 +17,12 @@ type CandleWorkspaceData = {
   candles: Candlestick[];
   loading: boolean;
   isLoadingEarlier: boolean;
+  isLoadingLater: boolean;
   offlineWarning: string | null;
   error: string | null;
   loadEarlier: () => void;
+  loadLater: () => void;
+  retryLoad: () => void;
   prefetchFuture: () => Promise<number>;
 };
 
@@ -61,11 +64,15 @@ export function useCandleWorkspaceData(
   const [candles, setCandles] = useState<Candlestick[]>([]);
   const [loading, setLoading] = useState(true);
   const [isLoadingEarlier, setIsLoadingEarlier] = useState(false);
+  const [isLoadingLater, setIsLoadingLater] = useState(false);
   const [offlineWarning, setOfflineWarning] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [reloadToken, setReloadToken] = useState(0);
+  const failedEdgeRef = useRef<'main' | 'earlier' | 'later' | null>(null);
 
   const mainRequestRef = useRef<AbortController | null>(null);
   const earlierRequestRef = useRef<AbortController | null>(null);
+  const laterRequestRef = useRef<AbortController | null>(null);
   const futureRequestControllerRef = useRef<AbortController | null>(null);
   const futurePrefetchRef = useRef<Promise<number> | null>(null);
   const contextKeyRef = useRef('');
@@ -87,8 +94,10 @@ export function useCandleWorkspaceData(
   useEffect(() => {
     mainRequestRef.current?.abort();
     earlierRequestRef.current?.abort();
+    laterRequestRef.current?.abort();
     futureRequestControllerRef.current?.abort();
     earlierRequestRef.current = null;
+    laterRequestRef.current = null;
     futureRequestControllerRef.current = null;
     futurePrefetchRef.current = null;
 
@@ -101,8 +110,10 @@ export function useCandleWorkspaceData(
     setCandles([]);
     setLoading(true);
     setIsLoadingEarlier(false);
+    setIsLoadingLater(false);
     setError(null);
     setOfflineWarning(null);
+    failedEdgeRef.current = null;
 
     const request =
       replayState.status === 'idle'
@@ -136,7 +147,7 @@ export function useCandleWorkspaceData(
         setOfflineWarning(
           batch.warning ||
             (batch.candles.length === 0
-              ? `符号 ${symbol} (${TIMEFRAME_DISPLAY_MAP[timeframe]}) 暂无本地缓存数据。`
+              ? `符号 ${symbol} (${TIMEFRAME_DISPLAY_MAP[timeframe]}) 当前时段没有 K 线。已尝试从 Bybit 拉取，可切换到 1h 或拖到更近的时间后重试。`
               : null)
         );
       })
@@ -147,6 +158,7 @@ export function useCandleWorkspaceData(
         ) {
           return;
         }
+        failedEdgeRef.current = 'main';
         setError(
           requestError instanceof Error
             ? requestError.message
@@ -165,9 +177,10 @@ export function useCandleWorkspaceData(
     return () => {
       controller.abort();
       earlierRequestRef.current?.abort();
+      laterRequestRef.current?.abort();
       futureRequestControllerRef.current?.abort();
     };
-  }, [contextKey]);
+  }, [contextKey, reloadToken]);
 
   const loadEarlier = useCallback(() => {
     if (
@@ -210,12 +223,11 @@ export function useCandleWorkspaceData(
       })
       .catch((requestError) => {
         if (!controller.signal.aborted) {
+          failedEdgeRef.current = 'earlier';
           setError(
-            `${
-              requestError instanceof Error
-                ? requestError.message
-                : '加载更早 K 线失败'
-            }。请向左拖动图表重试。`
+            requestError instanceof Error
+              ? requestError.message
+              : '加载更早 K 线失败'
           );
           console.warn('扩展加载更早 K 线失败:', requestError);
         }
@@ -227,6 +239,76 @@ export function useCandleWorkspaceData(
         }
       });
   }, [candles, isLoadingEarlier, loading, symbol, timeframe]);
+
+  const loadLater = useCallback(() => {
+    if (
+      loading ||
+      isLoadingLater ||
+      candles.length === 0 ||
+      laterRequestRef.current
+    ) {
+      return;
+    }
+
+    const controller = new AbortController();
+    const requestContextKey = contextKeyRef.current;
+    const requestContextRevision = contextRevisionRef.current;
+    const latestTimestamp = candles[candles.length - 1].timestampMs;
+    laterRequestRef.current = controller;
+    setIsLoadingLater(true);
+    setError(null);
+
+    void fetchLaterCandles(
+      symbol,
+      timeframe,
+      latestTimestamp,
+      1000,
+      undefined,
+      controller.signal
+    )
+      .then((batch) => {
+        if (
+          controller.signal.aborted ||
+          contextKeyRef.current !== requestContextKey ||
+          contextRevisionRef.current !== requestContextRevision
+        ) {
+          return;
+        }
+        setCandles((current) => mergeCandles(current, batch.candles, 'after'));
+        if (batch.warning) setOfflineWarning(batch.warning);
+        setError(null);
+      })
+      .catch((requestError) => {
+        if (!controller.signal.aborted) {
+          failedEdgeRef.current = 'later';
+          setError(
+            requestError instanceof Error
+              ? requestError.message
+              : '加载更晚 K 线失败'
+          );
+          console.warn('扩展加载更晚 K 线失败:', requestError);
+        }
+      })
+      .finally(() => {
+        if (laterRequestRef.current === controller) {
+          laterRequestRef.current = null;
+          setIsLoadingLater(false);
+        }
+      });
+  }, [candles, isLoadingLater, loading, symbol, timeframe]);
+
+  const retryLoad = useCallback(() => {
+    const kind = failedEdgeRef.current;
+    if (kind === 'earlier') {
+      loadEarlier();
+      return;
+    }
+    if (kind === 'later') {
+      loadLater();
+      return;
+    }
+    setReloadToken((value) => value + 1);
+  }, [loadEarlier, loadLater]);
 
   const prefetchFuture = useCallback((): Promise<number> => {
     if (candles.length === 0) return Promise.resolve(0);
@@ -304,9 +386,12 @@ export function useCandleWorkspaceData(
     candles,
     loading,
     isLoadingEarlier,
+    isLoadingLater,
     offlineWarning,
     error,
     loadEarlier,
+    loadLater,
+    retryLoad,
     prefetchFuture,
   };
 }

@@ -12,6 +12,8 @@ import {
   checkTradeTrigger,
 } from '@/features/paper-trading/paper-trade-logic';
 import type { ReplayState } from '@/features/replay/replay-state';
+import { confirmDialog } from '@/ui/feedback/confirm';
+import { toast } from '@/ui/feedback/toast';
 
 type PaperTradingWorkspace = {
   trades: PaperTrade[];
@@ -102,9 +104,10 @@ export function usePaperTrading(
           return false;
         }
         replaceTrades([saved, ...tradesRef.current]);
+        toast.success(`挂单成功: ${payload.direction === 'LONG' ? '做多' : '做空'} @ ${payload.entryPrice}`);
         return true;
       } catch (saveError) {
-        alert(
+        toast.error(
           `挂单开仓失败: ${
             saveError instanceof Error ? saveError.message : '网络异常'
           }`
@@ -157,8 +160,9 @@ export function usePaperTrading(
             trade.id === id ? saved : trade
           )
         );
+        toast.info(`模拟订单已结单 (${status === 'WIN' ? '盈利' : '亏损'})`);
       } catch (saveError) {
-        alert(
+        toast.error(
           `平仓写库失败: ${
             saveError instanceof Error ? saveError.message : '网络异常'
           }`
@@ -170,7 +174,13 @@ export function usePaperTrading(
 
   const removeTrade = useCallback(
     async (id: string) => {
-      if (!window.confirm('确认删除这条模拟交易记录吗？')) return;
+      const confirmed = await confirmDialog({
+        title: '删除交易记录',
+        message: '确认删除这条模拟交易记录吗？',
+        confirmText: '确认删除',
+        isDanger: true,
+      });
+      if (!confirmed) return;
       const workspaceRevision = workspaceRevisionRef.current;
       try {
         await deletePaperTrade(id);
@@ -178,8 +188,9 @@ export function usePaperTrading(
         replaceTrades(
           tradesRef.current.filter((trade) => trade.id !== id)
         );
+        toast.success('交易记录已删除');
       } catch (deleteError) {
-        alert(
+        toast.error(
           `删除交易记录失败: ${
             deleteError instanceof Error
               ? deleteError.message
@@ -229,7 +240,7 @@ export function usePaperTrading(
               )
             );
           }
-          alert(
+          toast.error(
             `自动结单写库失败: ${
               saveError instanceof Error ? saveError.message : '网络异常'
             }`

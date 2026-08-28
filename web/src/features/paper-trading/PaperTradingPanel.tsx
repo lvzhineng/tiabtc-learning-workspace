@@ -7,6 +7,7 @@ import type {
 } from './paper-trade-types';
 import { calculateRR, computePaperTradeStats } from './paper-trade-logic';
 import { X, Target, Trash2 } from 'lucide-react';
+import { toast } from '@/ui/feedback/toast';
 import '@/styles/paper-trading.css';
 
 interface Props {
@@ -58,11 +59,11 @@ export function PaperTradingPanel({
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     if (!numEntry || !numTp || !numSl) {
-      alert('请输入完整的开仓价、止盈价和止损价');
+      toast.warning('请输入完整的开仓价、止盈价和止损价');
       return;
     }
     if (currentRR <= 0) {
-      alert(
+      toast.warning(
         tradeType === 'LONG'
           ? '做多必须满足：止盈价 > 开仓价 > 止损价'
           : '做空必须满足：止盈价 < 开仓价 < 止损价'

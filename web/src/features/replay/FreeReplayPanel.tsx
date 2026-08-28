@@ -53,6 +53,9 @@ export function FreeReplayPanel({
   // Keyboard Shortcuts Listener
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.defaultPrevented || document.querySelector('[aria-modal="true"]')) {
+        return;
+      }
       const target = e.target as HTMLElement | null;
       if (
         target &&

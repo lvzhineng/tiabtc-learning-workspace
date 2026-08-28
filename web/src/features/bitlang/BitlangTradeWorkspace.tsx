@@ -20,6 +20,12 @@ import {
   fetchBitlangLaterCandles,
   fetchBitlangTradeCandles,
 } from '@/api/market-api';
+import {
+  candleVenueLabel,
+  clipTradeFocusRange,
+  sliceCachedCandleWindow,
+  boundedTradeWindowMs,
+} from '@/api/candle-window-cache';
 import { ChartCanvas } from '@/chart/ChartCanvas';
 import {
   formatChartTime,
@@ -29,11 +35,16 @@ import {
 import type { Candlestick } from '@/domain/candle';
 import {
   TIMEFRAME_DISPLAY_MAP,
+  suggestReviewTimeframe,
   type ReviewTimeframe,
 } from '@/domain/timeframe';
 import { DraggableDrawingToolbar } from '@/features/drawings/DraggableDrawingToolbar';
 import { DrawingObjectTreePanel } from '@/features/drawings/DrawingObjectTreePanel';
 import { useDrawingWorkspace } from '@/features/review-workspace/useDrawingWorkspace';
+import {
+  scrollReviewRowIntoView,
+  useReviewListKeyboard,
+} from '@/features/review-workspace/useReviewListKeyboard';
 import type {
   BitlangDirection,
   BitlangTrade,
@@ -43,6 +54,14 @@ import '@/styles/bitlang.css';
 
 const PAGE_SIZE = 100;
 const TIMEFRAMES: ReviewTimeframe[] = ['1', '5', '15', '60', '240', 'D', 'W'];
+type DateRangeFilter = 'all' | '1d' | '3d' | '7d' | '30d' | '90d';
+const DATE_RANGE_MS_MAP: Record<Exclude<DateRangeFilter, 'all'>, number> = {
+  '1d': 1 * 24 * 60 * 60 * 1000,
+  '3d': 3 * 24 * 60 * 60 * 1000,
+  '7d': 7 * 24 * 60 * 60 * 1000,
+  '30d': 30 * 24 * 60 * 60 * 1000,
+  '90d': 90 * 24 * 60 * 60 * 1000,
+};
 let bitlangSnapshotRequest: Promise<BitlangTradeSnapshot> | null = null;
 
 function loadBitlangSnapshot(): Promise<BitlangTradeSnapshot> {
@@ -68,7 +87,10 @@ interface BitlangTradeWorkspaceProps {
 }
 
 function formatTime(value: string): string {
-  return value.slice(0, 16).replace('T', ' ');
+  const timestampMs = Date.parse(value);
+  return Number.isFinite(timestampMs)
+    ? formatChartTime(timestampMs).slice(0, 16)
+    : '--';
 }
 
 function formatNumber(value: number, digits = 2): string {
@@ -88,6 +110,20 @@ function timeframeLabel(timeframe: ReviewTimeframe): string {
 
 function bybitSymbol(instrument: string): string {
   return instrument.replace(/-USDT-SWAP$/i, 'USDT').replace(/-/g, '').toUpperCase();
+}
+
+function formatHoldingMinutes(minutes: number): string {
+  const roundedMinutes = Math.round(minutes);
+  if (roundedMinutes < 1) return '< 1m';
+  if (roundedMinutes < 60) return `${roundedMinutes}m`;
+  const hours = Math.floor(roundedMinutes / 60);
+  const remMinutes = roundedMinutes % 60;
+  if (hours < 24) {
+    return remMinutes > 0 ? `${hours}h ${remMinutes}m` : `${hours}h`;
+  }
+  const days = Math.floor(hours / 24);
+  const remHours = hours % 24;
+  return remHours > 0 ? `${days}d ${remHours}h` : `${days}d`;
 }
 
 function mergeCandles(
@@ -130,13 +166,19 @@ export function BitlangTradeWorkspace({
   const [instrument, setInstrument] = useState('all');
   const [direction, setDirection] = useState<'all' | BitlangDirection>('all');
   const [result, setResult] = useState<ResultFilter>('all');
+  const [dateRange, setDateRange] = useState<DateRangeFilter>('all');
   const [minimumHoldingMinutes, setMinimumHoldingMinutes] = useState('');
   const [sortField, setSortField] = useState<SortField>('entryTime');
-  const [descending, setDescending] = useState(false);
+  const [descending, setDescending] = useState(true);
   const [timeframe, setTimeframe] = useState<ReviewTimeframe>('60');
+  const [autoTimeframe, setAutoTimeframe] = useState(true);
+  const [showMoreFilters, setShowMoreFilters] = useState(false);
+  const [showUsSessionBands, setShowUsSessionBands] = useState(false);
+  const [showWeekendBands, setShowWeekendBands] = useState(false);
   const [page, setPage] = useState(1);
   const [error, setError] = useState<string | null>(null);
   const deferredSearch = useDeferredValue(search);
+  const listRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
     let active = true;
@@ -170,12 +212,21 @@ export function BitlangTradeWorkspace({
       minimumHoldingMinutes !== '' &&
       Number.isFinite(holdingMinutesThreshold) &&
       holdingMinutesThreshold > 0;
+    const snapshotEndMs = (snapshot?.trades || []).reduce(
+      (latest, trade) => Math.max(latest, Date.parse(trade.entryTime) || 0),
+      0
+    );
+    const cutoffMs =
+      dateRange === 'all'
+        ? 0
+        : snapshotEndMs - DATE_RANGE_MS_MAP[dateRange];
     return (snapshot?.trades || [])
       .filter((trade) => {
         if (instrument !== 'all' && trade.instrument !== instrument) return false;
         if (direction !== 'all' && trade.direction !== direction) return false;
         if (result === 'profit' && trade.profit <= 0) return false;
         if (result === 'loss' && trade.profit >= 0) return false;
+        if (cutoffMs > 0 && Date.parse(trade.entryTime) < cutoffMs) return false;
         if (
           hasHoldingMinutesThreshold &&
           trade.holdingMinutes <= holdingMinutesThreshold
@@ -201,6 +252,7 @@ export function BitlangTradeWorkspace({
   }, [
     descending,
     direction,
+    dateRange,
     instrument,
     minimumHoldingMinutes,
     result,
@@ -216,17 +268,33 @@ export function BitlangTradeWorkspace({
     instrument,
     direction,
     result,
+    dateRange,
     minimumHoldingMinutes,
     sortField,
     descending,
   ]);
 
   const stats = useMemo(() => {
-    const winning = filteredTrades.filter((trade) => trade.profit > 0).length;
+    let totalWin = 0;
+    let totalLoss = 0;
+    let winning = 0;
+    let holdingSum = 0;
+    for (const trade of filteredTrades) {
+      holdingSum += trade.holdingMinutes;
+      if (trade.profit > 0) {
+        winning += 1;
+        totalWin += trade.profit;
+      } else if (trade.profit < 0) {
+        totalLoss += Math.abs(trade.profit);
+      }
+    }
     return {
       count: filteredTrades.length,
       profit: filteredTrades.reduce((sum, trade) => sum + trade.profit, 0),
       winRate: filteredTrades.length ? winning / filteredTrades.length : 0,
+      profitFactor: totalLoss > 0 ? totalWin / totalLoss : null,
+      avgHoldingMinutes:
+        filteredTrades.length > 0 ? holdingSum / filteredTrades.length : 0,
     };
   }, [filteredTrades]);
 
@@ -246,6 +314,48 @@ export function BitlangTradeWorkspace({
       setSelectedId(selectedTrade.id);
     }
   }, [selectedId, selectedTrade]);
+
+  const applyManualTimeframe = useCallback((next: ReviewTimeframe) => {
+    setAutoTimeframe(false);
+    setTimeframe(next);
+    setFocusRevision((revision) => revision + 1);
+  }, []);
+
+  const selectTrade = useCallback((id: string, pageIndex: number) => {
+    setSelectedId(id);
+    setFocusRevision((revision) => revision + 1);
+    setPage(pageIndex + 1);
+  }, []);
+
+  const selectedHoldingMs = selectedTrade
+    ? Date.parse(selectedTrade.exitTime) - Date.parse(selectedTrade.entryTime)
+    : 0;
+  const effectiveTimeframe =
+    autoTimeframe && selectedTrade
+      ? suggestReviewTimeframe(
+          Number.isFinite(selectedHoldingMs)
+            ? selectedHoldingMs
+            : selectedTrade.holdingMinutes * 60_000
+        )
+      : timeframe;
+
+  const filteredIds = useMemo(
+    () => filteredTrades.map((trade) => trade.id),
+    [filteredTrades]
+  );
+
+  useReviewListKeyboard({
+    enabled: Boolean(snapshot),
+    itemIds: filteredIds,
+    selectedId: selectedTrade?.id,
+    pageSize: PAGE_SIZE,
+    onSelect: selectTrade,
+    onTimeframe: applyManualTimeframe,
+  });
+
+  useEffect(() => {
+    scrollReviewRowIntoView(listRef.current, selectedTrade?.id);
+  }, [safePage, selectedTrade?.id]);
 
   if (error) {
     return <div className="bitlang-state">交割单加载失败：{error}</div>;
@@ -278,52 +388,65 @@ export function BitlangTradeWorkspace({
               placeholder="搜索交易对、序号或备注"
             />
           </label>
-          <select value={instrument} onChange={(event) => setInstrument(event.target.value)}>
-            <option value="all">全部交易对</option>
-            {instruments.map((item) => (
-              <option key={item} value={item}>{item}</option>
-            ))}
-          </select>
-          <div className="bitlang-filter-row">
-            <select
-              value={direction}
-              onChange={(event) =>
-                setDirection(event.target.value as 'all' | BitlangDirection)
+          <div className="review-filter-chips">
+            <button
+              type="button"
+              className={direction === '多' ? 'active' : ''}
+              onClick={() =>
+                setDirection((value) => (value === '多' ? 'all' : '多'))
               }
             >
-              <option value="all">全部方向</option>
-              <option value="多">多</option>
-              <option value="空">空</option>
-            </select>
-            <select
-              value={result}
-              onChange={(event) => setResult(event.target.value as ResultFilter)}
+              多
+            </button>
+            <button
+              type="button"
+              className={direction === '空' ? 'active' : ''}
+              onClick={() =>
+                setDirection((value) => (value === '空' ? 'all' : '空'))
+              }
             >
-              <option value="all">全部盈亏</option>
-              <option value="profit">盈利</option>
-              <option value="loss">亏损</option>
+              空
+            </button>
+            <button
+              type="button"
+              className={result === 'profit' ? 'active' : ''}
+              onClick={() =>
+                setResult((value) => (value === 'profit' ? 'all' : 'profit'))
+              }
+            >
+              盈
+            </button>
+            <button
+              type="button"
+              className={result === 'loss' ? 'active' : ''}
+              onClick={() =>
+                setResult((value) => (value === 'loss' ? 'all' : 'loss'))
+              }
+            >
+              亏
+            </button>
+          </div>
+          <div className="bitlang-filter-row">
+            <select
+              value={dateRange}
+              onChange={(event) =>
+                setDateRange(event.target.value as DateRangeFilter)
+              }
+            >
+              <option value="all">全部时间</option>
+              <option value="1d">近 1 天</option>
+              <option value="3d">近 3 天</option>
+              <option value="7d">近 7 天</option>
+              <option value="30d">近 30 天</option>
+              <option value="90d">近 90 天</option>
+            </select>
+            <select value={instrument} onChange={(event) => setInstrument(event.target.value)}>
+              <option value="all">全部交易对</option>
+              {instruments.map((item) => (
+                <option key={item} value={item}>{bybitSymbol(item)}</option>
+              ))}
             </select>
           </div>
-          <label className="bitlang-duration-filter">
-            <span>持仓时间</span>
-            <strong>大于</strong>
-            <input
-              type="number"
-              min="0"
-              step="1"
-              inputMode="numeric"
-              value={minimumHoldingMinutes}
-              onChange={(event) => {
-                const value = event.target.value;
-                setMinimumHoldingMinutes(
-                  value === '' ? '' : String(Math.max(0, Number(value)))
-                );
-              }}
-              placeholder="0"
-              aria-label="最小持仓时间"
-            />
-            <span>分钟</span>
-          </label>
           <div className="bitlang-filter-row">
             <select
               value={sortField}
@@ -339,22 +462,71 @@ export function BitlangTradeWorkspace({
               {descending ? '降序' : '升序'}
             </button>
           </div>
+          <button
+            type="button"
+            className="review-more-filters"
+            onClick={() => setShowMoreFilters((value) => !value)}
+          >
+            {showMoreFilters ? '收起筛选' : '更多筛选'}
+          </button>
+          {showMoreFilters && (
+            <label className="bitlang-duration-filter">
+              <span>持仓时间</span>
+              <strong>大于</strong>
+              <input
+                type="number"
+                min="0"
+                step="1"
+                inputMode="numeric"
+                value={minimumHoldingMinutes}
+                onChange={(event) => {
+                  const value = event.target.value;
+                  setMinimumHoldingMinutes(
+                    value === '' ? '' : String(Math.max(0, Number(value)))
+                  );
+                }}
+                placeholder="0"
+                aria-label="最小持仓时间"
+              />
+              <span>分钟</span>
+            </label>
+          )}
         </div>
 
-        <div className="bitlang-progress">
-          <span>{stats.count} 笔</span>
-          <strong className={stats.profit >= 0 ? 'profit' : 'loss'}>
-            {formatNumber(stats.profit)} USDT
-          </strong>
-          <span>胜率 {formatPercent(stats.winRate)}</span>
+        <div className="bitlang-progress bitlang-stats-bar">
+          <div className="bitlang-stat-item">
+            <span>样本</span>
+            <strong>{stats.count} 笔</strong>
+          </div>
+          <div className="bitlang-stat-item">
+            <span>总盈亏</span>
+            <strong className={stats.profit >= 0 ? 'profit' : 'loss'}>
+              {formatNumber(stats.profit)} USDT
+            </strong>
+          </div>
+          <div className="bitlang-stat-item">
+            <span>胜率</span>
+            <strong>{formatNumber(stats.winRate * 100, 1)}%</strong>
+          </div>
+          {stats.profitFactor != null && (
+            <div className="bitlang-stat-item" title="盈利总额 / 亏损总额">
+              <span>盈亏比</span>
+              <strong>{formatNumber(stats.profitFactor, 2)}</strong>
+            </div>
+          )}
+          <div className="bitlang-stat-item">
+            <span>均持仓</span>
+            <strong>{formatHoldingMinutes(stats.avgHoldingMinutes)}</strong>
+          </div>
         </div>
 
-        <div className="bitlang-trade-list">
+        <div className="bitlang-trade-list" ref={listRef}>
           {pageTrades.map((trade) => (
             <button
               type="button"
               key={trade.id}
-              className={`bitlang-trade-row ${
+              data-review-id={trade.id}
+              className={`bitlang-trade-row bitlang-trade-row-compact ${
                 trade.id === selectedTrade?.id ? 'active' : ''
               }`}
               onClick={() => {
@@ -362,19 +534,26 @@ export function BitlangTradeWorkspace({
                 setFocusRevision((revision) => revision + 1);
               }}
             >
-              <span className="bitlang-row-time">{formatTime(trade.entryTime)}</span>
-              <span className="bitlang-row-main">
-                <strong>{trade.instrument}</strong>
-                <em className={trade.direction === '多' ? 'profit' : 'loss'}>
-                  {trade.direction}
-                </em>
-              </span>
-              <span className="bitlang-row-meta">
-                {formatNumber(trade.leverage, 0)}x · 平仓 {formatTime(trade.exitTime).slice(5)}
-              </span>
-              <span className={trade.profit >= 0 ? 'profit' : 'loss'}>
-                {formatPercent(trade.returnRate)} / {formatNumber(trade.profit)}
-              </span>
+              <div className="bitlang-row-top">
+                <span className="bitlang-row-main">
+                  <strong>{bybitSymbol(trade.instrument)}</strong>
+                  <em className={trade.direction === '多' ? 'profit' : 'loss'}>
+                    {trade.direction}
+                    {` ${formatNumber(trade.leverage, 0)}x`}
+                  </em>
+                </span>
+                <span className={trade.profit >= 0 ? 'profit' : 'loss'}>
+                  {formatNumber(trade.profit)}
+                </span>
+              </div>
+              <div className="bitlang-row-bottom">
+                <span className="bitlang-row-time">
+                  {formatTime(trade.entryTime).slice(5)} · {formatHoldingMinutes(trade.holdingMinutes)}
+                </span>
+                <span className={trade.profit >= 0 ? 'profit' : 'loss'}>
+                  {formatPercent(trade.returnRate)}
+                </span>
+              </div>
             </button>
           ))}
         </div>
@@ -396,6 +575,9 @@ export function BitlangTradeWorkspace({
             <ChevronRight size={15} />
           </button>
         </div>
+        <div className="bitlang-shortcut-hint">
+          <span>⌨️ ↑↓ / j k 切交易 · 1-7 切周期</span>
+        </div>
       </aside>
 
       <section className="bitlang-chart-workspace">
@@ -403,35 +585,65 @@ export function BitlangTradeWorkspace({
           <>
             <header className="bitlang-chart-header">
               <div>
-                <h2>{selectedTrade.instrument}</h2>
+                <h2>{bybitSymbol(selectedTrade.instrument)}</h2>
                 <p>
                   {formatTime(selectedTrade.entryTime)} 到{' '}
                   {formatTime(selectedTrade.exitTime)}
+                  {` · 持仓 ${formatHoldingMinutes(selectedTrade.holdingMinutes)}`}
                 </p>
               </div>
               <div className="bitlang-timeframes">
+                <button
+                  type="button"
+                  className={autoTimeframe ? 'active' : ''}
+                  onClick={() => {
+                    setAutoTimeframe(true);
+                    setFocusRevision((revision) => revision + 1);
+                  }}
+                  title="按持仓时长自动选择周期"
+                >
+                  自动
+                </button>
                 {TIMEFRAMES.map((item) => (
                   <button
                     type="button"
                     key={item}
-                    className={item === timeframe ? 'active' : ''}
+                    className={item === effectiveTimeframe ? 'active' : ''}
                     onClick={() => {
-                      if (item === timeframe) return;
-                      setTimeframe(item);
-                      setFocusRevision((revision) => revision + 1);
+                      if (!autoTimeframe && item === timeframe) return;
+                      applyManualTimeframe(item);
                     }}
                   >
                     {timeframeLabel(item)}
                   </button>
                 ))}
+                <button
+                  type="button"
+                  className={showUsSessionBands ? 'active' : ''}
+                  onClick={() => setShowUsSessionBands((value) => !value)}
+                  title="美股常规交易时段（纽约 09:30–16:00）"
+                >
+                  美盘
+                </button>
+                <button
+                  type="button"
+                  className={showWeekendBands ? 'active' : ''}
+                  onClick={() => setShowWeekendBands((value) => !value)}
+                  title="美盘周末"
+                >
+                  周末
+                </button>
               </div>
             </header>
 
             <BitlangTradeChart
+              key={`${bybitSymbol(selectedTrade.instrument)}:${effectiveTimeframe}`}
               trade={selectedTrade}
-              timeframe={timeframe}
+              timeframe={effectiveTimeframe}
               themeMode={themeMode}
               focusRevision={focusRevision}
+              showUsSessionBands={showUsSessionBands}
+              showWeekendBands={showWeekendBands}
             />
 
             <TradeMetrics trade={selectedTrade} />
@@ -449,19 +661,25 @@ function BitlangTradeChart({
   timeframe,
   themeMode,
   focusRevision,
+  showUsSessionBands,
+  showWeekendBands,
 }: {
   trade: BitlangTrade;
   timeframe: ReviewTimeframe;
   themeMode: 'dark' | 'light';
   focusRevision: number;
+  showUsSessionBands: boolean;
+  showWeekendBands: boolean;
 }) {
-  const [candles, setCandles] = useState<Candlestick[]>([]);
   const [hoveredCandle, setHoveredCandle] = useState<Candlestick | null>(null);
   const [loading, setLoading] = useState(true);
   const [isLoadingEarlier, setIsLoadingEarlier] = useState(false);
   const [isLoadingLater, setIsLoadingLater] = useState(false);
   const [loadedContextKey, setLoadedContextKey] = useState('');
   const [error, setError] = useState<string | null>(null);
+  const [warning, setWarning] = useState<string | null>(null);
+  const [reloadToken, setReloadToken] = useState(0);
+  const failedEdgeRef = useRef<'main' | 'earlier' | 'later' | null>(null);
   const earlierRequestRef = useRef<AbortController | null>(null);
   const laterRequestRef = useRef<AbortController | null>(null);
   const contextKeyRef = useRef('');
@@ -469,6 +687,17 @@ function BitlangTradeChart({
   const exitTimeMs = Date.parse(trade.exitTime);
   const symbol = bybitSymbol(trade.instrument);
   const chartContextKey = `${symbol}:${timeframe}:${entryTimeMs}:${exitTimeMs}`;
+  const [candles, setCandles] = useState<Candlestick[]>(() => {
+    const window = boundedTradeWindowMs(entryTimeMs, exitTimeMs, timeframe);
+    const cached = sliceCachedCandleWindow(
+      'bitlang',
+      symbol,
+      timeframe,
+      window.fromMs,
+      window.toMs
+    );
+    return cached?.candles ?? [];
+  });
   const {
     activeTool,
     setActiveTool,
@@ -504,12 +733,31 @@ function BitlangTradeChart({
     laterRequestRef.current = null;
     const controller = new AbortController();
     contextKeyRef.current = chartContextKey;
-    setLoadedContextKey('');
     setHoveredCandle(null);
-    setLoading(true);
     setIsLoadingEarlier(false);
     setIsLoadingLater(false);
     setError(null);
+    setWarning(null);
+    failedEdgeRef.current = null;
+
+    const window = boundedTradeWindowMs(entryTimeMs, exitTimeMs, timeframe);
+    const cached = sliceCachedCandleWindow(
+      'bitlang',
+      symbol,
+      timeframe,
+      window.fromMs,
+      window.toMs
+    );
+    if (cached?.candles.length) {
+      setCandles(cached.candles);
+      setLoadedContextKey(chartContextKey);
+      setLoading(false);
+    } else {
+      setCandles([]);
+      setLoadedContextKey('');
+      setLoading(true);
+    }
+
     fetchBitlangTradeCandles(
       symbol,
       timeframe,
@@ -526,13 +774,12 @@ function BitlangTradeChart({
         }
         setCandles(batch.candles);
         setLoadedContextKey(chartContextKey);
-        setError(
-          batch.warning ||
-            (!batch.candles.length ? 'Bybit 未返回该时间范围的 K 线' : null)
-        );
+        setWarning(batch.warning);
+        setError(!batch.candles.length ? 'Bybit 未返回该时间范围的 K 线' : null);
       })
       .catch((cause) => {
         if (controller.signal.aborted) return;
+        failedEdgeRef.current = 'main';
         setError(cause instanceof Error ? cause.message : 'K 线加载失败');
       })
       .finally(() => {
@@ -543,7 +790,7 @@ function BitlangTradeChart({
       earlierRequestRef.current?.abort();
       laterRequestRef.current?.abort();
     };
-  }, [chartContextKey, entryTimeMs, exitTimeMs, symbol, timeframe]);
+  }, [chartContextKey, entryTimeMs, exitTimeMs, reloadToken, symbol, timeframe]);
 
   const loadEarlier = useCallback(() => {
     if (
@@ -571,11 +818,14 @@ function BitlangTradeChart({
           contextKeyRef.current === requestContextKey
         ) {
           setCandles((current) => mergeCandles(current, batch.candles));
-          setError(batch.warning);
+          if (batch.warning) setWarning(batch.warning);
+          setError(null);
+          failedEdgeRef.current = null;
         }
       })
       .catch((cause) => {
         if (!controller.signal.aborted) {
+          failedEdgeRef.current = 'earlier';
           setError(
             cause instanceof Error ? cause.message : '加载更早 K 线失败'
           );
@@ -616,11 +866,14 @@ function BitlangTradeChart({
           contextKeyRef.current === requestContextKey
         ) {
           setCandles((current) => mergeCandles(current, batch.candles));
-          setError(batch.warning);
+          if (batch.warning) setWarning(batch.warning);
+          setError(null);
+          failedEdgeRef.current = null;
         }
       })
       .catch((cause) => {
         if (!controller.signal.aborted) {
+          failedEdgeRef.current = 'later';
           setError(
             cause instanceof Error ? cause.message : '加载更晚 K 线失败'
           );
@@ -634,6 +887,19 @@ function BitlangTradeChart({
         }
       });
   }, [candles, isLoadingLater, loading, symbol, timeframe]);
+
+  const retryLoad = useCallback(() => {
+    const kind = failedEdgeRef.current;
+    if (kind === 'earlier') {
+      loadEarlier();
+      return;
+    }
+    if (kind === 'later') {
+      loadLater();
+      return;
+    }
+    setReloadToken((value) => value + 1);
+  }, [loadEarlier, loadLater]);
 
   const markers = useMemo(
     () => buildTradeMarkers(trade, timeframe, candles),
@@ -680,7 +946,7 @@ function BitlangTradeChart({
         systemMarkers={markers}
         focusRangeMs={
           loadedContextKey === chartContextKey
-            ? { from: entryTimeMs, to: exitTimeMs }
+            ? clipTradeFocusRange(entryTimeMs, exitTimeMs, candles, timeframe)
             : null
         }
         focusRevision={focusRevision}
@@ -700,6 +966,8 @@ function BitlangTradeChart({
         onToggleLockDrawing={toggleLockDrawing}
         onDrawingComplete={() => setActiveTool('select')}
         showVolume
+        showUsSessionBands={showUsSessionBands}
+        showWeekendBands={showWeekendBands}
       />
       {hoveredCandle && (
         <div className="bitlang-candle-readout">
@@ -711,11 +979,27 @@ function BitlangTradeChart({
           <span>量 {formatNumber(hoveredCandle.volume)}</span>
         </div>
       )}
-      {(loading || error) && (
+      {((loading && candles.length === 0) || error) && (
         <div className={`bitlang-chart-status ${error ? 'error' : ''}`}>
-          {loading && <RefreshCw size={17} className="spin" />}
-          {error || `正在通过 CCXT 加载 ${symbol} K 线...`}
+          {loading && candles.length === 0 && (
+            <RefreshCw size={17} className="spin" />
+          )}
+          <span>{error || `正在加载 ${symbol} K 线...`}</span>
+          {error && (
+            <button type="button" onClick={retryLoad}>
+              重试
+            </button>
+          )}
         </div>
+      )}
+      {warning && !error && (
+        <div className="bitlang-chart-status warning">{warning}</div>
+      )}
+      {loading && candles.length > 0 && (
+        <div className="bitlang-venue-badge bitlang-refreshing">更新中</div>
+      )}
+      {candles.length > 0 && !(loading && candles.length > 0) && (
+        <div className="bitlang-venue-badge">{candleVenueLabel('bybit')}</div>
       )}
     </div>
   );

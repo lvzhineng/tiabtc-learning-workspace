@@ -8,20 +8,23 @@ import {
   ListChecks,
   Moon,
   Sun,
+  Tags,
 } from 'lucide-react';
 import { ChartWorkspace } from '@/features/review-workspace/ChartWorkspace';
 import { LearningWorkspace } from '@/features/learning/LearningWorkspace';
 import { BitlangTradeWorkspace } from '@/features/bitlang/BitlangTradeWorkspace';
+import { PositionReviewWorkspace } from '@/features/position-review/PositionReviewWorkspace';
 import type { VideoItem } from '@/features/learning/learning-types';
 import type { VideoReviewContext } from '@/domain/review-context';
 import { parseVideoPublishedTimeMs } from '@/chart/chart-time';
 
-type WorkspaceTab = 'learning' | 'review' | 'bitlang';
+type WorkspaceTab = 'learning' | 'review' | 'bitlang' | 'positions';
 export type ThemeMode = 'dark' | 'light';
 
 function initialWorkspaceTab(): WorkspaceTab {
   const tab = new URLSearchParams(window.location.search).get('tab');
-  return tab === 'review' || tab === 'bitlang' ? tab : 'learning';
+  if (tab === 'dashboard') return 'positions';
+  return tab === 'review' || tab === 'bitlang' || tab === 'positions' ? tab : 'learning';
 }
 
 function initialVideoReviewContext(): VideoReviewContext | null {
@@ -186,6 +189,14 @@ export function AppShell() {
               <ListChecks size={14} />
               <span>bit浪浪实盘分析</span>
             </button>
+            <button
+              type="button"
+              className={`app-nav-btn ${activeTab === 'positions' ? 'active' : ''}`}
+              onClick={() => navigateToTab('positions')}
+            >
+              <Tags size={14} />
+              <span>仓位复盘</span>
+            </button>
           </nav>
         </div>
 
@@ -241,6 +252,8 @@ export function AppShell() {
             initialVideoContext={videoReviewContext}
             themeMode={themeMode}
           />
+        ) : activeTab === 'positions' ? (
+          <PositionReviewWorkspace themeMode={themeMode} />
         ) : (
           <BitlangTradeWorkspace themeMode={themeMode} />
         )}
