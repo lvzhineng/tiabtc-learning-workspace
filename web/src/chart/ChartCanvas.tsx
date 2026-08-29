@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { memo, useEffect, useRef, useState } from 'react';
 import {
   createChart,
   ColorType,
@@ -8,11 +8,10 @@ import {
   type ISeriesApi,
   type CandlestickData,
   type HistogramData,
-  type LineData,
+  type LogicalRange,
   type SeriesMarker,
   type UTCTimestamp,
   type Time,
-  type WhitespaceData,
 } from 'lightweight-charts';
 import type { Candlestick } from '@/domain/candle';
 import type { ReviewTimeframe } from '@/domain/timeframe';
@@ -65,9 +64,6 @@ interface ChartCanvasProps {
   onToggleLockDrawing?: (id: string) => void;
   onDrawingComplete?: () => void;
   showVolume?: boolean;
-  showOiCvd?: boolean;
-  oiPoints?: { timestampMs: number; value: number }[];
-  cvdPoints?: { timestampMs: number; value: number }[];
   /** Soft vertical bands for US regular session (NYSE 09:30–16:00). */
   showUsSessionBands?: boolean;
   /** Warm vertical bands for the weekend in America/New_York. */
@@ -121,10 +117,9 @@ function candlesEqual(
 /** Place the focus bar near 80% of the viewport, leaving ~20% room on the right. */
 const FOCUS_VIEWPORT_RATIO = 0.8;
 const PRICE_SCALE_MIN_WIDTH = 72;
-const FLOW_PANE_HEIGHT = 90;
-const FLOW_CVD_PANE_HEIGHT = 114;
-
-type FlowPoint = { timestampMs: number; value: number };
+const EDGE_LOAD_DEBOUNCE_MS = 100;
+const CROSSHAIR_NOTIFY_INTERVAL_MS = 32;
+const MAX_INCREMENTAL_APPEND_BARS = 8;
 
 function clampVisibleSpan(span: number): number {
   if (!Number.isFinite(span) || span < 10) return 120;
@@ -155,135 +150,7 @@ function chartThemeColors(themeMode: 'dark' | 'light') {
   };
 }
 
-function applyVolumeScaleMargins(
-  chart: IChartApi,
-  candleSeries: ISeriesApi<'Candlestick'>,
-  hasVolume: boolean
-) {
-  if (!hasVolume) return;
-  candleSeries.priceScale().applyOptions({
-    scaleMargins: { top: 0.08, bottom: 0.25 },
-  });
-  chart.priceScale('volume').applyOptions({
-    scaleMargins: { top: 0.78, bottom: 0 },
-  });
-}
-
-function alignFlowToCandles(
-  candles: Candlestick[],
-  points: FlowPoint[]
-): (LineData | WhitespaceData)[] {
-  if (candles.length === 0) return [];
-  const byTimestamp = new Map<number, number>();
-  for (const point of points) {
-    byTimestamp.set(point.timestampMs, point.value);
-  }
-  const data: (LineData | WhitespaceData)[] = [];
-  let lastValue: number | undefined;
-  for (const candle of candles) {
-    const exact = byTimestamp.get(candle.timestampMs);
-    if (exact !== undefined) lastValue = exact;
-    const time = timestampMsToUtcTimestamp(candle.timestampMs);
-    if (lastValue === undefined) data.push({ time });
-    else data.push({ time, value: lastValue });
-  }
-  return data;
-}
-
-function flowValueAtOrBefore(
-  points: FlowPoint[],
-  timestampMs: number
-): number | null {
-  if (points.length === 0) return null;
-  let low = 0;
-  let high = points.length - 1;
-  let found: number | null = null;
-  while (low <= high) {
-    const middle = (low + high) >> 1;
-    const current = points[middle].timestampMs;
-    if (current === timestampMs) return points[middle].value;
-    if (current < timestampMs) {
-      found = points[middle].value;
-      low = middle + 1;
-    } else {
-      high = middle - 1;
-    }
-  }
-  return found;
-}
-
-function createFlowPaneChart(
-  container: HTMLDivElement,
-  themeMode: 'dark' | 'light',
-  color: string,
-  showTimeScale: boolean,
-  intervalRef: { current: ReviewTimeframe }
-) {
-  const theme = chartThemeColors(themeMode);
-  const chart = createChart(container, {
-    width: container.clientWidth,
-    height: container.clientHeight,
-    layout: {
-      background: {
-        type: ColorType.Solid,
-        color: theme.background,
-      },
-      textColor: theme.text,
-    },
-    localization: {
-      locale: 'zh-CN',
-      timeFormatter: (time: Time) =>
-        formatChartTime(utcTimestampToTimestampMs(time), intervalRef.current),
-    },
-    grid: {
-      vertLines: { color: theme.grid },
-      horzLines: { color: theme.grid },
-    },
-    crosshair: {
-      mode: CrosshairMode.Normal,
-      vertLine: {
-        color: theme.crosshair,
-        width: 1,
-        style: 3,
-      },
-      horzLine: {
-        color: theme.crosshair,
-        width: 1,
-        style: 3,
-      },
-    },
-    rightPriceScale: {
-      borderColor: theme.border,
-      minimumWidth: PRICE_SCALE_MIN_WIDTH,
-      scaleMargins: { top: 0.16, bottom: 0.12 },
-    },
-    timeScale: {
-      borderColor: theme.border,
-      visible: showTimeScale,
-      timeVisible: true,
-      secondsVisible: false,
-      rightOffset: 0,
-      barSpacing: 6,
-      shiftVisibleRangeOnNewBar: false,
-      tickMarkFormatter: (time: Time) =>
-        formatChartTickTime(
-          utcTimestampToTimestampMs(time),
-          intervalRef.current
-        ),
-    },
-  });
-  const series = chart.addLineSeries({
-    color,
-    lineWidth: 2 as const,
-    priceLineVisible: false,
-    lastValueVisible: true,
-    crosshairMarkerVisible: true,
-    priceFormat: { type: 'volume', precision: 0, minMove: 1 },
-  });
-  return { chart, series };
-}
-
-export function ChartCanvas({
+export const ChartCanvas = memo(function ChartCanvas({
   candles,
   symbol,
   interval,
@@ -312,9 +179,6 @@ export function ChartCanvas({
   onToggleLockDrawing,
   onDrawingComplete = () => {},
   showVolume = false,
-  showOiCvd = false,
-  oiPoints = [],
-  cvdPoints = [],
   showUsSessionBands = false,
   showWeekendBands = false,
 }: ChartCanvasProps) {
@@ -322,8 +186,6 @@ export function ChartCanvas({
   const chartRef = useRef<IChartApi | null>(null);
   const seriesRef = useRef<ISeriesApi<'Candlestick'> | null>(null);
   const volumeSeriesRef = useRef<ISeriesApi<'Histogram'> | null>(null);
-  const oiSeriesRef = useRef<ISeriesApi<'Line'> | null>(null);
-  const cvdSeriesRef = useRef<ISeriesApi<'Line'> | null>(null);
   const prevBarsCountRef = useRef<number>(0);
   const prevFirstTimestampRef = useRef<number | null>(null);
   const prevLastTimestampRef = useRef<number | null>(null);
@@ -347,17 +209,7 @@ export function ChartCanvas({
   const lastNotifiedViewportAnchorRef = useRef<number | null>(null);
   const focusTimeMsRef = useRef(focusTimeMs);
   const focusRangeMsRef = useRef(focusRangeMs);
-  const oiContainerRef = useRef<HTMLDivElement>(null);
-  const cvdContainerRef = useRef<HTMLDivElement>(null);
-  const oiChartRef = useRef<IChartApi | null>(null);
-  const cvdChartRef = useRef<IChartApi | null>(null);
-  const flowSyncingRef = useRef(false);
-  const oiPointsRef = useRef(oiPoints);
-  const cvdPointsRef = useRef(cvdPoints);
   const [chartReady, setChartReady] = useState(false);
-
-  oiPointsRef.current = oiPoints;
-  cvdPointsRef.current = cvdPoints;
 
   useEffect(() => {
     isFetchingEarlierRef.current = isLoadingEarlier;
@@ -469,6 +321,10 @@ export function ChartCanvas({
         barSpacing: 6,
         shiftVisibleRangeOnNewBar: false,
       },
+      kineticScroll: {
+        mouse: false,
+        touch: false,
+      },
     });
 
     const series = chart.addCandlestickSeries({
@@ -502,9 +358,24 @@ export function ChartCanvas({
     volumeSeriesRef.current = volumeSeries;
     setChartReady(true);
 
+    let pendingCrosshairCandle: Candlestick | null = null;
+    let crosshairNotifyTimer: number | null = null;
+    let lastNotifiedCrosshairTimeMs: number | null | undefined = undefined;
+    const scheduleCrosshairNotification = (candle: Candlestick | null) => {
+      pendingCrosshairCandle = candle;
+      if (crosshairNotifyTimer !== null) return;
+      crosshairNotifyTimer = window.setTimeout(() => {
+        crosshairNotifyTimer = null;
+        const nextCandle = pendingCrosshairCandle;
+        const nextTimeMs = nextCandle?.timestampMs ?? null;
+        if (nextTimeMs === lastNotifiedCrosshairTimeMs) return;
+        lastNotifiedCrosshairTimeMs = nextTimeMs;
+        onCrosshairMoveRef.current?.(nextCandle);
+      }, CROSSHAIR_NOTIFY_INTERVAL_MS);
+    };
+
     // Crosshair listener
     chart.subscribeCrosshairMove((param) => {
-      const notifyCrosshairMove = onCrosshairMoveRef.current;
       const timeVal = param?.time;
       if (
         !param ||
@@ -515,33 +386,55 @@ export function ChartCanvas({
         param.point.y < 0 ||
         param.point.y > container.clientHeight
       ) {
-        notifyCrosshairMove?.(null);
-        oiChartRef.current?.clearCrosshairPosition();
-        cvdChartRef.current?.clearCrosshairPosition();
+        scheduleCrosshairNotification(null);
         return;
       }
 
       const timeMs = typeof timeVal === 'number' ? timeVal * 1000 : 0;
       const found = findNearestCandle(candlesRef.current, timeMs);
-      notifyCrosshairMove?.(
+      scheduleCrosshairNotification(
         found && Math.abs(found.timestampMs - timeMs) < 1000 ? found : null
       );
-
-      const oiSeries = oiSeriesRef.current;
-      const oiChart = oiChartRef.current;
-      const oiValue = flowValueAtOrBefore(oiPointsRef.current, timeMs);
-      if (oiChart && oiSeries && oiValue != null) {
-        oiChart.setCrosshairPosition(oiValue, timeVal, oiSeries);
-      }
-      const cvdSeries = cvdSeriesRef.current;
-      const cvdChart = cvdChartRef.current;
-      const cvdValue = flowValueAtOrBefore(cvdPointsRef.current, timeMs);
-      if (cvdChart && cvdSeries && cvdValue != null) {
-        cvdChart.setCrosshairPosition(cvdValue, timeVal, cvdSeries);
-      }
     });
 
-    // Logical range change for autoloading earlier candles
+    let pendingBoundaryRange: LogicalRange | null = null;
+    let boundaryLoadTimer: number | null = null;
+    const flushBoundaryLoad = () => {
+      boundaryLoadTimer = null;
+      const logicalRange = pendingBoundaryRange;
+      pendingBoundaryRange = null;
+      if (
+        onLoadEarlierRef.current &&
+        !isFetchingEarlierRef.current &&
+        shouldLoadEarlierByLogicalRange(logicalRange, 40)
+      ) {
+        onLoadEarlierRef.current();
+      }
+      if (
+        onLoadLaterRef.current &&
+        !isFetchingLaterRef.current &&
+        shouldLoadLaterByLogicalRange(
+          logicalRange,
+          candlesRef.current.length,
+          40
+        )
+      ) {
+        onLoadLaterRef.current();
+      }
+    };
+    const scheduleBoundaryLoad = (logicalRange: LogicalRange | null) => {
+      pendingBoundaryRange = logicalRange;
+      if (boundaryLoadTimer !== null) {
+        window.clearTimeout(boundaryLoadTimer);
+      }
+      boundaryLoadTimer = window.setTimeout(
+        flushBoundaryLoad,
+        EDGE_LOAD_DEBOUNCE_MS
+      );
+    };
+
+    // Persist the anchor immediately, but wait until pan/zoom settles before
+    // starting an edge request so network/data work does not compete with drag.
     chart.timeScale().subscribeVisibleLogicalRangeChange((logicalRange) => {
       if (logicalRange) {
         const visibleSpan = logicalRange.to - logicalRange.from;
@@ -570,24 +463,7 @@ export function ChartCanvas({
           }
         }
       }
-      if (
-        onLoadEarlierRef.current &&
-        !isFetchingEarlierRef.current &&
-        shouldLoadEarlierByLogicalRange(logicalRange, 40)
-      ) {
-        onLoadEarlierRef.current();
-      }
-      if (
-        onLoadLaterRef.current &&
-        !isFetchingLaterRef.current &&
-        shouldLoadLaterByLogicalRange(
-          logicalRange,
-          candlesRef.current.length,
-          40
-        )
-      ) {
-        onLoadLaterRef.current();
-      }
+      scheduleBoundaryLoad(logicalRange);
     });
     chart.subscribeClick(() => onSelectDrawingRef.current(null));
 
@@ -638,173 +514,16 @@ export function ChartCanvas({
 
     return () => {
       container.removeEventListener('dblclick', handleDoubleClick);
+      if (boundaryLoadTimer !== null) window.clearTimeout(boundaryLoadTimer);
+      if (crosshairNotifyTimer !== null) window.clearTimeout(crosshairNotifyTimer);
       resizeObserver.disconnect();
       setChartReady(false);
       chart.remove();
       chartRef.current = null;
       seriesRef.current = null;
       volumeSeriesRef.current = null;
-      oiChartRef.current?.remove();
-      cvdChartRef.current?.remove();
-      oiChartRef.current = null;
-      cvdChartRef.current = null;
-      oiSeriesRef.current = null;
-      cvdSeriesRef.current = null;
     };
   }, []); // Run once on mount
-
-  useEffect(() => {
-    const chart = chartRef.current;
-    const candleSeries = seriesRef.current;
-    const oiContainer = oiContainerRef.current;
-    const cvdContainer = cvdContainerRef.current;
-    if (!chart || !candleSeries || !chartReady) return;
-
-    if (!showOiCvd) {
-      oiChartRef.current?.remove();
-      cvdChartRef.current?.remove();
-      oiChartRef.current = null;
-      cvdChartRef.current = null;
-      oiSeriesRef.current = null;
-      cvdSeriesRef.current = null;
-      chart.timeScale().applyOptions({ visible: true });
-      applyVolumeScaleMargins(chart, candleSeries, Boolean(volumeSeriesRef.current));
-      return;
-    }
-    if (!oiContainer || !cvdContainer) {
-      return;
-    }
-
-    chart.timeScale().applyOptions({ visible: false });
-    applyVolumeScaleMargins(chart, candleSeries, Boolean(volumeSeriesRef.current));
-
-    const oiPane = createFlowPaneChart(
-      oiContainer,
-      themeMode,
-      '#f59e0b',
-      false,
-      intervalRef
-    );
-    const cvdPane = createFlowPaneChart(
-      cvdContainer,
-      themeMode,
-      '#60a5fa',
-      true,
-      intervalRef
-    );
-    oiChartRef.current = oiPane.chart;
-    cvdChartRef.current = cvdPane.chart;
-    oiSeriesRef.current = oiPane.series;
-    cvdSeriesRef.current = cvdPane.series;
-    oiPane.series.setData(
-      alignFlowToCandles(candlesRef.current, oiPointsRef.current)
-    );
-    cvdPane.series.setData(
-      alignFlowToCandles(candlesRef.current, cvdPointsRef.current)
-    );
-
-    const syncRange = (source: 'price' | 'oi' | 'cvd') => {
-      if (flowSyncingRef.current) return;
-      const sourceChart =
-        source === 'price' ? chart : source === 'oi' ? oiPane.chart : cvdPane.chart;
-      const range = sourceChart.timeScale().getVisibleLogicalRange();
-      if (!range) return;
-      flowSyncingRef.current = true;
-      if (source !== 'price') chart.timeScale().setVisibleLogicalRange(range);
-      if (source !== 'oi') oiPane.chart.timeScale().setVisibleLogicalRange(range);
-      if (source !== 'cvd') cvdPane.chart.timeScale().setVisibleLogicalRange(range);
-      flowSyncingRef.current = false;
-    };
-
-    const onPriceRange = () => syncRange('price');
-    const onOiRange = () => syncRange('oi');
-    const onCvdRange = () => syncRange('cvd');
-    chart.timeScale().subscribeVisibleLogicalRangeChange(onPriceRange);
-    oiPane.chart.timeScale().subscribeVisibleLogicalRangeChange(onOiRange);
-    cvdPane.chart.timeScale().subscribeVisibleLogicalRangeChange(onCvdRange);
-
-    const notifyFromFlow = (param: { time?: Time; point?: { x: number; y: number } | undefined }, host: HTMLDivElement) => {
-      const notifyCrosshairMove = onCrosshairMoveRef.current;
-      const timeVal = param.time;
-      if (
-        !timeVal ||
-        param.point === undefined ||
-        param.point.x < 0 ||
-        param.point.x > host.clientWidth ||
-        param.point.y < 0 ||
-        param.point.y > host.clientHeight
-      ) {
-        notifyCrosshairMove?.(null);
-        chart.clearCrosshairPosition();
-        return;
-      }
-      const timeMs = typeof timeVal === 'number' ? timeVal * 1000 : 0;
-      const found = findNearestCandle(candlesRef.current, timeMs);
-      notifyCrosshairMove?.(
-        found && Math.abs(found.timestampMs - timeMs) < 1000 ? found : null
-      );
-      if (found && seriesRef.current) {
-        chart.setCrosshairPosition(found.close, timeVal, seriesRef.current);
-      }
-      const otherChart = host === oiContainer ? cvdPane.chart : oiPane.chart;
-      const otherSeries = host === oiContainer ? cvdPane.series : oiPane.series;
-      const otherPoints = host === oiContainer ? cvdPointsRef.current : oiPointsRef.current;
-      const otherValue = flowValueAtOrBefore(otherPoints, timeMs);
-      if (otherValue != null) {
-        otherChart.setCrosshairPosition(otherValue, timeVal, otherSeries);
-      }
-    };
-
-    oiPane.chart.subscribeCrosshairMove((param) => notifyFromFlow(param, oiContainer));
-    cvdPane.chart.subscribeCrosshairMove((param) => notifyFromFlow(param, cvdContainer));
-
-    const resizePanes = () => {
-      oiPane.chart.applyOptions({
-        width: oiContainer.clientWidth,
-        height: oiContainer.clientHeight,
-      });
-      cvdPane.chart.applyOptions({
-        width: cvdContainer.clientWidth,
-        height: cvdContainer.clientHeight,
-      });
-    };
-    const resizeObserver = new ResizeObserver(resizePanes);
-    resizeObserver.observe(oiContainer);
-    resizeObserver.observe(cvdContainer);
-    resizePanes();
-
-    const priceRange = chart.timeScale().getVisibleLogicalRange();
-    if (priceRange) {
-      flowSyncingRef.current = true;
-      oiPane.chart.timeScale().setVisibleLogicalRange(priceRange);
-      cvdPane.chart.timeScale().setVisibleLogicalRange(priceRange);
-      flowSyncingRef.current = false;
-    }
-
-    return () => {
-      resizeObserver.disconnect();
-      chart.timeScale().unsubscribeVisibleLogicalRangeChange(onPriceRange);
-      oiPane.chart.remove();
-      cvdPane.chart.remove();
-      if (oiChartRef.current === oiPane.chart) oiChartRef.current = null;
-      if (cvdChartRef.current === cvdPane.chart) cvdChartRef.current = null;
-      if (oiSeriesRef.current === oiPane.series) oiSeriesRef.current = null;
-      if (cvdSeriesRef.current === cvdPane.series) cvdSeriesRef.current = null;
-    };
-  }, [chartReady, showOiCvd]);
-
-  useEffect(() => {
-    if (!showOiCvd) return;
-    const visibleRange = chartRef.current?.timeScale().getVisibleLogicalRange();
-    oiSeriesRef.current?.setData(alignFlowToCandles(candles, oiPoints));
-    cvdSeriesRef.current?.setData(alignFlowToCandles(candles, cvdPoints));
-    if (visibleRange) {
-      flowSyncingRef.current = true;
-      oiChartRef.current?.timeScale().setVisibleLogicalRange(visibleRange);
-      cvdChartRef.current?.timeScale().setVisibleLogicalRange(visibleRange);
-      flowSyncingRef.current = false;
-    }
-  }, [candles, cvdPoints, oiPoints, showOiCvd]);
 
   // Theme update without rebuilding the chart or losing the viewport.
   useEffect(() => {
@@ -831,28 +550,6 @@ export function ChartCanvas({
         borderColor: theme.border,
       },
     });
-    for (const flowChart of [oiChartRef.current, cvdChartRef.current]) {
-      if (!flowChart) continue;
-      flowChart.applyOptions({
-        layout: {
-          background: {
-            type: ColorType.Solid,
-            color: theme.background,
-          },
-          textColor: theme.text,
-        },
-        grid: {
-          vertLines: { color: theme.grid },
-          horzLines: { color: theme.grid },
-        },
-        rightPriceScale: {
-          borderColor: theme.border,
-        },
-        timeScale: {
-          borderColor: theme.border,
-        },
-      });
-    }
   }, [themeMode]);
 
   // Price scale mode update
@@ -945,7 +642,11 @@ export function ChartCanvas({
       previousCandles[previousCandles.length - 1] ===
         candles[previousCandles.length - 1];
 
-    if (canAppendIncrementally) {
+    const appendedCount = candles.length - prevBarsCountRef.current;
+    if (
+      canAppendIncrementally &&
+      appendedCount <= MAX_INCREMENTAL_APPEND_BARS
+    ) {
       const visibleRangeBeforeAppend =
         chart.timeScale().getVisibleLogicalRange();
       for (
@@ -1232,28 +933,6 @@ export function ChartCanvas({
           />
         )}
       </div>
-      {showOiCvd && (
-        <>
-          <div
-            className="chart-flow-pane"
-            style={{ height: FLOW_PANE_HEIGHT, flexShrink: 0 }}
-          >
-            <span className="chart-flow-pane-label" style={{ color: '#f59e0b' }}>
-              OI
-            </span>
-            <div ref={oiContainerRef} className="chart-flow-pane-chart" />
-          </div>
-          <div
-            className="chart-flow-pane"
-            style={{ height: FLOW_CVD_PANE_HEIGHT, flexShrink: 0 }}
-          >
-            <span className="chart-flow-pane-label" style={{ color: '#60a5fa' }}>
-              CVD
-            </span>
-            <div ref={cvdContainerRef} className="chart-flow-pane-chart" />
-          </div>
-        </>
-      )}
     </div>
   );
-}
+});

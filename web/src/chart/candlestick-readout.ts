@@ -10,8 +10,6 @@ export type ReadoutInfo = {
   formattedClose: string;
   formattedVolume: string;
   formattedChange: string;
-  formattedOi: string | null;
-  formattedCvd: string | null;
   isUp: boolean;
 };
 
@@ -38,25 +36,8 @@ export function formatVolume(volume: number): string {
   return `${sign}${absolute.toFixed(2)}`;
 }
 
-export function findExactTimestampValue(
-  points: { timestampMs: number; value: number }[],
-  timestampMs: number
-): number | null {
-  let low = 0;
-  let high = points.length - 1;
-  while (low <= high) {
-    const middle = (low + high) >> 1;
-    const current = points[middle].timestampMs;
-    if (current === timestampMs) return points[middle].value;
-    if (current < timestampMs) low = middle + 1;
-    else high = middle - 1;
-  }
-  return null;
-}
-
 export function computeReadoutInfo(
-  candle: Candlestick | null,
-  extras?: { oi?: number | null; cvd?: number | null }
+  candle: Candlestick | null
 ): ReadoutInfo | null {
   if (!candle) return null;
 
@@ -78,14 +59,6 @@ export function computeReadoutInfo(
     formattedClose: formatPrice(candle.close),
     formattedVolume: formatVolume(candle.volume),
     formattedChange,
-    formattedOi:
-      extras?.oi == null || !Number.isFinite(extras.oi)
-        ? null
-        : formatVolume(extras.oi),
-    formattedCvd:
-      extras?.cvd == null || !Number.isFinite(extras.cvd)
-        ? null
-        : formatVolume(extras.cvd),
     isUp,
   };
 }

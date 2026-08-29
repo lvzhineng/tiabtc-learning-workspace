@@ -3798,24 +3798,6 @@ class StudyHandler(BaseHTTPRequestHandler):
                 return self.send_json(HTTPStatus.BAD_REQUEST, {"error": str(error)})
             except RuntimeError as error:
                 return self.send_json(HTTPStatus.BAD_GATEWAY, {"error": str(error)})
-        if parsed.path == "/api/chart/flow":
-            try:
-                query = parse_qs(parsed.query)
-                symbol = query.get("symbol", [""])[0]
-                interval = query.get("interval", [""])[0]
-                start_timestamp = int(query.get("from", ["0"])[0])
-                end_timestamp = int(query.get("to", ["0"])[0])
-                return self.send_json(
-                    HTTPStatus.OK,
-                    load_chart_flow(
-                        symbol,
-                        interval,
-                        start_timestamp,
-                        end_timestamp,
-                    ),
-                )
-            except ValueError as error:
-                return self.send_json(HTTPStatus.BAD_REQUEST, {"error": str(error)})
         if parsed.path == "/api/chart/drawings":
             try:
                 query = parse_qs(parsed.query)
@@ -4000,11 +3982,6 @@ if __name__ == "__main__":
         threading.Thread(
             target=warm_up_market_provider,
             name="ccxt-market-warmup",
-            daemon=True,
-        ).start()
-        threading.Thread(
-            target=warm_up_flow_cache,
-            name="bybit-flow-warmup",
             daemon=True,
         ).start()
     print(f"学习页已启动：http://{HOST}:{PORT}/")

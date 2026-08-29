@@ -12,6 +12,14 @@ import {
 } from '@/domain/timeframe';
 import type { Candlestick } from '@/domain/candle';
 import type { ReplayState } from '@/features/replay/replay-state';
+import {
+  createCandleEdgeLoadGuard,
+  recordEarlierCandleLoad,
+  recordLaterCandleLoad,
+  resetCandleEdgeLoadGuard,
+  shouldAttemptEarlierCandleLoad,
+  shouldAttemptLaterCandleLoad,
+} from '@/chart/candle-edge-load-guard';
 
 type CandleWorkspaceData = {
   candles: Candlestick[];
@@ -75,6 +83,7 @@ export function useCandleWorkspaceData(
   const laterRequestRef = useRef<AbortController | null>(null);
   const futureRequestControllerRef = useRef<AbortController | null>(null);
   const futurePrefetchRef = useRef<Promise<number> | null>(null);
+  const edgeLoadGuardRef = useRef(createCandleEdgeLoadGuard());
   const contextKeyRef = useRef('');
   const contextRevisionRef = useRef(0);
 
@@ -100,6 +109,7 @@ export function useCandleWorkspaceData(
     laterRequestRef.current = null;
     futureRequestControllerRef.current = null;
     futurePrefetchRef.current = null;
+    resetCandleEdgeLoadGuard(edgeLoadGuardRef.current);
 
     const contextRevision = ++contextRevisionRef.current;
     const controller = new AbortController();
@@ -192,10 +202,14 @@ export function useCandleWorkspaceData(
       return;
     }
 
+    const earliestTimestamp = candles[0].timestampMs;
+    if (!shouldAttemptEarlierCandleLoad(edgeLoadGuardRef.current, earliestTimestamp)) {
+      return;
+    }
+
     const controller = new AbortController();
     const requestContextKey = contextKeyRef.current;
     const requestContextRevision = contextRevisionRef.current;
-    const earliestTimestamp = candles[0].timestampMs;
     earlierRequestRef.current = controller;
     setIsLoadingEarlier(true);
     setError(null);
@@ -215,9 +229,13 @@ export function useCandleWorkspaceData(
         ) {
           return;
         }
-        setCandles((current) =>
-          mergeCandles(current, batch.candles, 'before')
+        recordEarlierCandleLoad(
+          edgeLoadGuardRef.current,
+          earliestTimestamp,
+          batch.candles,
+          Boolean(batch.warning)
         );
+        setCandles((current) => mergeCandles(current, batch.candles, 'before'));
         if (batch.warning) setOfflineWarning(batch.warning);
         setError(null);
       })
@@ -250,10 +268,14 @@ export function useCandleWorkspaceData(
       return;
     }
 
+    const latestTimestamp = candles[candles.length - 1].timestampMs;
+    if (!shouldAttemptLaterCandleLoad(edgeLoadGuardRef.current, latestTimestamp)) {
+      return;
+    }
+
     const controller = new AbortController();
     const requestContextKey = contextKeyRef.current;
     const requestContextRevision = contextRevisionRef.current;
-    const latestTimestamp = candles[candles.length - 1].timestampMs;
     laterRequestRef.current = controller;
     setIsLoadingLater(true);
     setError(null);
@@ -274,6 +296,13 @@ export function useCandleWorkspaceData(
         ) {
           return;
         }
+        recordLaterCandleLoad(
+          edgeLoadGuardRef.current,
+          latestTimestamp,
+          timeframe,
+          batch.candles,
+          Boolean(batch.warning)
+        );
         setCandles((current) => mergeCandles(current, batch.candles, 'after'));
         if (batch.warning) setOfflineWarning(batch.warning);
         setError(null);

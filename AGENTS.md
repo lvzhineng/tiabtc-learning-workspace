@@ -20,7 +20,7 @@ start-workspace.cmd
     └─ start-workspace.ps1
        ├─ React 18 + Vite + TypeScript     http://127.0.0.1:3000
        └─ Python ThreadingHTTPServer API   http://127.0.0.1:8765
-          ├─ CCXT / Bybit USDT Perpetual   （K 线主源 + 15m OI）
+          ├─ CCXT / Bybit USDT Perpetual   （K 线主源）
           ├─ CCXT / Bitget UTA             （仓位复盘私有账户 + K 线回退）
           └─ tiabtc-review.sqlite
 ```
@@ -45,9 +45,7 @@ Python 后端是纯 API 服务。禁止恢复项目目录静态文件服务；�
 ### 3.1 行情数据
 
 - **行情复盘 / bit浪浪 / 顺序学习进复盘** 的 K 线唯一在线来源仍是 **CCXT 封装的 Bybit USDT 永续合约**。K 线不得改走非 CCXT 源。
-- **OI**：走 CCXT `fetch_open_interest_history`（**15m**）。启动时只后台预热 **BTCUSDT** 自 2020-01-01 至当前的 15m OI，写入 `market_oi_15m`；已覆盖区间跳过。更细周期（1m/5m）用 15m 值做阶梯对齐；更粗周期按 15m 桶末值重采样。不要为此去下逐笔成交，也不预热其它合约。旧表 `market_oi_1h` 保留不删。
-- **CVD**：不下载逐笔成交。用 **15m** K 线的涨跌符号成交量近似（阳线 +volume / 阴线 -volume，窗口内累计）。图表周期 ≤15m 时用 15m CVD 阶梯对齐；更粗周期从 15m 累计取桶末值。启动时按现有 K 线缓存语义补 BTCUSDT 15m 缺口，不为此去下 1m 全历史。这不是 taker CVD。
-- 行情复盘 OI/CVD 开关只控制显隐，打开后以**独立副图**展示（主图下方 OI、CVD 各一窗格）；`GET /api/chart/flow` 只读本地 OI 缓存 + 已有 `market_candles` 的 15m，不在拖图路径上下载。
+- **OI/CVD 已退役**：不要恢复行情复盘 OI/CVD 开关、副图、`GET /api/chart/flow` 或启动预热。旧 `market_oi_*` / `market_cvd_*` 表仅作为历史兼容数据保留，不主动删除，也不再自动更新。
 - 上述三个入口的 K 线共用 `market_candles` 和 `market_cache_ranges`。
 - **仓位复盘** K 线规则：
   - 优先 Bybit（走现有 `market_candles` / `market_cache_ranges`）；
@@ -133,7 +131,7 @@ Python 后端是纯 API 服务。禁止恢复项目目录静态文件服务；�
 - bit浪浪本机备注/标签/画图相关新表（仅增量，不改交割单 JSON 与仓位复盘表语义）：
   - `bitlang_trade_notes`、`bitlang_trade_tags`、`bitlang_trade_tag_map`、`bitlang_trade_drawings`
   - 回滚：`DROP` 这四张表即可；交割单快照与仓位数据不受影响
-- 行情复盘 OI/CVD 相关新表（仅增量，不改既有 Bybit 行情表语义）：
+- 已退役的行情复盘 OI/CVD 历史兼容表（不改既有 Bybit 行情表语义，不主动删除）：
   - `market_oi_15m`、`market_oi_15m_cache_ranges`
   - 旧表 `market_oi_1h`、`market_oi_1h_cache_ranges` 保留不删
 - 不执行生产数据库写操作。
@@ -163,7 +161,7 @@ Python 后端是纯 API 服务。禁止恢复项目目录静态文件服务；�
 | --- | --- |
 | `start-workspace.ps1` | 检查依赖、启动前后端、打开指定工作台 |
 | `study_server.py` | API、SQLite 表、行情缓存、画图、模拟交易与仓位复盘持久化 |
-| `market_data_provider.py` | CCXT Bybit 行情适配、代理、限频、永续目录与 15m OI |
+| `market_data_provider.py` | CCXT Bybit 行情适配、代理、限频与永续目录 |
 | `bitget_position_provider.py` | CCXT Bitget UTA 只读仓位/余额与回退 K 线 |
 | `web/src/app/AppShell.tsx` | 四个工作台导航、主题和连接状态 |
 | `web/src/chart/ChartCanvas.tsx` | K 线、成交量、视口、十字线和边界加载 |
@@ -222,7 +220,7 @@ Python 后端是纯 API 服务。禁止恢复项目目录静态文件服务；�
 11. 仓位复盘：备注与标签可保存；画图按仓位持久化，刷新后仍在，切周期仍在；主流合约 K 线来源显示 Bybit，Bybit 无合约时应回退 Bitget。
 12. GET `/api/position-review` 与相关接口响应中不得出现明文 API Key/Secret/Passphrase。
 13. 控制台没有未处理异常，接口错误能显示可理解的信息。
-14. 行情复盘「OI / CVD」开关默认关闭；打开后为独立副图；CVD 来自 BTCUSDT 15m 涨跌成交量近似，OI 为 BTCUSDT 15m；更细周期阶梯对齐，更粗周期取桶末；拖图不触发下载。
+14. 行情复盘不存在「OI / CVD」开关或副图；页面不请求 `/api/chart/flow`，服务启动时不进行 OI/CVD 预热。
 15. 仓位复盘账户看板可进入；日记跳转切回 K 线并居中。
 16. 过长 1m 仓位出现截断提示，不一次拉全历史。
 17. 同步进行中再次同步显示冲突（409），页面不被打挂。

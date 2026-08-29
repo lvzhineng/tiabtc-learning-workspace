@@ -15,6 +15,14 @@ import {
 import { ChartCanvas } from '@/chart/ChartCanvas';
 import { captureChartPng } from '@/chart/capture-chart-png';
 import {
+  createCandleEdgeLoadGuard,
+  recordEarlierCandleLoad,
+  recordLaterCandleLoad,
+  resetCandleEdgeLoadGuard,
+  shouldAttemptEarlierCandleLoad,
+  shouldAttemptLaterCandleLoad,
+} from '@/chart/candle-edge-load-guard';
+import {
   formatChartTime,
   timestampMsToUtcTimestamp,
   timeframeMs,
@@ -62,6 +70,7 @@ export function BitlangTradeChart({
   const failedEdgeRef = useRef<'main' | 'earlier' | 'later' | null>(null);
   const earlierRequestRef = useRef<AbortController | null>(null);
   const laterRequestRef = useRef<AbortController | null>(null);
+  const edgeLoadGuardRef = useRef(createCandleEdgeLoadGuard());
   const contextKeyRef = useRef('');
   const entryTimeMs = tradeEntryMs(trade);
   const exitTimeMs = tradeExitMs(trade);
@@ -148,6 +157,7 @@ export function BitlangTradeChart({
     setError(null);
     setWarning(null);
     failedEdgeRef.current = null;
+    resetCandleEdgeLoadGuard(edgeLoadGuardRef.current);
 
     const window = boundedTradeWindowMs(entryTimeMs, exitTimeMs, timeframe);
     const cached = sliceCachedCandleWindow(
@@ -220,6 +230,10 @@ export function BitlangTradeChart({
     ) {
       return;
     }
+    const earliestTimestamp = candles[0].timestampMs;
+    if (!shouldAttemptEarlierCandleLoad(edgeLoadGuardRef.current, earliestTimestamp)) {
+      return;
+    }
     const controller = new AbortController();
     const requestContextKey = contextKeyRef.current;
     earlierRequestRef.current = controller;
@@ -227,7 +241,7 @@ export function BitlangTradeChart({
     void fetchBitlangEarlierCandles(
       symbol,
       timeframe,
-      candles[0].timestampMs,
+      earliestTimestamp,
       500,
       controller.signal
     )
@@ -236,6 +250,12 @@ export function BitlangTradeChart({
           !controller.signal.aborted &&
           contextKeyRef.current === requestContextKey
         ) {
+          recordEarlierCandleLoad(
+            edgeLoadGuardRef.current,
+            earliestTimestamp,
+            batch.candles,
+            Boolean(batch.warning)
+          );
           setCandles((current) => mergeCandles(current, batch.candles));
           if (batch.warning) setWarning(batch.warning);
           setError(null);
@@ -267,6 +287,10 @@ export function BitlangTradeChart({
     ) {
       return;
     }
+    const latestTimestamp = candles[candles.length - 1].timestampMs;
+    if (!shouldAttemptLaterCandleLoad(edgeLoadGuardRef.current, latestTimestamp)) {
+      return;
+    }
     const controller = new AbortController();
     const requestContextKey = contextKeyRef.current;
     laterRequestRef.current = controller;
@@ -274,7 +298,7 @@ export function BitlangTradeChart({
     void fetchBitlangLaterCandles(
       symbol,
       timeframe,
-      candles[candles.length - 1].timestampMs,
+      latestTimestamp,
       500,
       controller.signal
     )
@@ -283,6 +307,13 @@ export function BitlangTradeChart({
           !controller.signal.aborted &&
           contextKeyRef.current === requestContextKey
         ) {
+          recordLaterCandleLoad(
+            edgeLoadGuardRef.current,
+            latestTimestamp,
+            timeframe,
+            batch.candles,
+            Boolean(batch.warning)
+          );
           setCandles((current) => mergeCandles(current, batch.candles));
           if (batch.warning) setWarning(batch.warning);
           setError(null);
@@ -317,6 +348,10 @@ export function BitlangTradeChart({
     }
     setReloadToken((value) => value + 1);
   }, [loadEarlier, loadLater]);
+
+  const handleDrawingComplete = useCallback(() => {
+    setActiveTool('select');
+  }, [setActiveTool]);
 
   const contextReady = loadedContextKey === chartContextKey;
   const displayedCandles = contextReady ? candles : [];
@@ -399,7 +434,7 @@ export function BitlangTradeChart({
         onSaveDrawing={saveDrawingState}
         onDeleteDrawing={deleteDrawingById}
         onToggleLockDrawing={toggleLockDrawing}
-        onDrawingComplete={() => setActiveTool('select')}
+        onDrawingComplete={handleDrawingComplete}
         showVolume
         showUsSessionBands={showUsSessionBands}
         showWeekendBands={showWeekendBands}

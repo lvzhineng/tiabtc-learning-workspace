@@ -9,6 +9,14 @@ import {
 import { ChartCanvas } from '@/chart/ChartCanvas';
 import { captureChartPng } from '@/chart/capture-chart-png';
 import {
+  createCandleEdgeLoadGuard,
+  recordEarlierCandleLoad,
+  recordLaterCandleLoad,
+  resetCandleEdgeLoadGuard,
+  shouldAttemptEarlierCandleLoad,
+  shouldAttemptLaterCandleLoad,
+} from '@/chart/candle-edge-load-guard';
+import {
   formatChartTime,
   timestampMsToUtcTimestamp,
   timeframeMs,
@@ -57,6 +65,7 @@ export function PositionReviewChart({
   const failedEdgeRef = useRef<'main' | 'earlier' | 'later' | null>(null);
   const earlierRequestRef = useRef<AbortController | null>(null);
   const laterRequestRef = useRef<AbortController | null>(null);
+  const edgeLoadGuardRef = useRef(createCandleEdgeLoadGuard());
   const contextKeyRef = useRef('');
   const entryTimeMs = position.entryTimeMs;
   const closedExitTimeMs = position.exitTimeMs;
@@ -148,6 +157,7 @@ export function PositionReviewChart({
     setError(null);
     setWarning(null);
     failedEdgeRef.current = null;
+    resetCandleEdgeLoadGuard(edgeLoadGuardRef.current);
 
     const exitForFetch = closedExitTimeMs ?? Date.now();
     const window = boundedTradeWindowMs(entryTimeMs, exitForFetch, timeframe);
@@ -216,6 +226,10 @@ export function PositionReviewChart({
     if (loading || isLoadingEarlier || candles.length === 0 || earlierRequestRef.current) {
       return;
     }
+    const earliestTimestamp = candles[0].timestampMs;
+    if (!shouldAttemptEarlierCandleLoad(edgeLoadGuardRef.current, earliestTimestamp)) {
+      return;
+    }
     const controller = new AbortController();
     const requestContextKey = contextKeyRef.current;
     earlierRequestRef.current = controller;
@@ -223,12 +237,18 @@ export function PositionReviewChart({
     void fetchPositionEarlierCandles(
       symbol,
       timeframe,
-      candles[0].timestampMs,
+      earliestTimestamp,
       500,
       controller.signal
     )
       .then((batch) => {
         if (!controller.signal.aborted && contextKeyRef.current === requestContextKey) {
+          recordEarlierCandleLoad(
+            edgeLoadGuardRef.current,
+            earliestTimestamp,
+            batch.candles,
+            Boolean(batch.warning)
+          );
           setCandles((current) => mergeCandles(current, batch.candles));
           if (batch.warning) setWarning(batch.warning);
           setError(null);
@@ -253,6 +273,10 @@ export function PositionReviewChart({
     if (loading || isLoadingLater || candles.length === 0 || laterRequestRef.current) {
       return;
     }
+    const latestTimestamp = candles[candles.length - 1].timestampMs;
+    if (!shouldAttemptLaterCandleLoad(edgeLoadGuardRef.current, latestTimestamp)) {
+      return;
+    }
     const controller = new AbortController();
     const requestContextKey = contextKeyRef.current;
     laterRequestRef.current = controller;
@@ -260,12 +284,19 @@ export function PositionReviewChart({
     void fetchPositionLaterCandles(
       symbol,
       timeframe,
-      candles[candles.length - 1].timestampMs,
+      latestTimestamp,
       500,
       controller.signal
     )
       .then((batch) => {
         if (!controller.signal.aborted && contextKeyRef.current === requestContextKey) {
+          recordLaterCandleLoad(
+            edgeLoadGuardRef.current,
+            latestTimestamp,
+            timeframe,
+            batch.candles,
+            Boolean(batch.warning)
+          );
           setCandles((current) => mergeCandles(current, batch.candles));
           if (batch.warning) setWarning(batch.warning);
           setError(null);
@@ -298,6 +329,10 @@ export function PositionReviewChart({
     }
     setReloadToken((value) => value + 1);
   }, [loadEarlier, loadLater]);
+
+  const handleDrawingComplete = useCallback(() => {
+    setActiveTool('select');
+  }, [setActiveTool]);
 
   const contextReady = loadedContextKey === chartContextKey;
   const displayedCandles = contextReady ? candles : [];
@@ -390,7 +425,7 @@ export function PositionReviewChart({
         onSaveDrawing={saveDrawingState}
         onDeleteDrawing={deleteDrawingById}
         onToggleLockDrawing={toggleLockDrawing}
-        onDrawingComplete={() => setActiveTool('select')}
+        onDrawingComplete={handleDrawingComplete}
         showVolume
         showUsSessionBands={showUsSessionBands}
         showWeekendBands={showWeekendBands}

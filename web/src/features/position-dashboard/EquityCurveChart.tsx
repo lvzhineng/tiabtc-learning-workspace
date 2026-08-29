@@ -40,6 +40,38 @@ function getSmoothPath(points: Point[]): string {
   return d;
 }
 
+function downsamplePathPoints(points: Point[], maxPoints = 1200): Point[] {
+  if (points.length <= maxPoints) return points;
+
+  const result: Point[] = [points[0]];
+  const interiorCount = points.length - 2;
+  const bucketCount = Math.max(1, Math.floor((maxPoints - 2) / 2));
+
+  for (let bucket = 0; bucket < bucketCount; bucket++) {
+    const start = 1 + Math.floor((bucket * interiorCount) / bucketCount);
+    const end = 1 + Math.floor(((bucket + 1) * interiorCount) / bucketCount);
+    if (start >= end) continue;
+
+    let minIndex = start;
+    let maxIndex = start;
+    for (let index = start + 1; index < end; index++) {
+      if (points[index].y < points[minIndex].y) minIndex = index;
+      if (points[index].y > points[maxIndex].y) maxIndex = index;
+    }
+
+    if (minIndex === maxIndex) {
+      result.push(points[minIndex]);
+    } else if (minIndex < maxIndex) {
+      result.push(points[minIndex], points[maxIndex]);
+    } else {
+      result.push(points[maxIndex], points[minIndex]);
+    }
+  }
+
+  result.push(points[points.length - 1]);
+  return result;
+}
+
 function formatShortDate(timestampMs: number): string {
   const d = new Date(timestampMs);
   return new Intl.DateTimeFormat('zh-CN', {
@@ -168,6 +200,23 @@ export function EquityCurveChart({ positions }: Props) {
     };
   }, [positions]);
 
+  const pathGeometry = useMemo(() => {
+    if (points.length <= 1) {
+      return { linePath: '', areaPath: '', zeroY: 0 };
+    }
+    const valRange = maxVal - minVal || 1;
+    const zeroY = 210 - 32 - ((0 - minVal) / valRange) * (210 - 22 - 32);
+    const pathPoints = downsamplePathPoints(points);
+    const linePath = getSmoothPath(pathPoints);
+    const firstX = pathPoints[0].x;
+    const lastX = pathPoints[pathPoints.length - 1].x;
+    return {
+      linePath,
+      areaPath: `${linePath} L ${lastX.toFixed(1)} ${zeroY.toFixed(1)} L ${firstX.toFixed(1)} ${zeroY.toFixed(1)} Z`,
+      zeroY,
+    };
+  }, [maxVal, minVal, points]);
+
   if (points.length <= 1) {
     return (
       <div className="posdash-empty-state">
@@ -177,17 +226,7 @@ export function EquityCurveChart({ positions }: Props) {
     );
   }
 
-  // Calculate Zero Line Y
-  const valRange = maxVal - minVal || 1;
-  const zeroY = 210 - 32 - ((0 - minVal) / valRange) * (210 - 22 - 32);
-
-  // Smooth SVG Line path
-  const linePath = getSmoothPath(points);
-
-  // Smooth SVG Area path (down to zero line)
-  const firstX = points[0].x;
-  const lastX = points[points.length - 1].x;
-  const areaPath = `${linePath} L ${lastX.toFixed(1)} ${zeroY.toFixed(1)} L ${firstX.toFixed(1)} ${zeroY.toFixed(1)} Z`;
+  const { areaPath, linePath, zeroY } = pathGeometry;
 
   // 现代科技电光青蓝 (Cyber Blue-Cyan) 配色
   const strokeColor = '#0ea5e9';
@@ -204,7 +243,10 @@ export function EquityCurveChart({ positions }: Props) {
         Math.round(((mouseX - 45) / (580 - 45)) * (points.length - 1))
       )
     );
-    setHoveredPoint(points[pointIndex]);
+    const nextPoint = points[pointIndex];
+    setHoveredPoint((current) =>
+      current?.index === nextPoint.index ? current : nextPoint
+    );
   };
 
   // 3 Key time points for X-axis

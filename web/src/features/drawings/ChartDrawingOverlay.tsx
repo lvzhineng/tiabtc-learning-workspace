@@ -8,7 +8,7 @@ import {
   type MouseEvent as ReactMouseEvent,
   type PointerEvent as ReactPointerEvent,
 } from 'react';
-import type { IChartApi, ISeriesApi } from 'lightweight-charts';
+import type { IChartApi, ISeriesApi, Logical } from 'lightweight-charts';
 import type { Candlestick } from '@/domain/candle';
 import type { ReviewTimeframe } from '@/domain/timeframe';
 import { TIMEFRAME_SECONDS_MAP } from '@/domain/timeframe';
@@ -138,13 +138,20 @@ function findNearestCandle(
 function timestampToChartCoordinate(
   chart: IChartApi,
   candles: Candlestick[],
-  timestampMs: number
+  timestampMs: number,
+  interval: ReviewTimeframe
 ): number | null {
   const directCoordinate = chart.timeScale().timeToCoordinate(
     timestampMsToUtcTimestamp(timestampMs)
   );
   if (directCoordinate !== null) return directCoordinate;
-  if (candles.length < 2) return null;
+  if (candles.length === 0) return null;
+  if (candles.length === 1) {
+    const intervalMs = TIMEFRAME_SECONDS_MAP[interval] * 1000;
+    const logicalOffset =
+      (timestampMs - candles[0].timestampMs) / intervalMs;
+    return chart.timeScale().logicalToCoordinate(logicalOffset as Logical);
+  }
 
   let low = 0;
   let high = candles.length;
@@ -268,6 +275,17 @@ export function ChartDrawingOverlay({
     };
   }, [chart]);
 
+  // ChartCanvas applies Lightweight Charts series data in an effect after the
+  // React tree has rendered. Redraw once on the next frame so drawing
+  // coordinates always use the updated candle series after replay steps,
+  // rewinds, and prepend/append loads.
+  useEffect(() => {
+    const frame = window.requestAnimationFrame(() => {
+      setViewportRevision((revision) => revision + 1);
+    });
+    return () => window.cancelAnimationFrame(frame);
+  }, [candles]);
+
   const coordinateRevision = `${viewportRevision}`;
   const isFreehandTool = activeTool === 'brush';
 
@@ -277,6 +295,22 @@ export function ChartDrawingOverlay({
       drawing.id === drag.preview.id ? drag.preview : drawing
     );
   }, [drag, drawings]);
+
+  const drawingTimeBounds = useMemo(() => {
+    const bounds = new Map<string, { minMs: number; maxMs: number }>();
+    for (const drawing of displayedDrawings) {
+      if (drawing.points.length === 0) continue;
+      let minMs = drawing.points[0].timestampMs;
+      let maxMs = minMs;
+      for (let index = 1; index < drawing.points.length; index++) {
+        const timestampMs = drawing.points[index].timestampMs;
+        if (timestampMs < minMs) minMs = timestampMs;
+        if (timestampMs > maxMs) maxMs = timestampMs;
+      }
+      bounds.set(drawing.id, { minMs, maxMs });
+    }
+    return bounds;
+  }, [displayedDrawings]);
 
   const snapPrice = useCallback(
     (price: number, timestampMs: number) => {
@@ -537,15 +571,20 @@ export function ChartDrawingOverlay({
     onDrawingComplete();
   };
 
-  const toCoordinate = useCallback((point: DrawingPoint) => {
-    const x = timestampToChartCoordinate(
+  const toTimeCoordinate = useCallback((timestampMs: number) => {
+    return timestampToChartCoordinate(
       chart,
       candlesRef.current,
-      point.timestampMs
+      timestampMs,
+      interval
     );
+  }, [chart, interval]);
+
+  const toCoordinate = useCallback((point: DrawingPoint) => {
+    const x = toTimeCoordinate(point.timestampMs);
     const y = series.priceToCoordinate(point.price);
     return x === null || y === null ? null : { x, y: Number(y) };
-  }, [chart, series]);
+  }, [series, toTimeCoordinate]);
 
   const draftCoordinates = draftPoints
     .map(toCoordinate)
@@ -572,14 +611,39 @@ export function ChartDrawingOverlay({
         }
       : null;
 
-  const visibleRange = chart.timeScale().getVisibleRange();
-  const visibleTimeRange =
-    visibleRange && typeof visibleRange.from === 'number' && typeof visibleRange.to === 'number'
-      ? {
-          fromMs: visibleRange.from * 1000,
-          toMs: visibleRange.to * 1000,
-        }
-      : null;
+  const viewportWidth = chart.timeScale().width();
+
+  const visibleDrawings = useMemo(() => {
+    if (viewportWidth <= 0) return displayedDrawings;
+    const bufferPx = Math.max(viewportWidth * 0.5, 160);
+    return displayedDrawings.filter((drawing) => {
+      if (drawing.id === selectedDrawingId) return true;
+      if (
+        drawing.toolType === 'HorizontalLine' ||
+        drawing.toolType === 'HorizontalRay' ||
+        drawing.toolType === 'Ray' ||
+        drawing.toolType === 'ExtendedLine'
+      ) {
+        return true;
+      }
+      const bounds = drawingTimeBounds.get(drawing.id);
+      if (!bounds) return true;
+      const minX = toTimeCoordinate(bounds.minMs);
+      const maxX = toTimeCoordinate(bounds.maxMs);
+      if (minX === null || maxX === null) return true;
+      return !(
+        Math.max(minX, maxX) < -bufferPx ||
+        Math.min(minX, maxX) > viewportWidth + bufferPx
+      );
+    });
+  }, [
+    coordinateRevision,
+    displayedDrawings,
+    drawingTimeBounds,
+    selectedDrawingId,
+    toTimeCoordinate,
+    viewportWidth,
+  ]);
 
   const selectedDrawing = useMemo(
     () => displayedDrawings.find((d) => d.id === selectedDrawingId) || null,
@@ -629,14 +693,13 @@ export function ChartDrawingOverlay({
           pointerEvents={activeTool === 'select' ? 'none' : 'all'}
           onPointerDown={handleBackgroundPointerDown}
         />
-        {displayedDrawings.map((drawing) => (
+        {visibleDrawings.map((drawing) => (
           <DrawingGeometry
             key={drawing.id}
             drawing={drawing}
             selected={drawing.id === selectedDrawingId}
             interactive={activeTool === 'select'}
             coordinateRevision={coordinateRevision}
-            visibleTimeRange={visibleTimeRange}
             toCoordinate={toCoordinate}
             onPointerDown={handleDrawingPointerDown}
           />
@@ -648,7 +711,6 @@ export function ChartDrawingOverlay({
             selected={false}
             interactive={false}
             coordinateRevision={coordinateRevision}
-            visibleTimeRange={visibleTimeRange}
             toCoordinate={toCoordinate}
             onPointerDown={() => {}}
           />
@@ -744,7 +806,6 @@ const DrawingGeometry = memo(function DrawingGeometry({
   selected,
   interactive,
   coordinateRevision,
-  visibleTimeRange,
   toCoordinate,
   onPointerDown,
 }: {
@@ -752,7 +813,6 @@ const DrawingGeometry = memo(function DrawingGeometry({
   selected: boolean;
   interactive: boolean;
   coordinateRevision: string;
-  visibleTimeRange: { fromMs: number; toMs: number } | null;
   toCoordinate: (point: DrawingPoint) => { x: number; y: number } | null;
   onPointerDown: (
     event: ReactPointerEvent<SVGElement>,
@@ -761,27 +821,6 @@ const DrawingGeometry = memo(function DrawingGeometry({
   ) => void;
 }) {
   void coordinateRevision;
-
-  const isInfiniteSpan =
-    drawing.toolType === 'HorizontalLine' ||
-    drawing.toolType === 'HorizontalRay' ||
-    drawing.toolType === 'Ray' ||
-    drawing.toolType === 'ExtendedLine';
-
-  if (!selected && !isInfiniteSpan && visibleTimeRange && drawing.points.length > 0) {
-    let minT = drawing.points[0].timestampMs;
-    let maxT = minT;
-    for (let i = 1; i < drawing.points.length; i++) {
-      const t = drawing.points[i].timestampMs;
-      if (t < minT) minT = t;
-      if (t > maxT) maxT = t;
-    }
-    const span = visibleTimeRange.toMs - visibleTimeRange.fromMs;
-    const buffer = Math.max(span * 0.5, 60_000);
-    if (maxT < visibleTimeRange.fromMs - buffer || minT > visibleTimeRange.toMs + buffer) {
-      return null;
-    }
-  }
 
   const points = drawing.points
     .map(toCoordinate)

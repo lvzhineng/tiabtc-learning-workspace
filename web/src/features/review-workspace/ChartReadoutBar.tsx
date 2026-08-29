@@ -95,18 +95,6 @@ export const ChartReadoutBar = memo(function ChartReadoutBar({
             <span style={{ color: 'var(--text-muted)' }}>Vol: </span>
             <span>{readout.formattedVolume}</span>
           </div>
-          {readout.formattedOi != null && (
-            <div>
-              <span style={{ color: 'var(--text-muted)' }}>OI: </span>
-              <span>{readout.formattedOi}</span>
-            </div>
-          )}
-          {readout.formattedCvd != null && (
-            <div>
-              <span style={{ color: 'var(--text-muted)' }}>CVD: </span>
-              <span>{readout.formattedCvd}</span>
-            </div>
-          )}
         </>
       ) : (
         <div style={{ color: 'var(--text-muted)' }}>

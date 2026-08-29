@@ -61,7 +61,17 @@ export function mergeCandles(
   const merged = new Map(current.map((candle) => [candle.timestampMs, candle]));
   let changed = false;
   for (const candle of incoming) {
-    if (!merged.has(candle.timestampMs)) changed = true;
+    const existing = merged.get(candle.timestampMs);
+    if (
+      !existing ||
+      existing.open !== candle.open ||
+      existing.high !== candle.high ||
+      existing.low !== candle.low ||
+      existing.close !== candle.close ||
+      existing.volume !== candle.volume
+    ) {
+      changed = true;
+    }
     merged.set(candle.timestampMs, candle);
   }
   if (!changed) return current;
