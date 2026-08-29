@@ -8,6 +8,12 @@ import {
 import { formatChartTime } from '@/chart/chart-time';
 import { toast } from '@/ui/feedback/toast';
 import {
+  readLocalUiState,
+  storedBoolean,
+  storedInteger,
+  writeLocalUiState,
+} from '@/ui/persistence/local-ui-state';
+import {
   BookOpen,
   Check,
   ChevronLeft,
@@ -17,6 +23,16 @@ import {
   MessageSquare,
   X,
 } from 'lucide-react';
+
+const POSITION_JOURNAL_UI_STORAGE_KEY = 'tiabtc-position-journal-ui-v1';
+
+function loadJournalUiState() {
+  const stored = readLocalUiState(POSITION_JOURNAL_UI_STORAGE_KEY);
+  return {
+    onlyWithNotes: storedBoolean(stored.onlyWithNotes, false),
+    page: storedInteger(stored.page, 0, 0),
+  };
+}
 
 interface Props {
   positions: ReviewPosition[];
@@ -31,11 +47,14 @@ export function TradeJournalStream({
   onNavigateToPosition,
   onNoteUpdated,
 }: Props) {
-  const [onlyWithNotes, setOnlyWithNotes] = useState(false);
+  const [initialUiState] = useState(loadJournalUiState);
+  const [onlyWithNotes, setOnlyWithNotes] = useState(
+    initialUiState.onlyWithNotes
+  );
   const [editingId, setEditingId] = useState<string | null>(null);
   const [draftNote, setDraftNote] = useState('');
   const [saving, setSaving] = useState(false);
-  const [page, setPage] = useState(0);
+  const [page, setPage] = useState(initialUiState.page);
   const PAGE_SIZE = 20;
 
   const filtered = positions.filter((p) => {
@@ -46,8 +65,11 @@ export function TradeJournalStream({
   });
 
   useEffect(() => {
-    setPage(0);
-  }, [onlyWithNotes]);
+    writeLocalUiState(POSITION_JOURNAL_UI_STORAGE_KEY, {
+      onlyWithNotes,
+      page,
+    });
+  }, [onlyWithNotes, page]);
 
   const pageCount = Math.max(1, Math.ceil(filtered.length / PAGE_SIZE));
   const safePage = Math.min(page, pageCount - 1);
@@ -56,6 +78,10 @@ export function TradeJournalStream({
       filtered.slice(safePage * PAGE_SIZE, safePage * PAGE_SIZE + PAGE_SIZE),
     [filtered, safePage]
   );
+
+  useEffect(() => {
+    if (positions.length > 0 && page !== safePage) setPage(safePage);
+  }, [page, positions.length, safePage]);
 
   const startEdit = (pos: ReviewPosition) => {
     setEditingId(pos.positionId);
@@ -91,7 +117,10 @@ export function TradeJournalStream({
         <button
           type="button"
           className={`posdash-segmented-pill ${onlyWithNotes ? 'active' : ''}`}
-          onClick={() => setOnlyWithNotes((v) => !v)}
+          onClick={() => {
+            setOnlyWithNotes((value) => !value);
+            setPage(0);
+          }}
         >
           <BookOpen size={12} />
           {onlyWithNotes ? '仅看带笔记 (已筛选)' : '全部交易记录'}

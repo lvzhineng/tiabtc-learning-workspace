@@ -1,4 +1,4 @@
-import { useCallback, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   syncBitgetPositions,
   type PositionTag,
@@ -9,6 +9,11 @@ import { TagAnalyticsCard } from './TagAnalyticsCard';
 import { SymbolLeaderboardCard } from './SymbolLeaderboardCard';
 import { TradeJournalStream } from './TradeJournalStream';
 import { toast } from '@/ui/feedback/toast';
+import {
+  readLocalUiState,
+  storedString,
+  writeLocalUiState,
+} from '@/ui/persistence/local-ui-state';
 import { summarizePositions, formatDurationMinutes } from '@/features/position-review/position-stats';
 import {
   Activity,
@@ -28,12 +33,34 @@ import {
 import '@/styles/position-dashboard.css';
 
 type DateRangeFilter = '7d' | '30d' | '90d' | 'all';
+const POSITION_DASHBOARD_UI_STORAGE_KEY = 'tiabtc-position-dashboard-ui-v1';
 
 const DATE_RANGE_MS_MAP: Record<Exclude<DateRangeFilter, 'all'>, number> = {
   '7d': 7 * 24 * 60 * 60 * 1000,
   '30d': 30 * 24 * 60 * 60 * 1000,
   '90d': 90 * 24 * 60 * 60 * 1000,
 };
+
+function loadDashboardUiState() {
+  const stored = readLocalUiState(POSITION_DASHBOARD_UI_STORAGE_KEY);
+  const tagFilter = storedString(stored.tagFilter, 'all', undefined, 32);
+  return {
+    dateRange: storedString(stored.dateRange, '90d', [
+      '7d',
+      '30d',
+      '90d',
+      'all',
+    ]) as DateRangeFilter,
+    symbolFilter: storedString(stored.symbolFilter, 'all', undefined, 40),
+    sideFilter: storedString(stored.sideFilter, 'all', [
+      'all',
+      'long',
+      'short',
+    ]) as 'all' | 'long' | 'short',
+    tagFilter:
+      tagFilter === 'all' || /^\d+$/.test(tagFilter) ? tagFilter : 'all',
+  };
+}
 
 interface Props {
   themeMode?: 'dark' | 'light';
@@ -57,10 +84,15 @@ export function PositionDashboardWorkspace({
   onNoteUpdated,
   onNavigateToPosition,
 }: Props) {
-  const [dateRange, setDateRange] = useState<DateRangeFilter>('90d');
-  const [symbolFilter, setSymbolFilter] = useState('all');
-  const [sideFilter, setSideFilter] = useState<'all' | 'long' | 'short'>('all');
-  const [tagFilter, setTagFilter] = useState('all');
+  const [initialUiState] = useState(loadDashboardUiState);
+  const [dateRange, setDateRange] = useState<DateRangeFilter>(
+    initialUiState.dateRange
+  );
+  const [symbolFilter, setSymbolFilter] = useState(initialUiState.symbolFilter);
+  const [sideFilter, setSideFilter] = useState<'all' | 'long' | 'short'>(
+    initialUiState.sideFilter
+  );
+  const [tagFilter, setTagFilter] = useState(initialUiState.tagFilter);
 
   const handleSync = async () => {
     if (onSync) {
@@ -85,6 +117,28 @@ export function PositionDashboardWorkspace({
   const symbols = useMemo(() => {
     return [...new Set(positions.map((p) => p.chartSymbol))].sort();
   }, [positions]);
+
+  useEffect(() => {
+    if (positions.length === 0) return;
+    if (symbolFilter !== 'all' && !symbols.includes(symbolFilter)) {
+      setSymbolFilter('all');
+    }
+    if (
+      tagFilter !== 'all' &&
+      !tags.some((tag) => String(tag.id) === tagFilter)
+    ) {
+      setTagFilter('all');
+    }
+  }, [positions.length, symbolFilter, symbols, tagFilter, tags]);
+
+  useEffect(() => {
+    writeLocalUiState(POSITION_DASHBOARD_UI_STORAGE_KEY, {
+      dateRange,
+      symbolFilter,
+      sideFilter,
+      tagFilter,
+    });
+  }, [dateRange, sideFilter, symbolFilter, tagFilter]);
 
   // Filtered positions based on active filters
   const filteredPositions = useMemo(() => {

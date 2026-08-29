@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import type { BitlangTag } from '@/api/bitlang-review-api';
 import { EquityCurveChart } from '@/features/position-dashboard/EquityCurveChart';
 import { SymbolLeaderboardCard } from '@/features/position-dashboard/SymbolLeaderboardCard';
@@ -8,6 +8,11 @@ import {
   summarizePositions,
 } from '@/features/position-review/position-stats';
 import type { ReviewPosition } from '@/features/position-review/position-review-types';
+import {
+  readLocalUiState,
+  storedString,
+  writeLocalUiState,
+} from '@/ui/persistence/local-ui-state';
 import {
   Activity,
   ArrowDownRight,
@@ -27,12 +32,34 @@ import type { AnnotatedBitlangTrade } from './bitlang-types';
 import '@/styles/position-dashboard.css';
 
 type DateRangeFilter = '7d' | '30d' | '90d' | 'all';
+const BITLANG_DASHBOARD_UI_STORAGE_KEY = 'tiabtc-bitlang-dashboard-ui-v1';
 
 const DATE_RANGE_MS_MAP: Record<Exclude<DateRangeFilter, 'all'>, number> = {
   '7d': 7 * 24 * 60 * 60 * 1000,
   '30d': 30 * 24 * 60 * 60 * 1000,
   '90d': 90 * 24 * 60 * 60 * 1000,
 };
+
+function loadDashboardUiState() {
+  const stored = readLocalUiState(BITLANG_DASHBOARD_UI_STORAGE_KEY);
+  const tagFilter = storedString(stored.tagFilter, 'all', undefined, 32);
+  return {
+    dateRange: storedString(stored.dateRange, 'all', [
+      '7d',
+      '30d',
+      '90d',
+      'all',
+    ]) as DateRangeFilter,
+    symbolFilter: storedString(stored.symbolFilter, 'all', undefined, 40),
+    sideFilter: storedString(stored.sideFilter, 'all', [
+      'all',
+      'long',
+      'short',
+    ]) as 'all' | 'long' | 'short',
+    tagFilter:
+      tagFilter === 'all' || /^\d+$/.test(tagFilter) ? tagFilter : 'all',
+  };
+}
 
 interface Props {
   themeMode?: 'dark' | 'light';
@@ -76,15 +103,42 @@ export function BitlangDashboardWorkspace({
   onNoteUpdated,
   onNavigateToTrade,
 }: Props) {
-  const [dateRange, setDateRange] = useState<DateRangeFilter>('all');
-  const [symbolFilter, setSymbolFilter] = useState('all');
-  const [sideFilter, setSideFilter] = useState<'all' | 'long' | 'short'>('all');
-  const [tagFilter, setTagFilter] = useState('all');
+  const [initialUiState] = useState(loadDashboardUiState);
+  const [dateRange, setDateRange] = useState<DateRangeFilter>(
+    initialUiState.dateRange
+  );
+  const [symbolFilter, setSymbolFilter] = useState(initialUiState.symbolFilter);
+  const [sideFilter, setSideFilter] = useState<'all' | 'long' | 'short'>(
+    initialUiState.sideFilter
+  );
+  const [tagFilter, setTagFilter] = useState(initialUiState.tagFilter);
 
   const symbols = useMemo(
     () => [...new Set(trades.map((trade) => bybitSymbol(trade.instrument)))].sort(),
     [trades]
   );
+
+  useEffect(() => {
+    if (trades.length === 0) return;
+    if (symbolFilter !== 'all' && !symbols.includes(symbolFilter)) {
+      setSymbolFilter('all');
+    }
+    if (
+      tagFilter !== 'all' &&
+      !tags.some((tag) => String(tag.id) === tagFilter)
+    ) {
+      setTagFilter('all');
+    }
+  }, [symbolFilter, symbols, tagFilter, tags, trades.length]);
+
+  useEffect(() => {
+    writeLocalUiState(BITLANG_DASHBOARD_UI_STORAGE_KEY, {
+      dateRange,
+      symbolFilter,
+      sideFilter,
+      tagFilter,
+    });
+  }, [dateRange, sideFilter, symbolFilter, tagFilter]);
 
   const filteredTrades = useMemo(() => {
     const cutoffMs =

@@ -104,6 +104,7 @@ export function AppShell() {
     const url = new URL(window.location.href);
     if (tab === 'learning') url.searchParams.delete('tab');
     else url.searchParams.set('tab', tab);
+    url.searchParams.delete('view');
     window.history.replaceState(null, '', url);
   }, []);
 

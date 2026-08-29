@@ -33,6 +33,12 @@ import { usePaperTrading } from './usePaperTrading';
 import { ChartReadoutBar } from './ChartReadoutBar';
 import { PerpetualSymbolSearchDialog } from './PerpetualSymbolSearchDialog';
 import {
+  readLocalUiState,
+  storedBoolean,
+  storedString,
+  writeLocalUiState,
+} from '@/ui/persistence/local-ui-state';
+import {
   AlertCircle,
   ChevronDown,
   RefreshCw,
@@ -44,7 +50,26 @@ import '@/styles/review-workspace.css';
 
 const TIMEFRAMES: ReviewTimeframe[] = ['1', '5', '15', '60', '240', 'D', 'W'];
 const REVIEW_LOCATION_STORAGE_KEY = 'tiabtc-review-location-v1';
+const REVIEW_UI_STORAGE_KEY = 'tiabtc-review-ui-v1';
 const MIN_REVIEW_TIMESTAMP_MS = 1_500_000_000_000;
+
+type ReviewUiPreferences = {
+  symbol: string;
+  isLogScale: boolean;
+  showUsSessionBands: boolean;
+  showWeekendBands: boolean;
+};
+
+function loadReviewUiPreferences(): ReviewUiPreferences {
+  const stored = readLocalUiState(REVIEW_UI_STORAGE_KEY);
+  const symbol = storedString(stored.symbol, 'BTCUSDT', undefined, 32).toUpperCase();
+  return {
+    symbol: /^[A-Z0-9]{1,24}USDT$/.test(symbol) ? symbol : 'BTCUSDT',
+    isLogScale: storedBoolean(stored.isLogScale, false),
+    showUsSessionBands: storedBoolean(stored.showUsSessionBands, false),
+    showWeekendBands: storedBoolean(stored.showWeekendBands, false),
+  };
+}
 
 type StoredReviewLocation = {
   timeframe: ReviewTimeframe;
@@ -98,19 +123,26 @@ export function ChartWorkspace({
   const [initialLocation] = useState<StoredReviewLocation | null>(
     loadStoredReviewLocation
   );
+  const [initialUiPreferences] = useState(loadReviewUiPreferences);
   const restoredTimestampMs = initialVideoContext
     ? null
     : initialLocation?.timestampMs ?? null;
   const [symbols, setSymbols] = useState<string[]>(['BTCUSDT']);
   const [activeSymbol, setActiveSymbol] = useState<string>(
-    initialVideoContext?.symbol || 'BTCUSDT'
+    initialVideoContext?.symbol || initialUiPreferences.symbol
   );
   const [activeTimeframe, setActiveTimeframe] = useState<ReviewTimeframe>(
     initialLocation?.timeframe || '60'
   );
-  const [isLogScale, setIsLogScale] = useState<boolean>(false);
-  const [showUsSessionBands, setShowUsSessionBands] = useState(false);
-  const [showWeekendBands, setShowWeekendBands] = useState(false);
+  const [isLogScale, setIsLogScale] = useState<boolean>(
+    initialUiPreferences.isLogScale
+  );
+  const [showUsSessionBands, setShowUsSessionBands] = useState(
+    initialUiPreferences.showUsSessionBands
+  );
+  const [showWeekendBands, setShowWeekendBands] = useState(
+    initialUiPreferences.showWeekendBands
+  );
   const [chartFocusTimeMs, setChartFocusTimeMs] = useState<number | null>(
     restoredTimestampMs
   );
@@ -156,6 +188,22 @@ export function ChartWorkspace({
       flushStoredReviewLocation();
     };
   }, [flushStoredReviewLocation]);
+
+  useEffect(() => {
+    writeLocalUiState(REVIEW_UI_STORAGE_KEY, {
+      symbol: initialVideoContext ? initialUiPreferences.symbol : activeSymbol,
+      isLogScale,
+      showUsSessionBands,
+      showWeekendBands,
+    });
+  }, [
+    activeSymbol,
+    initialUiPreferences.symbol,
+    initialVideoContext,
+    isLogScale,
+    showUsSessionBands,
+    showWeekendBands,
+  ]);
 
   const [hoveredCandle, setHoveredCandle] = useState<Candlestick | null>(null);
 

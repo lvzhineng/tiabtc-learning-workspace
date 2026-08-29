@@ -4,6 +4,12 @@ import { saveBitlangNote } from '@/api/bitlang-review-api';
 import { formatChartTime } from '@/chart/chart-time';
 import { toast } from '@/ui/feedback/toast';
 import {
+  readLocalUiState,
+  storedBoolean,
+  storedInteger,
+  writeLocalUiState,
+} from '@/ui/persistence/local-ui-state';
+import {
   BookOpen,
   Check,
   ChevronLeft,
@@ -15,6 +21,16 @@ import {
 } from 'lucide-react';
 import { bybitSymbol } from './bitlang-format';
 import type { AnnotatedBitlangTrade } from './bitlang-types';
+
+const BITLANG_JOURNAL_UI_STORAGE_KEY = 'tiabtc-bitlang-journal-ui-v1';
+
+function loadJournalUiState() {
+  const stored = readLocalUiState(BITLANG_JOURNAL_UI_STORAGE_KEY);
+  return {
+    onlyWithNotes: storedBoolean(stored.onlyWithNotes, false),
+    page: storedInteger(stored.page, 0, 0),
+  };
+}
 
 interface Props {
   trades: AnnotatedBitlangTrade[];
@@ -29,11 +45,14 @@ export function BitlangJournalStream({
   onNavigateToTrade,
   onNoteUpdated,
 }: Props) {
-  const [onlyWithNotes, setOnlyWithNotes] = useState(false);
+  const [initialUiState] = useState(loadJournalUiState);
+  const [onlyWithNotes, setOnlyWithNotes] = useState(
+    initialUiState.onlyWithNotes
+  );
   const [editingId, setEditingId] = useState<string | null>(null);
   const [draftNote, setDraftNote] = useState('');
   const [saving, setSaving] = useState(false);
-  const [page, setPage] = useState(0);
+  const [page, setPage] = useState(initialUiState.page);
   const PAGE_SIZE = 20;
 
   const filtered = trades.filter((trade) => {
@@ -42,8 +61,11 @@ export function BitlangJournalStream({
   });
 
   useEffect(() => {
-    setPage(0);
-  }, [onlyWithNotes]);
+    writeLocalUiState(BITLANG_JOURNAL_UI_STORAGE_KEY, {
+      onlyWithNotes,
+      page,
+    });
+  }, [onlyWithNotes, page]);
 
   const pageCount = Math.max(1, Math.ceil(filtered.length / PAGE_SIZE));
   const safePage = Math.min(page, pageCount - 1);
@@ -51,6 +73,10 @@ export function BitlangJournalStream({
     () => filtered.slice(safePage * PAGE_SIZE, safePage * PAGE_SIZE + PAGE_SIZE),
     [filtered, safePage]
   );
+
+  useEffect(() => {
+    if (trades.length > 0 && page !== safePage) setPage(safePage);
+  }, [page, safePage, trades.length]);
 
   const startEdit = (trade: AnnotatedBitlangTrade) => {
     setEditingId(trade.id);
@@ -83,7 +109,10 @@ export function BitlangJournalStream({
         <button
           type="button"
           className={`posdash-segmented-pill ${onlyWithNotes ? 'active' : ''}`}
-          onClick={() => setOnlyWithNotes((value) => !value)}
+          onClick={() => {
+            setOnlyWithNotes((value) => !value);
+            setPage(0);
+          }}
         >
           <BookOpen size={12} />
           {onlyWithNotes ? '仅看带笔记 (已筛选)' : '全部交易记录'}

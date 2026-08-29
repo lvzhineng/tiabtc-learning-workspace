@@ -36,6 +36,13 @@ import {
 } from '@/features/review-workspace/useReviewListKeyboard';
 import { PositionDashboardWorkspace } from '@/features/position-dashboard/PositionDashboardWorkspace';
 import { toast } from '@/ui/feedback/toast';
+import {
+  readLocalUiState,
+  storedBoolean,
+  storedInteger,
+  storedString,
+  writeLocalUiState,
+} from '@/ui/persistence/local-ui-state';
 import type { PositionTag, ReviewPosition } from './position-review-types';
 import { positionPnl } from './position-review-types';
 import { summarizePositions } from './position-stats';
@@ -53,6 +60,7 @@ import '@/styles/bitlang.css';
 import '@/styles/position-review.css';
 
 const PAGE_SIZE = 80;
+const POSITION_REVIEW_UI_STORAGE_KEY = 'tiabtc-position-review-ui-v1';
 const TIMEFRAMES: ReviewTimeframe[] = ['1', '5', '15', '60', '240', 'D', 'W'];
 const SYNC_STALE_MS = 24 * 60 * 60 * 1000;
 
@@ -70,6 +78,81 @@ const DATE_RANGE_MS_MAP: Record<Exclude<DateRangeFilter, 'all'>, number> = {
   '90d': 90 * 24 * 60 * 60 * 1000,
 };
 
+type PositionReviewUiState = {
+  search: string;
+  dateRange: DateRangeFilter;
+  symbolFilter: string;
+  side: SideFilter;
+  status: StatusFilter;
+  result: ResultFilter;
+  tagFilter: string;
+  noNote: boolean;
+  noTag: boolean;
+  sortField: SortField;
+  descending: boolean;
+  page: number;
+  selectedId: string | null;
+  timeframe: ReviewTimeframe;
+  autoTimeframe: boolean;
+  showMoreFilters: boolean;
+  showUsSessionBands: boolean;
+  showWeekendBands: boolean;
+  viewMode: 'chart' | 'dashboard';
+};
+
+function loadPositionReviewUiState(): PositionReviewUiState {
+  const stored = readLocalUiState(POSITION_REVIEW_UI_STORAGE_KEY);
+  const selectedId = storedString(stored.selectedId, '', undefined, 128);
+  const tagFilter = storedString(stored.tagFilter, 'all', undefined, 32);
+  return {
+    search: storedString(stored.search, ''),
+    dateRange: storedString(stored.dateRange, 'all', [
+      'all',
+      '1d',
+      '3d',
+      '7d',
+      '30d',
+      '90d',
+    ]) as DateRangeFilter,
+    symbolFilter: storedString(stored.symbolFilter, 'all', undefined, 40),
+    side: storedString(stored.side, 'all', [
+      'all',
+      'long',
+      'short',
+    ]) as SideFilter,
+    status: storedString(stored.status, 'all', [
+      'all',
+      'open',
+      'closed',
+    ]) as StatusFilter,
+    result: storedString(stored.result, 'all', [
+      'all',
+      'profit',
+      'loss',
+    ]) as ResultFilter,
+    tagFilter:
+      tagFilter === 'all' || /^\d+$/.test(tagFilter) ? tagFilter : 'all',
+    noNote: storedBoolean(stored.noNote, false),
+    noTag: storedBoolean(stored.noTag, false),
+    sortField: storedString(stored.sortField, 'entryTimeMs', [
+      'entryTimeMs',
+      'netPnl',
+    ]) as SortField,
+    descending: storedBoolean(stored.descending, true),
+    page: storedInteger(stored.page, 0, 0),
+    selectedId: selectedId || null,
+    timeframe: storedString(stored.timeframe, '15', TIMEFRAMES) as ReviewTimeframe,
+    autoTimeframe: storedBoolean(stored.autoTimeframe, true),
+    showMoreFilters: storedBoolean(stored.showMoreFilters, false),
+    showUsSessionBands: storedBoolean(stored.showUsSessionBands, false),
+    showWeekendBands: storedBoolean(stored.showWeekendBands, false),
+    viewMode: storedString(stored.viewMode, 'chart', [
+      'chart',
+      'dashboard',
+    ]) as PositionReviewUiState['viewMode'],
+  };
+}
+
 interface PositionReviewWorkspaceProps {
   themeMode?: 'dark' | 'light';
 }
@@ -81,6 +164,7 @@ function timeframeLabel(timeframe: ReviewTimeframe): string {
 export function PositionReviewWorkspace({
   themeMode = 'dark',
 }: PositionReviewWorkspaceProps) {
+  const [initialUiState] = useState(loadPositionReviewUiState);
   const [configured, setConfigured] = useState(false);
   const [syncedAt, setSyncedAt] = useState<string | null>(null);
   const [balanceTotal, setBalanceTotal] = useState<number | null>(null);
@@ -96,34 +180,61 @@ export function PositionReviewWorkspace({
   const [savingCredentials, setSavingCredentials] = useState(false);
   const [auditingCache, setAuditingCache] = useState(false);
 
-  const [search, setSearch] = useState('');
+  const [search, setSearch] = useState(initialUiState.search);
   const deferredSearch = useDeferredValue(search);
-  const [dateRange, setDateRange] = useState<DateRangeFilter>('all');
-  const [symbolFilter, setSymbolFilter] = useState('all');
-  const [side, setSide] = useState<SideFilter>('all');
-  const [status, setStatus] = useState<StatusFilter>('all');
-  const [result, setResult] = useState<ResultFilter>('all');
-  const [tagFilter, setTagFilter] = useState('all');
-  const [noNote, setNoNote] = useState(false);
-  const [noTag, setNoTag] = useState(false);
-  const [sortField, setSortField] = useState<SortField>('entryTimeMs');
-  const [descending, setDescending] = useState(true);
-  const [page, setPage] = useState(0);
-  const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [dateRange, setDateRange] = useState<DateRangeFilter>(
+    initialUiState.dateRange
+  );
+  const [symbolFilter, setSymbolFilter] = useState(initialUiState.symbolFilter);
+  const [side, setSide] = useState<SideFilter>(initialUiState.side);
+  const [status, setStatus] = useState<StatusFilter>(initialUiState.status);
+  const [result, setResult] = useState<ResultFilter>(initialUiState.result);
+  const [tagFilter, setTagFilter] = useState(initialUiState.tagFilter);
+  const [noNote, setNoNote] = useState(initialUiState.noNote);
+  const [noTag, setNoTag] = useState(initialUiState.noTag);
+  const [sortField, setSortField] = useState<SortField>(initialUiState.sortField);
+  const [descending, setDescending] = useState(initialUiState.descending);
+  const [page, setPage] = useState(initialUiState.page);
+  const [selectedId, setSelectedId] = useState<string | null>(
+    initialUiState.selectedId
+  );
   const [focusRevision, setFocusRevision] = useState(0);
-  const [timeframe, setTimeframe] = useState<ReviewTimeframe>('15');
-  const [autoTimeframe, setAutoTimeframe] = useState(true);
-  const [showMoreFilters, setShowMoreFilters] = useState(false);
-  const [showUsSessionBands, setShowUsSessionBands] = useState(false);
-  const [showWeekendBands, setShowWeekendBands] = useState(false);
+  const [timeframe, setTimeframe] = useState<ReviewTimeframe>(
+    initialUiState.timeframe
+  );
+  const [autoTimeframe, setAutoTimeframe] = useState(initialUiState.autoTimeframe);
+  const [showMoreFilters, setShowMoreFilters] = useState(
+    initialUiState.showMoreFilters
+  );
+  const [showUsSessionBands, setShowUsSessionBands] = useState(
+    initialUiState.showUsSessionBands
+  );
+  const [showWeekendBands, setShowWeekendBands] = useState(
+    initialUiState.showWeekendBands
+  );
   const [showDetails, setShowDetails] = useState(false);
   const [viewMode, setViewMode] = useState<'chart' | 'dashboard'>(() => {
-    return new URLSearchParams(window.location.search).get('view') === 'dashboard'
-      ? 'dashboard'
-      : 'chart';
+    const requestedView = new URLSearchParams(window.location.search).get('view');
+    return requestedView === 'dashboard' || requestedView === 'chart'
+      ? requestedView
+      : initialUiState.viewMode;
   });
   const pendingRevealIdRef = useRef<string | null>(null);
   const listRef = useRef<HTMLDivElement | null>(null);
+  const filterSignature = JSON.stringify({
+    search,
+    dateRange,
+    symbolFilter,
+    side,
+    status,
+    result,
+    tagFilter,
+    noNote,
+    noTag,
+    sortField,
+    descending,
+  });
+  const previousFilterSignatureRef = useRef(filterSignature);
 
   const applyState = useCallback(
     (state: {
@@ -168,6 +279,19 @@ export function PositionReviewWorkspace({
   const symbols = useMemo(() => {
     return [...new Set(positions.map((item) => item.chartSymbol))].sort();
   }, [positions]);
+
+  useEffect(() => {
+    if (loading) return;
+    if (symbolFilter !== 'all' && !symbols.includes(symbolFilter)) {
+      setSymbolFilter('all');
+    }
+    if (
+      tagFilter !== 'all' &&
+      !tags.some((tag) => String(tag.id) === tagFilter)
+    ) {
+      setTagFilter('all');
+    }
+  }, [loading, symbolFilter, symbols, tagFilter, tags]);
 
   const filtered = useMemo(() => {
     const query = deferredSearch.trim().toLowerCase();
@@ -225,20 +349,10 @@ export function PositionReviewWorkspace({
   ]);
 
   useEffect(() => {
+    if (previousFilterSignatureRef.current === filterSignature) return;
+    previousFilterSignatureRef.current = filterSignature;
     setPage(0);
-  }, [
-    dateRange,
-    deferredSearch,
-    descending,
-    noNote,
-    noTag,
-    result,
-    side,
-    sortField,
-    status,
-    symbolFilter,
-    tagFilter,
-  ]);
+  }, [filterSignature]);
 
   const pageCount = Math.max(1, Math.ceil(filtered.length / PAGE_SIZE));
   const safePage = Math.min(page, pageCount - 1);
@@ -253,8 +367,52 @@ export function PositionReviewWorkspace({
   const selectedPnl = selected ? positionPnl(selected) : 0;
 
   useEffect(() => {
-    if (page !== safePage) setPage(safePage);
-  }, [page, safePage]);
+    if (!loading && page !== safePage) setPage(safePage);
+  }, [loading, page, safePage]);
+
+  useEffect(() => {
+    writeLocalUiState(POSITION_REVIEW_UI_STORAGE_KEY, {
+      search,
+      dateRange,
+      symbolFilter,
+      side,
+      status,
+      result,
+      tagFilter,
+      noNote,
+      noTag,
+      sortField,
+      descending,
+      page,
+      selectedId,
+      timeframe,
+      autoTimeframe,
+      showMoreFilters,
+      showUsSessionBands,
+      showWeekendBands,
+      viewMode,
+    });
+  }, [
+    autoTimeframe,
+    dateRange,
+    descending,
+    noNote,
+    noTag,
+    page,
+    result,
+    search,
+    selectedId,
+    showMoreFilters,
+    showUsSessionBands,
+    showWeekendBands,
+    side,
+    sortField,
+    status,
+    symbolFilter,
+    tagFilter,
+    timeframe,
+    viewMode,
+  ]);
 
   useEffect(() => {
     if (pendingRevealIdRef.current) return;

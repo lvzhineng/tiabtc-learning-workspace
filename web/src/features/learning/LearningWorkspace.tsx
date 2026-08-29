@@ -1,4 +1,4 @@
-import { useEffect, useState, useMemo } from 'react';
+import { useEffect, useState, useMemo, useRef } from 'react';
 import type { VideoItem, FilterParams } from './learning-types';
 import { useLearningState } from './useLearningState';
 import { computeLearningStats, filterAndSortVideos } from './learning-filter';
@@ -6,6 +6,12 @@ import { LearningStatsHeader } from './LearningStatsHeader';
 import { LearningFilterBar } from './LearningFilterBar';
 import { VideoTable } from './VideoTable';
 import { RefreshCw } from 'lucide-react';
+import {
+  readLocalUiState,
+  storedInteger,
+  storedString,
+  writeLocalUiState,
+} from '@/ui/persistence/local-ui-state';
 import '@/styles/learning.css';
 
 interface Props {
@@ -13,7 +19,31 @@ interface Props {
 }
 
 const PAGE_SIZE = 30;
+const LEARNING_UI_STORAGE_KEY = 'tiabtc-learning-ui-v1';
 let videosRequest: Promise<VideoItem[]> | null = null;
+
+function loadLearningUiState(): { filters: FilterParams; page: number } {
+  const stored = readLocalUiState(LEARNING_UI_STORAGE_KEY);
+  const month = storedString(stored.monthFilter, 'all', undefined, 2);
+  return {
+    filters: {
+      searchQuery: storedString(stored.searchQuery, ''),
+      yearFilter: storedString(stored.yearFilter, 'all', undefined, 4),
+      monthFilter:
+        month === 'all' || /^(?:0?[1-9]|1[0-2])$/.test(month) ? month : 'all',
+      quickFilter: storedString(
+        stored.quickFilter,
+        'all',
+        ['all', 'unfinished', 'learned', 'bookmarked', 'noted']
+      ) as FilterParams['quickFilter'],
+      sortOrder: storedString(stored.sortOrder, 'asc', [
+        'asc',
+        'desc',
+      ]) as FilterParams['sortOrder'],
+    },
+    page: storedInteger(stored.page, 1, 1),
+  };
+}
 
 function loadVideos(): Promise<VideoItem[]> {
   if (!videosRequest) {
@@ -35,6 +65,7 @@ export function LearningWorkspace({
 }: Props) {
   const [videos, setVideos] = useState<VideoItem[]>([]);
   const [loadingVideos, setLoadingVideos] = useState<boolean>(true);
+  const [initialUiState] = useState(loadLearningUiState);
 
   const {
     stateMap,
@@ -44,15 +75,10 @@ export function LearningWorkspace({
     setNote,
   } = useLearningState();
 
-  const [filters, setFilters] = useState<FilterParams>({
-    searchQuery: '',
-    yearFilter: 'all',
-    monthFilter: 'all',
-    quickFilter: 'all',
-    sortOrder: 'asc',
-  });
-
-  const [currentPage, setCurrentPage] = useState<number>(1);
+  const [filters, setFilters] = useState<FilterParams>(initialUiState.filters);
+  const [currentPage, setCurrentPage] = useState<number>(initialUiState.page);
+  const filterSignature = JSON.stringify(filters);
+  const previousFilterSignatureRef = useRef(filterSignature);
 
   useEffect(() => {
     let active = true;
@@ -92,11 +118,26 @@ export function LearningWorkspace({
   }, [videos, stateMap, filters]);
 
   useEffect(() => {
+    if (previousFilterSignatureRef.current === filterSignature) return;
+    previousFilterSignatureRef.current = filterSignature;
     setCurrentPage(1);
-  }, [filters]);
+  }, [filterSignature]);
+
+  useEffect(() => {
+    writeLocalUiState(LEARNING_UI_STORAGE_KEY, {
+      ...filters,
+      page: currentPage,
+    });
+  }, [currentPage, filters]);
 
   const totalPages = Math.max(1, Math.ceil(filteredVideos.length / PAGE_SIZE));
   const currentPageClamped = Math.min(currentPage, totalPages);
+
+  useEffect(() => {
+    if (!loadingVideos && currentPage !== currentPageClamped) {
+      setCurrentPage(currentPageClamped);
+    }
+  }, [currentPage, currentPageClamped, loadingVideos]);
 
   const paginatedVideos = useMemo(() => {
     const start = (currentPageClamped - 1) * PAGE_SIZE;

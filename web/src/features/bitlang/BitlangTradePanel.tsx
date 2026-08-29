@@ -10,11 +10,26 @@ import {
 import { confirmDialog } from '@/ui/feedback/confirm';
 import { toast } from '@/ui/feedback/toast';
 import {
+  readLocalUiState,
+  storedString,
+  writeLocalUiState,
+} from '@/ui/persistence/local-ui-state';
+import {
   formatHoldingMinutes,
   formatNumber,
   formatPercent,
 } from './bitlang-format';
 import type { AnnotatedBitlangTrade } from './bitlang-types';
+
+const BITLANG_DETAIL_TAB_STORAGE_KEY = 'tiabtc-bitlang-detail-tab-v1';
+
+function loadDetailTab(): 'overview' | 'source' | 'notes' {
+  return storedString(
+    readLocalUiState(BITLANG_DETAIL_TAB_STORAGE_KEY).activeTab,
+    'overview',
+    ['overview', 'source', 'notes']
+  ) as 'overview' | 'source' | 'notes';
+}
 
 export function BitlangTradePanel({
   trade,
@@ -34,7 +49,7 @@ export function BitlangTradePanel({
   const [saving, setSaving] = useState(false);
   const [tagBusy, setTagBusy] = useState(false);
   const [activeTab, setActiveTab] = useState<'overview' | 'source' | 'notes'>(
-    'overview'
+    loadDetailTab
   );
   const tradeRef = useRef(trade);
   const noteSaveQueueRef = useRef<Promise<void>>(Promise.resolve());
@@ -46,6 +61,10 @@ export function BitlangTradePanel({
   useEffect(() => {
     setNote(trade.note);
   }, [trade.note, trade.id]);
+
+  useEffect(() => {
+    writeLocalUiState(BITLANG_DETAIL_TAB_STORAGE_KEY, { activeTab });
+  }, [activeTab]);
 
   const persistNote = (value: string): Promise<void> => {
     const target = tradeRef.current;

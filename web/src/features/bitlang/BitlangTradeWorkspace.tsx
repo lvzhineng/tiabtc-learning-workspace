@@ -33,6 +33,13 @@ import { BitlangDashboardWorkspace } from './BitlangDashboardWorkspace';
 import { BitlangTradeChart } from './BitlangTradeChart';
 import { BitlangTradePanel } from './BitlangTradePanel';
 import {
+  readLocalUiState,
+  storedBoolean,
+  storedInteger,
+  storedString,
+  writeLocalUiState,
+} from '@/ui/persistence/local-ui-state';
+import {
   bybitSymbol,
   formatHoldingMinutes,
   formatNumber,
@@ -49,6 +56,7 @@ import '@/styles/bitlang.css';
 import '@/styles/position-review.css';
 
 const PAGE_SIZE = 100;
+const BITLANG_UI_STORAGE_KEY = 'tiabtc-bitlang-ui-v1';
 const TIMEFRAMES: ReviewTimeframe[] = ['1', '5', '15', '60', '240', 'D', 'W'];
 type DateRangeFilter = 'all' | '1d' | '3d' | '7d' | '30d' | '90d';
 const DATE_RANGE_MS_MAP: Record<Exclude<DateRangeFilter, 'all'>, number> = {
@@ -78,6 +86,89 @@ function loadBitlangSnapshot(): Promise<BitlangTradeSnapshot> {
 type ResultFilter = 'all' | 'profit' | 'loss';
 type SortField = 'entryTime' | 'profit' | 'returnRate' | 'holdingMinutes';
 
+type BitlangUiState = {
+  search: string;
+  instrument: string;
+  direction: 'all' | BitlangDirection;
+  result: ResultFilter;
+  dateRange: DateRangeFilter;
+  minimumHoldingMinutes: string;
+  tagFilter: string;
+  noNote: boolean;
+  noTag: boolean;
+  sortField: SortField;
+  descending: boolean;
+  timeframe: ReviewTimeframe;
+  autoTimeframe: boolean;
+  showMoreFilters: boolean;
+  showUsSessionBands: boolean;
+  showWeekendBands: boolean;
+  page: number;
+  selectedId: string;
+  viewMode: 'chart' | 'dashboard';
+};
+
+function loadBitlangUiState(): BitlangUiState {
+  const stored = readLocalUiState(BITLANG_UI_STORAGE_KEY);
+  const minimumHoldingMinutes = storedString(
+    stored.minimumHoldingMinutes,
+    '',
+    undefined,
+    16
+  );
+  const tagFilter = storedString(stored.tagFilter, 'all', undefined, 32);
+  return {
+    search: storedString(stored.search, ''),
+    instrument: storedString(stored.instrument, 'all', undefined, 40),
+    direction: storedString(stored.direction, 'all', [
+      'all',
+      '多',
+      '空',
+    ]) as BitlangUiState['direction'],
+    result: storedString(stored.result, 'all', [
+      'all',
+      'profit',
+      'loss',
+    ]) as ResultFilter,
+    dateRange: storedString(stored.dateRange, 'all', [
+      'all',
+      '1d',
+      '3d',
+      '7d',
+      '30d',
+      '90d',
+    ]) as DateRangeFilter,
+    minimumHoldingMinutes:
+      minimumHoldingMinutes === '' ||
+      (Number.isFinite(Number(minimumHoldingMinutes)) &&
+        Number(minimumHoldingMinutes) >= 0)
+        ? minimumHoldingMinutes
+        : '',
+    tagFilter:
+      tagFilter === 'all' || /^\d+$/.test(tagFilter) ? tagFilter : 'all',
+    noNote: storedBoolean(stored.noNote, false),
+    noTag: storedBoolean(stored.noTag, false),
+    sortField: storedString(stored.sortField, 'entryTime', [
+      'entryTime',
+      'profit',
+      'returnRate',
+      'holdingMinutes',
+    ]) as SortField,
+    descending: storedBoolean(stored.descending, true),
+    timeframe: storedString(stored.timeframe, '60', TIMEFRAMES) as ReviewTimeframe,
+    autoTimeframe: storedBoolean(stored.autoTimeframe, true),
+    showMoreFilters: storedBoolean(stored.showMoreFilters, false),
+    showUsSessionBands: storedBoolean(stored.showUsSessionBands, false),
+    showWeekendBands: storedBoolean(stored.showWeekendBands, false),
+    page: storedInteger(stored.page, 1, 1),
+    selectedId: storedString(stored.selectedId, '', undefined, 128),
+    viewMode: storedString(stored.viewMode, 'chart', [
+      'chart',
+      'dashboard',
+    ]) as BitlangUiState['viewMode'],
+  };
+}
+
 interface BitlangTradeWorkspaceProps {
   themeMode?: 'dark' | 'light';
 }
@@ -101,49 +192,85 @@ function annotateTrades(
 export function BitlangTradeWorkspace({
   themeMode = 'dark',
 }: BitlangTradeWorkspaceProps) {
+  const [initialUiState] = useState(loadBitlangUiState);
   const [snapshot, setSnapshot] = useState<BitlangTradeSnapshot | null>(null);
+  const [dataReady, setDataReady] = useState(false);
   const [annotatedTrades, setAnnotatedTrades] = useState<AnnotatedBitlangTrade[]>(
     []
   );
   const [tags, setTags] = useState<BitlangTag[]>([]);
-  const [selectedId, setSelectedId] = useState('');
+  const [selectedId, setSelectedId] = useState(initialUiState.selectedId);
   const [focusRevision, setFocusRevision] = useState(0);
-  const [search, setSearch] = useState('');
-  const [instrument, setInstrument] = useState('all');
-  const [direction, setDirection] = useState<'all' | BitlangDirection>('all');
-  const [result, setResult] = useState<ResultFilter>('all');
-  const [dateRange, setDateRange] = useState<DateRangeFilter>('all');
-  const [minimumHoldingMinutes, setMinimumHoldingMinutes] = useState('');
-  const [tagFilter, setTagFilter] = useState('all');
-  const [noNote, setNoNote] = useState(false);
-  const [noTag, setNoTag] = useState(false);
-  const [sortField, setSortField] = useState<SortField>('entryTime');
-  const [descending, setDescending] = useState(true);
-  const [timeframe, setTimeframe] = useState<ReviewTimeframe>('60');
-  const [autoTimeframe, setAutoTimeframe] = useState(true);
-  const [showMoreFilters, setShowMoreFilters] = useState(false);
-  const [showUsSessionBands, setShowUsSessionBands] = useState(false);
-  const [showWeekendBands, setShowWeekendBands] = useState(false);
+  const [search, setSearch] = useState(initialUiState.search);
+  const [instrument, setInstrument] = useState(initialUiState.instrument);
+  const [direction, setDirection] = useState<'all' | BitlangDirection>(
+    initialUiState.direction
+  );
+  const [result, setResult] = useState<ResultFilter>(initialUiState.result);
+  const [dateRange, setDateRange] = useState<DateRangeFilter>(
+    initialUiState.dateRange
+  );
+  const [minimumHoldingMinutes, setMinimumHoldingMinutes] = useState(
+    initialUiState.minimumHoldingMinutes
+  );
+  const [tagFilter, setTagFilter] = useState(initialUiState.tagFilter);
+  const [noNote, setNoNote] = useState(initialUiState.noNote);
+  const [noTag, setNoTag] = useState(initialUiState.noTag);
+  const [sortField, setSortField] = useState<SortField>(initialUiState.sortField);
+  const [descending, setDescending] = useState(initialUiState.descending);
+  const [timeframe, setTimeframe] = useState<ReviewTimeframe>(
+    initialUiState.timeframe
+  );
+  const [autoTimeframe, setAutoTimeframe] = useState(initialUiState.autoTimeframe);
+  const [showMoreFilters, setShowMoreFilters] = useState(
+    initialUiState.showMoreFilters
+  );
+  const [showUsSessionBands, setShowUsSessionBands] = useState(
+    initialUiState.showUsSessionBands
+  );
+  const [showWeekendBands, setShowWeekendBands] = useState(
+    initialUiState.showWeekendBands
+  );
   const [showDetails, setShowDetails] = useState(false);
-  const [page, setPage] = useState(1);
+  const [page, setPage] = useState(initialUiState.page);
   const [error, setError] = useState<string | null>(null);
   const [loadRevision, setLoadRevision] = useState(0);
   const [viewMode, setViewMode] = useState<'chart' | 'dashboard'>(() => {
-    return new URLSearchParams(window.location.search).get('view') === 'dashboard'
-      ? 'dashboard'
-      : 'chart';
+    const requestedView = new URLSearchParams(window.location.search).get('view');
+    return requestedView === 'dashboard' || requestedView === 'chart'
+      ? requestedView
+      : initialUiState.viewMode;
   });
   const deferredSearch = useDeferredValue(search);
   const pendingRevealIdRef = useRef<string | null>(null);
   const listRef = useRef<HTMLDivElement | null>(null);
+  const filterSignature = JSON.stringify({
+    search,
+    instrument,
+    direction,
+    result,
+    dateRange,
+    minimumHoldingMinutes,
+    sortField,
+    descending,
+    tagFilter,
+    noNote,
+    noTag,
+  });
+  const previousFilterSignatureRef = useRef(filterSignature);
 
   useEffect(() => {
     let active = true;
+    setDataReady(false);
     void loadBitlangSnapshot()
       .then(async (data) => {
         if (!active) return;
         setSnapshot(data);
-        setSelectedId(data.trades[0]?.id || '');
+        setSelectedId((current) =>
+          current && data.trades.some((trade) => trade.id === current)
+            ? current
+            : data.trades[0]?.id || ''
+        );
         setError(null);
         try {
           const annotations = await fetchBitlangReviewState();
@@ -164,6 +291,9 @@ export function BitlangTradeWorkspace({
       .catch((cause) => {
         if (!active) return;
         setError(cause instanceof Error ? cause.message : '交割单读取失败');
+      })
+      .finally(() => {
+        if (active) setDataReady(true);
       });
     return () => {
       active = false;
@@ -177,6 +307,19 @@ export function BitlangTradeWorkspace({
       ).sort(),
     [annotatedTrades]
   );
+
+  useEffect(() => {
+    if (!dataReady || !snapshot) return;
+    if (instrument !== 'all' && !instruments.includes(instrument)) {
+      setInstrument('all');
+    }
+    if (
+      tagFilter !== 'all' &&
+      !tags.some((tag) => String(tag.id) === tagFilter)
+    ) {
+      setTagFilter('all');
+    }
+  }, [dataReady, instrument, instruments, snapshot, tagFilter, tags]);
 
   const snapshotEndMs = useMemo(
     () =>
@@ -248,20 +391,10 @@ export function BitlangTradeWorkspace({
   ]);
 
   useEffect(() => {
+    if (previousFilterSignatureRef.current === filterSignature) return;
+    previousFilterSignatureRef.current = filterSignature;
     setPage(1);
-  }, [
-    search,
-    instrument,
-    direction,
-    result,
-    dateRange,
-    minimumHoldingMinutes,
-    sortField,
-    descending,
-    tagFilter,
-    noNote,
-    noTag,
-  ]);
+  }, [filterSignature]);
 
   const stats = useMemo(() => {
     let totalWin = 0;
@@ -300,6 +433,54 @@ export function BitlangTradeWorkspace({
     pageTrades.find((trade) => trade.id === selectedId) ||
     pageTrades[0] ||
     null;
+
+  useEffect(() => {
+    if (dataReady && page !== safePage) setPage(safePage);
+  }, [dataReady, page, safePage]);
+
+  useEffect(() => {
+    writeLocalUiState(BITLANG_UI_STORAGE_KEY, {
+      search,
+      instrument,
+      direction,
+      result,
+      dateRange,
+      minimumHoldingMinutes,
+      tagFilter,
+      noNote,
+      noTag,
+      sortField,
+      descending,
+      timeframe,
+      autoTimeframe,
+      showMoreFilters,
+      showUsSessionBands,
+      showWeekendBands,
+      page,
+      selectedId,
+      viewMode,
+    });
+  }, [
+    autoTimeframe,
+    dateRange,
+    descending,
+    direction,
+    instrument,
+    minimumHoldingMinutes,
+    noNote,
+    noTag,
+    page,
+    result,
+    search,
+    selectedId,
+    showMoreFilters,
+    showUsSessionBands,
+    showWeekendBands,
+    sortField,
+    tagFilter,
+    timeframe,
+    viewMode,
+  ]);
 
   useEffect(() => {
     if (pendingRevealIdRef.current) return;

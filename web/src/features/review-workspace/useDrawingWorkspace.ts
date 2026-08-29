@@ -39,6 +39,11 @@ import type {
 } from '@/features/drawings/drawing-types';
 import { confirmDialog } from '@/ui/feedback/confirm';
 import { toast } from '@/ui/feedback/toast';
+import {
+  readLocalUiState,
+  storedBoolean,
+  writeLocalUiState,
+} from '@/ui/persistence/local-ui-state';
 
 type DrawingWorkspace = {
   ready: boolean;
@@ -67,6 +72,7 @@ type DrawingWorkspace = {
 };
 
 const DRAWING_SCOPE = '__global__';
+const DRAWING_UI_STORAGE_KEY = 'tiabtc-drawing-ui-v1';
 const MAX_HISTORY_ENTRIES = 100;
 type DrawingPersistence = 'server' | 'memory' | 'position' | 'bitlang';
 type ExtraDrawingScope = PositionDrawingScope | BitlangDrawingScope;
@@ -92,7 +98,12 @@ export function useDrawingWorkspace(
           ? `${persistence}:${bitlangTradeId}:${symbol}`
           : `${persistence}:${symbol}`;
   const [activeTool, setActiveTool] = useState<ActiveToolType>('select');
-  const [magnetEnabled, setMagnetEnabled] = useState(false);
+  const [magnetEnabled, setMagnetEnabled] = useState(() =>
+    storedBoolean(
+      readLocalUiState(DRAWING_UI_STORAGE_KEY).magnetEnabled,
+      false
+    )
+  );
   const [drawings, setDrawings] = useState<DrawingToolState[]>([]);
   const [selectedDrawingId, setSelectedDrawingId] = useState<string | null>(
     null
@@ -106,6 +117,10 @@ export function useDrawingWorkspace(
   const [redoStack, setRedoStack] = useState<DrawingToolState[][]>([]);
   const [hydratedWorkspaceKey, setHydratedWorkspaceKey] = useState('');
   const ready = hydratedWorkspaceKey === drawingWorkspaceKey;
+
+  useEffect(() => {
+    writeLocalUiState(DRAWING_UI_STORAGE_KEY, { magnetEnabled });
+  }, [magnetEnabled]);
 
   const drawingsRef = useRef<DrawingToolState[]>([]);
   const confirmedDrawingsRef = useRef<DrawingToolState[]>([]);

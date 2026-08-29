@@ -9,6 +9,11 @@ import {
 import { confirmDialog } from '@/ui/feedback/confirm';
 import { toast } from '@/ui/feedback/toast';
 import {
+  readLocalUiState,
+  storedString,
+  writeLocalUiState,
+} from '@/ui/persistence/local-ui-state';
+import {
   FILL_KIND_LABEL,
   calculatePositionRoi,
   formatHoldingDuration,
@@ -22,6 +27,16 @@ import {
   type PositionTag,
   type ReviewPosition,
 } from './position-review-types';
+
+const POSITION_DETAIL_TAB_STORAGE_KEY = 'tiabtc-position-detail-tab-v1';
+
+function loadDetailTab(): 'overview' | 'operations' | 'notes' {
+  return storedString(
+    readLocalUiState(POSITION_DETAIL_TAB_STORAGE_KEY).activeTab,
+    'overview',
+    ['overview', 'operations', 'notes']
+  ) as 'overview' | 'operations' | 'notes';
+}
 
 export function PositionReviewPanel({
   position,
@@ -41,7 +56,7 @@ export function PositionReviewPanel({
   const [saving, setSaving] = useState(false);
   const [tagBusy, setTagBusy] = useState(false);
   const [activeTab, setActiveTab] = useState<'overview' | 'operations' | 'notes'>(
-    'overview'
+    loadDetailTab
   );
   const positionRef = useRef(position);
   const noteSaveQueueRef = useRef<Promise<void>>(Promise.resolve());
@@ -53,6 +68,10 @@ export function PositionReviewPanel({
   useEffect(() => {
     setNote(position.note);
   }, [position.note, position.positionId]);
+
+  useEffect(() => {
+    writeLocalUiState(POSITION_DETAIL_TAB_STORAGE_KEY, { activeTab });
+  }, [activeTab]);
 
   const persistNote = (value: string): Promise<void> => {
     const target = positionRef.current;

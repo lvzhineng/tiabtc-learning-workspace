@@ -147,6 +147,7 @@ Python 后端是纯 API 服务。禁止恢复项目目录静态文件服务；�
 - 公共 Bybit 行情请求走 `web/src/api/market-api.ts`；仓位复盘走 `web/src/api/position-review-api.ts`；bit浪浪备注/标签/画图走 `web/src/api/bitlang-review-api.ts`。不要在组件内散落新的行情或账户请求。
 - 不为一次修复引入大型框架或新的状态管理库。
 - 用户提示走全局 toast / 确认框（`web/src/ui/feedback/`）；确认框打开时给 `.app-shell` 加 `inert`。不要回退到原生 `alert` / `confirm`。
+- 筛选、排序、分页、周期、当前选中项和工作台内部视图等非敏感界面偏好，应通过 `web/src/ui/persistence/local-ui-state.ts` 做容错的本机记忆；顶部默认入口仍是顺序学习。禁止记忆 API 密钥、笔记草稿、弹窗、错误、加载态或其它短暂操作状态。
 - 不批量格式化无关文件。
 - 性能优化应优先考虑：
   - 避免重复网络请求和 JSON 解析；
@@ -180,6 +181,7 @@ Python 后端是纯 API 服务。禁止恢复项目目录静态文件服务；�
 | `web/src/api/position-review-api.ts` | 仓位复盘 API 封装 |
 | `web/src/api/bitlang-review-api.ts` | bit浪浪本机备注/标签/画图 API 封装 |
 | `web/src/api/candle-window-cache.ts` | 窗口 K 线分片 LRU |
+| `web/src/ui/persistence/local-ui-state.ts` | 非敏感界面偏好的 localStorage 容错读写与类型校验 |
 | `web/src/ui/feedback/GlobalConfirmDialog.tsx` | 全局确认框 |
 | `web/src/features/learning/LearningWorkspace.tsx` | 视频列表、筛选和学习状态 |
 
@@ -228,3 +230,4 @@ Python 后端是纯 API 服务。禁止恢复项目目录静态文件服务；�
 19. 全局确认框打开时后台不可操作。
 20. bit浪浪：点击交易后开平仓区间居中；复盘详情抽屉可开关；复制图表可用；画图按交易持久化，刷新后仍在。
 21. bit浪浪：本机备注/标签可保存且不覆盖交割单原始备注；看板可进入；日记跳转切回 K 线并居中。
+22. 列表翻页、筛选、排序、周期和内部视图在刷新/重启后恢复；失效的交易对、标签或越界页码安全回退，且本机存储中不出现密钥和编辑草稿。
