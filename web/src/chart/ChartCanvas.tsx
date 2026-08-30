@@ -529,10 +529,13 @@ export const ChartCanvas = memo(function ChartCanvas({
       );
       if (nearestCandle) {
         event.preventDefault();
+        event.stopPropagation();
         onDoubleClickTimeRef.current?.(targetTimeMs);
       }
     };
-    container.addEventListener('dblclick', handleDoubleClick);
+    // Run before Lightweight Charts handles its own double-click gesture so
+    // the clicked timestamp is resolved against the user's current viewport.
+    container.addEventListener('dblclick', handleDoubleClick, true);
 
     // ResizeObserver
     const resizeObserver = new ResizeObserver((entries) => {
@@ -543,7 +546,7 @@ export const ChartCanvas = memo(function ChartCanvas({
     resizeObserver.observe(container);
 
     return () => {
-      container.removeEventListener('dblclick', handleDoubleClick);
+      container.removeEventListener('dblclick', handleDoubleClick, true);
       if (boundaryLoadTimer !== null) window.clearTimeout(boundaryLoadTimer);
       if (crosshairNotifyTimer !== null) window.clearTimeout(crosshairNotifyTimer);
       resizeObserver.disconnect();

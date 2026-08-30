@@ -78,6 +78,13 @@ type StoredReviewLocation = {
   timeframe: ReviewTimeframe;
   timestampMs: number;
   visibleSpan: number;
+  replay: StoredFreeReplay | null;
+};
+
+type StoredFreeReplay = {
+  startTimeMs: number;
+  cursorTimeMs: number;
+  speed: number;
 };
 
 function normalizeReviewVisibleSpan(value: unknown): number {
@@ -87,6 +94,28 @@ function normalizeReviewVisibleSpan(value: unknown): number {
     MAX_REVIEW_VISIBLE_SPAN,
     Math.max(MIN_REVIEW_VISIBLE_SPAN, visibleSpan)
   );
+}
+
+function normalizeStoredFreeReplay(value: unknown): StoredFreeReplay | null {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
+  const raw = value as Partial<StoredFreeReplay>;
+  const startTimeMs = Number(raw.startTimeMs);
+  const cursorTimeMs = Number(raw.cursorTimeMs);
+  const speed = Number(raw.speed);
+  if (
+    !Number.isFinite(startTimeMs) ||
+    !Number.isFinite(cursorTimeMs) ||
+    startTimeMs < MIN_REVIEW_TIMESTAMP_MS ||
+    cursorTimeMs < startTimeMs ||
+    cursorTimeMs > Date.now()
+  ) {
+    return null;
+  }
+  return {
+    startTimeMs: Math.round(startTimeMs),
+    cursorTimeMs: Math.round(cursorTimeMs),
+    speed: [1, 2, 5, 10].includes(speed) ? speed : 1,
+  };
 }
 
 function loadStoredReviewLocation(): StoredReviewLocation | null {
@@ -108,6 +137,7 @@ function loadStoredReviewLocation(): StoredReviewLocation | null {
       timeframe: timeframe as ReviewTimeframe,
       timestampMs: Math.round(timestampMs),
       visibleSpan: normalizeReviewVisibleSpan(raw?.visibleSpan),
+      replay: normalizeStoredFreeReplay(raw?.replay),
     };
   } catch {
     return null;
@@ -141,6 +171,12 @@ export function ChartWorkspace({
   const restoredTimestampMs = initialVideoContext
     ? null
     : initialLocation?.timestampMs ?? null;
+  const restoredFreeReplay = initialVideoContext
+    ? null
+    : initialLocation?.replay ?? null;
+  const restoredFocusTimeMs = restoredFreeReplay && initialLocation
+    ? restoredFreeReplay.cursorTimeMs - timeframeMs(initialLocation.timeframe)
+    : restoredTimestampMs;
   const [symbols, setSymbols] = useState<string[]>(['BTCUSDT']);
   const [activeSymbol, setActiveSymbol] = useState<string>(
     initialVideoContext?.symbol || initialUiPreferences.symbol
@@ -158,10 +194,10 @@ export function ChartWorkspace({
     initialUiPreferences.showWeekendBands
   );
   const [chartFocusTimeMs, setChartFocusTimeMs] = useState<number | null>(
-    restoredTimestampMs
+    restoredFocusTimeMs
   );
   const [timeframeSwitchAnchorTimeMs, setTimeframeSwitchAnchorTimeMs] =
-    useState<number | null>(restoredTimestampMs);
+    useState<number | null>(restoredFocusTimeMs);
   const lastPositionTimeMsRef = useRef<number | null>(
     restoredTimestampMs
   );
@@ -170,6 +206,7 @@ export function ChartWorkspace({
   );
   const pendingLocationRef = useRef<StoredReviewLocation | null>(null);
   const persistLocationTimerRef = useRef<number | null>(null);
+  const replayMemoryRef = useRef<StoredFreeReplay | null>(restoredFreeReplay);
 
   const flushStoredReviewLocation = useCallback(() => {
     if (persistLocationTimerRef.current !== null) {
@@ -186,7 +223,8 @@ export function ChartWorkspace({
     (
       timeframe: ReviewTimeframe,
       timestampMs: number,
-      visibleSpan = lastVisibleSpanRef.current
+      visibleSpan = lastVisibleSpanRef.current,
+      replay = replayMemoryRef.current
     ) => {
       if (!Number.isFinite(timestampMs) || timestampMs <= 0) return;
       const normalizedVisibleSpan = normalizeReviewVisibleSpan(visibleSpan);
@@ -195,6 +233,7 @@ export function ChartWorkspace({
         timeframe,
         timestampMs: Math.round(timestampMs),
         visibleSpan: normalizedVisibleSpan,
+        replay,
       };
       if (persistLocationTimerRef.current !== null) return;
       persistLocationTimerRef.current = window.setTimeout(
@@ -249,11 +288,33 @@ export function ChartWorkspace({
         speed: 1,
       };
     }
+    if (restoredFreeReplay) {
+      return {
+        status: 'paused',
+        context: {
+          mode: 'free',
+          symbol: activeSymbol,
+          anchorTimeMs: restoredFreeReplay.startTimeMs,
+        },
+        startTimeMs: restoredFreeReplay.startTimeMs,
+        progressTimeMs: restoredFreeReplay.cursorTimeMs,
+        cursorTimeMs: restoredFreeReplay.cursorTimeMs,
+        speed: restoredFreeReplay.speed,
+      };
+    }
     return { status: 'idle' };
   });
 
   useEffect(() => {
     if (replayState.status === 'idle') return;
+    replayMemoryRef.current =
+      replayState.context.mode === 'free'
+        ? {
+            startTimeMs: replayState.startTimeMs,
+            cursorTimeMs: replayState.cursorTimeMs,
+            speed: replayState.speed,
+          }
+        : null;
     lastPositionTimeMsRef.current = replayState.cursorTimeMs;
     scheduleStoredReviewLocation(activeTimeframe, replayState.cursorTimeMs);
   }, [activeTimeframe, replayState, scheduleStoredReviewLocation]);
@@ -549,6 +610,19 @@ export function ChartWorkspace({
   }, [activeSymbol, activeTimeframe, candles, chartFocusTimeMs, loading]);
 
   const handleStopReplay = () => {
+    const lastReplayTimeMs =
+      replayState.status === 'idle'
+        ? lastPositionTimeMsRef.current
+        : replayState.cursorTimeMs;
+    replayMemoryRef.current = null;
+    if (lastReplayTimeMs !== null) {
+      scheduleStoredReviewLocation(
+        activeTimeframe,
+        lastReplayTimeMs,
+        lastVisibleSpanRef.current,
+        null
+      );
+    }
     setChartFocusTimeMs(null);
     setReplayState({ status: 'idle' });
   };
