@@ -52,6 +52,9 @@ const TIMEFRAMES: ReviewTimeframe[] = ['1', '5', '15', '60', '240', 'D', 'W'];
 const REVIEW_LOCATION_STORAGE_KEY = 'tiabtc-review-location-v1';
 const REVIEW_UI_STORAGE_KEY = 'tiabtc-review-ui-v1';
 const MIN_REVIEW_TIMESTAMP_MS = 1_500_000_000_000;
+const DEFAULT_REVIEW_VISIBLE_SPAN = 120;
+const MIN_REVIEW_VISIBLE_SPAN = 30;
+const MAX_REVIEW_VISIBLE_SPAN = 200;
 
 type ReviewUiPreferences = {
   symbol: string;
@@ -74,7 +77,17 @@ function loadReviewUiPreferences(): ReviewUiPreferences {
 type StoredReviewLocation = {
   timeframe: ReviewTimeframe;
   timestampMs: number;
+  visibleSpan: number;
 };
+
+function normalizeReviewVisibleSpan(value: unknown): number {
+  const visibleSpan = Number(value);
+  if (!Number.isFinite(visibleSpan)) return DEFAULT_REVIEW_VISIBLE_SPAN;
+  return Math.min(
+    MAX_REVIEW_VISIBLE_SPAN,
+    Math.max(MIN_REVIEW_VISIBLE_SPAN, visibleSpan)
+  );
+}
 
 function loadStoredReviewLocation(): StoredReviewLocation | null {
   try {
@@ -94,6 +107,7 @@ function loadStoredReviewLocation(): StoredReviewLocation | null {
     return {
       timeframe: timeframe as ReviewTimeframe,
       timestampMs: Math.round(timestampMs),
+      visibleSpan: normalizeReviewVisibleSpan(raw?.visibleSpan),
     };
   } catch {
     return null;
@@ -151,6 +165,9 @@ export function ChartWorkspace({
   const lastPositionTimeMsRef = useRef<number | null>(
     restoredTimestampMs
   );
+  const lastVisibleSpanRef = useRef(
+    initialLocation?.visibleSpan ?? DEFAULT_REVIEW_VISIBLE_SPAN
+  );
   const pendingLocationRef = useRef<StoredReviewLocation | null>(null);
   const persistLocationTimerRef = useRef<number | null>(null);
 
@@ -166,11 +183,18 @@ export function ChartWorkspace({
   }, []);
 
   const scheduleStoredReviewLocation = useCallback(
-    (timeframe: ReviewTimeframe, timestampMs: number) => {
+    (
+      timeframe: ReviewTimeframe,
+      timestampMs: number,
+      visibleSpan = lastVisibleSpanRef.current
+    ) => {
       if (!Number.isFinite(timestampMs) || timestampMs <= 0) return;
+      const normalizedVisibleSpan = normalizeReviewVisibleSpan(visibleSpan);
+      lastVisibleSpanRef.current = normalizedVisibleSpan;
       pendingLocationRef.current = {
         timeframe,
         timestampMs: Math.round(timestampMs),
+        visibleSpan: normalizedVisibleSpan,
       };
       if (persistLocationTimerRef.current !== null) return;
       persistLocationTimerRef.current = window.setTimeout(
@@ -235,9 +259,13 @@ export function ChartWorkspace({
   }, [activeTimeframe, replayState, scheduleStoredReviewLocation]);
 
   const handleViewportAnchorChange = useCallback(
-    (timestampMs: number) => {
+    (timestampMs: number, visibleSpan: number) => {
       lastPositionTimeMsRef.current = timestampMs;
-      scheduleStoredReviewLocation(activeTimeframe, timestampMs);
+      scheduleStoredReviewLocation(
+        activeTimeframe,
+        timestampMs,
+        visibleSpan
+      );
     },
     [activeTimeframe, scheduleStoredReviewLocation]
   );
@@ -972,6 +1000,9 @@ export function ChartWorkspace({
           isLogScale={isLogScale}
           themeMode={themeMode}
           focusTimeMs={chartFocusTimeMs}
+          initialVisibleSpan={
+            initialLocation?.visibleSpan ?? DEFAULT_REVIEW_VISIBLE_SPAN
+          }
           systemMarkers={systemMarkers}
           onCrosshairMove={setHoveredCandle}
           onDoubleClickTime={handleDoubleClickTime}

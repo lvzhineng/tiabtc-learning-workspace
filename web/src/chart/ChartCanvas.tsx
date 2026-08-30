@@ -44,10 +44,14 @@ interface ChartCanvasProps {
   focusTimeMs?: number | null;
   focusRangeMs?: { from: number; to: number } | null;
   focusRevision?: number;
+  initialVisibleSpan?: number;
   systemMarkers?: SeriesMarker<UTCTimestamp>[];
   onCrosshairMove?: (candle: Candlestick | null) => void;
   onDoubleClickTime?: (timestampMs: number) => void;
-  onViewportAnchorChange?: (timestampMs: number) => void;
+  onViewportAnchorChange?: (
+    timestampMs: number,
+    visibleSpan: number
+  ) => void;
   onLoadEarlier?: () => void;
   isLoadingEarlier?: boolean;
   onLoadLater?: () => void;
@@ -160,6 +164,7 @@ export const ChartCanvas = memo(function ChartCanvas({
   focusTimeMs = null,
   focusRangeMs = null,
   focusRevision = 0,
+  initialVisibleSpan = 120,
   systemMarkers = [],
   onCrosshairMove,
   onDoubleClickTime,
@@ -192,7 +197,9 @@ export const ChartCanvas = memo(function ChartCanvas({
   const prevCandlesRef = useRef<Candlestick[]>([]);
   const prevSeriesKeyRef = useRef<string>('');
   const pendingViewportResetRef = useRef(false);
-  const lastVisibleSpanRef = useRef(120);
+  const lastVisibleSpanRef = useRef(clampVisibleSpan(initialVisibleSpan));
+  const suppressVisibleRangeEventsRef = useRef(false);
+  const suppressBoundaryLoadEventsRef = useRef(false);
   const isFetchingEarlierRef = useRef<boolean>(isLoadingEarlier);
   const isFetchingLaterRef = useRef<boolean>(isLoadingLater);
   const candlesRef = useRef<Candlestick[]>(candles);
@@ -207,9 +214,22 @@ export const ChartCanvas = memo(function ChartCanvas({
   const intervalRef = useRef(interval);
   const lastAppliedFocusKeyRef = useRef<string | null>(null);
   const lastNotifiedViewportAnchorRef = useRef<number | null>(null);
+  const lastNotifiedViewportSpanRef = useRef<number | null>(null);
   const focusTimeMsRef = useRef(focusTimeMs);
   const focusRangeMsRef = useRef(focusRangeMs);
   const [chartReady, setChartReady] = useState(false);
+
+  const setProgrammaticVisibleLogicalRange = (
+    chart: IChartApi,
+    logicalRange: { from: number; to: number }
+  ) => {
+    suppressBoundaryLoadEventsRef.current = true;
+    try {
+      chart.timeScale().setVisibleLogicalRange(logicalRange as LogicalRange);
+    } finally {
+      suppressBoundaryLoadEventsRef.current = false;
+    }
+  };
 
   useEffect(() => {
     isFetchingEarlierRef.current = isLoadingEarlier;
@@ -436,6 +456,7 @@ export const ChartCanvas = memo(function ChartCanvas({
     // Persist the anchor immediately, but wait until pan/zoom settles before
     // starting an edge request so network/data work does not compete with drag.
     chart.timeScale().subscribeVisibleLogicalRangeChange((logicalRange) => {
+      if (suppressVisibleRangeEventsRef.current) return;
       if (logicalRange) {
         const visibleSpan = logicalRange.to - logicalRange.from;
         const currentCandles = candlesRef.current;
@@ -444,6 +465,8 @@ export const ChartCanvas = memo(function ChartCanvas({
           visibleSpan > 0 &&
           currentCandles.length > 0
         ) {
+          const normalizedVisibleSpan = clampVisibleSpan(visibleSpan);
+          lastVisibleSpanRef.current = normalizedVisibleSpan;
           const anchorIndex = Math.min(
             currentCandles.length - 1,
             Math.max(
@@ -456,14 +479,21 @@ export const ChartCanvas = memo(function ChartCanvas({
           const anchorTimeMs = currentCandles[anchorIndex]?.timestampMs;
           if (
             anchorTimeMs !== undefined &&
-            anchorTimeMs !== lastNotifiedViewportAnchorRef.current
+            (anchorTimeMs !== lastNotifiedViewportAnchorRef.current ||
+              normalizedVisibleSpan !== lastNotifiedViewportSpanRef.current)
           ) {
             lastNotifiedViewportAnchorRef.current = anchorTimeMs;
-            onViewportAnchorChangeRef.current?.(anchorTimeMs);
+            lastNotifiedViewportSpanRef.current = normalizedVisibleSpan;
+            onViewportAnchorChangeRef.current?.(
+              anchorTimeMs,
+              normalizedVisibleSpan
+            );
           }
         }
       }
-      scheduleBoundaryLoad(logicalRange);
+      if (!suppressBoundaryLoadEventsRef.current) {
+        scheduleBoundaryLoad(logicalRange);
+      }
     });
     chart.subscribeClick(() => onSelectDrawingRef.current(null));
 
@@ -578,6 +608,7 @@ export const ChartCanvas = memo(function ChartCanvas({
       prevLastTimestampRef.current = null;
       prevCandlesRef.current = [];
       lastNotifiedViewportAnchorRef.current = null;
+      lastNotifiedViewportSpanRef.current = null;
       // Remember that the next non-empty setData must set a viewport. The first
       // render after a symbol/interval switch often arrives with candles=[], which
       // would otherwise consume isSeriesContextChange and leave LWC on the left.
@@ -595,7 +626,8 @@ export const ChartCanvas = memo(function ChartCanvas({
 
     const applyRightAlignedViewport = (barCount: number) => {
       // Live tip: keep the newest bar at the same ~80% anchor as replay focus.
-      chart.timeScale().setVisibleLogicalRange(
+      setProgrammaticVisibleLogicalRange(
+        chart,
         logicalRangeForFocus(barCount - 1, lastVisibleSpanRef.current)
       );
     };
@@ -610,7 +642,8 @@ export const ChartCanvas = memo(function ChartCanvas({
       );
       // Replay cut-in / explicit focus must stay at ~80% even when the focused
       // candle is also the last visible bar (future candles are masked).
-      chart.timeScale().setVisibleLogicalRange(
+      setProgrammaticVisibleLogicalRange(
+        chart,
         logicalRangeForFocus(focusIndex, lastVisibleSpanRef.current)
       );
       return focusIndex;
@@ -619,8 +652,13 @@ export const ChartCanvas = memo(function ChartCanvas({
     rememberVisibleSpan();
 
     if (!candles || candles.length === 0) {
-      series.setData([]);
-      volumeSeries?.setData([]);
+      suppressVisibleRangeEventsRef.current = true;
+      try {
+        series.setData([]);
+        volumeSeries?.setData([]);
+      } finally {
+        suppressVisibleRangeEventsRef.current = false;
+      }
       prevBarsCountRef.current = 0;
       prevFirstTimestampRef.current = null;
       prevLastTimestampRef.current = null;
@@ -672,7 +710,7 @@ export const ChartCanvas = memo(function ChartCanvas({
           });
       }
       if (visibleRangeBeforeAppend) {
-        chart.timeScale().setVisibleLogicalRange(visibleRangeBeforeAppend);
+        setProgrammaticVisibleLogicalRange(chart, visibleRangeBeforeAppend);
       }
       prevBarsCountRef.current = candles.length;
       prevLastTimestampRef.current = lastCandle.timestampMs;
@@ -743,8 +781,16 @@ export const ChartCanvas = memo(function ChartCanvas({
       sortedData.length > prevBarsCountRef.current;
     const addedCount = sortedData.length - prevBarsCountRef.current;
 
-    series.setData(sortedData);
-    volumeSeries?.setData(volumeData);
+    // Lightweight Charts briefly exposes an auto-fitted range during setData.
+    // It is not a user viewport change and must not trigger edge loading or
+    // overwrite the persisted review location.
+    suppressVisibleRangeEventsRef.current = true;
+    try {
+      series.setData(sortedData);
+      volumeSeries?.setData(volumeData);
+    } finally {
+      suppressVisibleRangeEventsRef.current = false;
+    }
 
     const shouldResetViewport =
       pendingViewportResetRef.current || prevBarsCountRef.current === 0;
@@ -764,7 +810,7 @@ export const ChartCanvas = memo(function ChartCanvas({
       }
     } else if (isPrepended && prevLogicalRange && addedCount > 0) {
       // If prepended earlier candles, adjust logical range so view doesn't jump
-      chart.timeScale().setVisibleLogicalRange({
+      setProgrammaticVisibleLogicalRange(chart, {
         from: prevLogicalRange.from + addedCount,
         to: prevLogicalRange.to + addedCount,
       });
@@ -772,7 +818,7 @@ export const ChartCanvas = memo(function ChartCanvas({
       // A trailing refresh can revise several already-cached D/W/4h bars
       // without changing the time range. Full setData is required for those
       // historical bars, but the user's viewport should not move.
-      chart.timeScale().setVisibleLogicalRange(prevLogicalRange);
+      setProgrammaticVisibleLogicalRange(chart, prevLogicalRange);
     }
 
     prevBarsCountRef.current = sortedData.length;
@@ -829,7 +875,7 @@ export const ChartCanvas = memo(function ChartCanvas({
       const visibleSpan = tradeSpan + padding * 2;
       const tradeCenter = (resolvedFrom + resolvedTo) / 2;
       const frame = window.requestAnimationFrame(() => {
-        chart.timeScale().setVisibleLogicalRange({
+        setProgrammaticVisibleLogicalRange(chart, {
           from: tradeCenter - visibleSpan / 2,
           to: tradeCenter + visibleSpan / 2,
         });
@@ -852,7 +898,8 @@ export const ChartCanvas = memo(function ChartCanvas({
       }
     }
     const frame = window.requestAnimationFrame(() => {
-      chart.timeScale().setVisibleLogicalRange(
+      setProgrammaticVisibleLogicalRange(
+        chart,
         logicalRangeForFocus(focusIndex, lastVisibleSpanRef.current)
       );
       lastAppliedFocusKeyRef.current = focusKey;
