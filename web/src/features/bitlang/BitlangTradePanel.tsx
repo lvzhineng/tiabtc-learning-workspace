@@ -9,6 +9,7 @@ import {
 } from '@/api/bitlang-review-api';
 import { confirmDialog } from '@/ui/feedback/confirm';
 import { toast } from '@/ui/feedback/toast';
+import { formatPrice, pricePrecision } from '@/chart/chart-price';
 import {
   readLocalUiState,
   storedString,
@@ -164,6 +165,11 @@ export function BitlangTradePanel({
     void persistNote(nextNote);
   };
 
+  const displayedPricePrecision = pricePrecision([
+    trade.entryPrice,
+    trade.exitPrice,
+  ]);
+
   const metrics: Array<{
     label: string;
     value: string;
@@ -180,11 +186,11 @@ export function BitlangTradePanel({
     },
     {
       label: '开仓均价',
-      value: formatNumber(trade.entryPrice, 4),
+      value: formatPrice(trade.entryPrice, displayedPricePrecision),
     },
     {
       label: '平仓均价',
-      value: formatNumber(trade.exitPrice, 4),
+      value: formatPrice(trade.exitPrice, displayedPricePrecision),
     },
     {
       label: '保证金',

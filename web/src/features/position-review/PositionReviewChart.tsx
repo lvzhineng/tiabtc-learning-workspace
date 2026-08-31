@@ -8,6 +8,7 @@ import {
 } from '@/api/position-review-api';
 import { ChartCanvas } from '@/chart/ChartCanvas';
 import { captureChartPng } from '@/chart/capture-chart-png';
+import { formatPrice, pricePrecision } from '@/chart/chart-price';
 import {
   createCandleEdgeLoadGuard,
   recordEarlierCandleLoad,
@@ -339,9 +340,30 @@ export function PositionReviewChart({
   const chartLoading = loading || !contextReady;
   const chartError = contextReady ? error : null;
   const chartWarning = contextReady ? warning : null;
+  const displayedPricePrecision = useMemo(
+    () =>
+      pricePrecision([
+        ...displayedCandles.flatMap((candle) => [
+          candle.open,
+          candle.high,
+          candle.low,
+          candle.close,
+        ]),
+        position.entryPrice,
+        position.exitPrice,
+        ...(position.fills ?? []).map((fill) => fill.price),
+      ]),
+    [displayedCandles, position.entryPrice, position.exitPrice, position.fills]
+  );
   const markers = useMemo(
-    () => buildPositionMarkers(position, timeframe, displayedCandles),
-    [displayedCandles, position, timeframe]
+    () =>
+      buildPositionMarkers(
+        position,
+        timeframe,
+        displayedCandles,
+        displayedPricePrecision
+      ),
+    [displayedCandles, displayedPricePrecision, position, timeframe]
   );
   const focusExitMs =
     closedExitTimeMs ??
@@ -433,10 +455,10 @@ export function PositionReviewChart({
       {hoveredCandle && (
         <div className="bitlang-candle-readout">
           <span>{formatChartTime(hoveredCandle.timestampMs, timeframe)}</span>
-          <span>开 {formatNumber(hoveredCandle.open, 4)}</span>
-          <span>高 {formatNumber(hoveredCandle.high, 4)}</span>
-          <span>低 {formatNumber(hoveredCandle.low, 4)}</span>
-          <span>收 {formatNumber(hoveredCandle.close, 4)}</span>
+          <span>开 {formatPrice(hoveredCandle.open, displayedPricePrecision)}</span>
+          <span>高 {formatPrice(hoveredCandle.high, displayedPricePrecision)}</span>
+          <span>低 {formatPrice(hoveredCandle.low, displayedPricePrecision)}</span>
+          <span>收 {formatPrice(hoveredCandle.close, displayedPricePrecision)}</span>
           <span>量 {formatNumber(hoveredCandle.volume)}</span>
         </div>
       )}
@@ -476,7 +498,8 @@ export function PositionReviewChart({
 function buildPositionMarkers(
   position: ReviewPosition,
   timeframe: ReviewTimeframe,
-  candles: Candlestick[]
+  candles: Candlestick[],
+  displayedPricePrecision: number
 ): SeriesMarker<UTCTimestamp>[] {
   if (!candles.length) return [];
   const interval = timeframeMs(timeframe);
@@ -508,7 +531,7 @@ function buildPositionMarkers(
       position: isBuy ? 'belowBar' : 'aboveBar',
       color: isBuy ? '#089981' : '#f23645',
       shape: isBuy ? 'arrowUp' : 'arrowDown',
-      text: `${text} ${formatNumber(price, 4)}`,
+      text: `${text} ${formatPrice(price, displayedPricePrecision)}`,
     });
   };
   const openSide = position.side === 'long' ? 'buy' : 'sell';

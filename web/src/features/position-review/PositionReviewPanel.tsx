@@ -8,6 +8,7 @@ import {
 } from '@/api/position-review-api';
 import { confirmDialog } from '@/ui/feedback/confirm';
 import { toast } from '@/ui/feedback/toast';
+import { formatPrice, pricePrecision } from '@/chart/chart-price';
 import {
   readLocalUiState,
   storedString,
@@ -189,6 +190,11 @@ export function PositionReviewPanel({
   const pnl = positionPnl(position);
   const roi = calculatePositionRoi(position);
   const totalFee = (position.openFee || 0) + (position.closeFee || 0);
+  const displayedPricePrecision = pricePrecision([
+    position.entryPrice,
+    position.exitPrice,
+    ...(position.fills ?? []).map((fill) => fill.price),
+  ]);
 
   const metrics: Array<{
     label: string;
@@ -215,11 +221,14 @@ export function PositionReviewPanel({
     },
     {
       label: '开仓均价',
-      value: formatNumber(position.entryPrice, 4),
+      value: formatPrice(position.entryPrice, displayedPricePrecision),
     },
     {
       label: '平仓均价',
-      value: position.status === 'open' ? '持仓中' : formatNumber(position.exitPrice, 4),
+      value:
+        position.status === 'open'
+          ? '持仓中'
+          : formatPrice(position.exitPrice, displayedPricePrecision),
     },
     {
       label: '持仓数量',
@@ -303,7 +312,8 @@ export function PositionReviewPanel({
                       {formatShanghaiTimeShort(fill.timeMs)}
                     </span>
                     <span className="posrev-fill-qty">
-                      {formatNumber(fill.quantity, 4)} @ {formatNumber(fill.price, 4)}
+                      {formatNumber(fill.quantity, 4)} @{' '}
+                      {formatPrice(fill.price, displayedPricePrecision)}
                     </span>
                     <span
                       className={`posrev-fill-pnl ${

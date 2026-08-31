@@ -14,6 +14,7 @@ import {
 } from '@/api/candle-window-cache';
 import { ChartCanvas } from '@/chart/ChartCanvas';
 import { captureChartPng } from '@/chart/capture-chart-png';
+import { formatPrice, pricePrecision } from '@/chart/chart-price';
 import {
   createCandleEdgeLoadGuard,
   recordEarlierCandleLoad,
@@ -358,9 +359,29 @@ export function BitlangTradeChart({
   const chartLoading = loading || !contextReady;
   const chartError = contextReady ? error : null;
   const chartWarning = contextReady ? warning : null;
+  const displayedPricePrecision = useMemo(
+    () =>
+      pricePrecision([
+        ...displayedCandles.flatMap((candle) => [
+          candle.open,
+          candle.high,
+          candle.low,
+          candle.close,
+        ]),
+        trade.entryPrice,
+        trade.exitPrice,
+      ]),
+    [displayedCandles, trade.entryPrice, trade.exitPrice]
+  );
   const markers = useMemo(
-    () => buildTradeMarkers(trade, timeframe, displayedCandles),
-    [displayedCandles, timeframe, trade]
+    () =>
+      buildTradeMarkers(
+        trade,
+        timeframe,
+        displayedCandles,
+        displayedPricePrecision
+      ),
+    [displayedCandles, displayedPricePrecision, timeframe, trade]
   );
 
   return (
@@ -442,10 +463,10 @@ export function BitlangTradeChart({
       {hoveredCandle && (
         <div className="bitlang-candle-readout">
           <span>{formatChartTime(hoveredCandle.timestampMs, timeframe)}</span>
-          <span>开 {formatNumber(hoveredCandle.open, 4)}</span>
-          <span>高 {formatNumber(hoveredCandle.high, 4)}</span>
-          <span>低 {formatNumber(hoveredCandle.low, 4)}</span>
-          <span>收 {formatNumber(hoveredCandle.close, 4)}</span>
+          <span>开 {formatPrice(hoveredCandle.open, displayedPricePrecision)}</span>
+          <span>高 {formatPrice(hoveredCandle.high, displayedPricePrecision)}</span>
+          <span>低 {formatPrice(hoveredCandle.low, displayedPricePrecision)}</span>
+          <span>收 {formatPrice(hoveredCandle.close, displayedPricePrecision)}</span>
           <span>量 {formatNumber(hoveredCandle.volume)}</span>
         </div>
       )}
@@ -478,7 +499,8 @@ export function BitlangTradeChart({
 function buildTradeMarkers(
   trade: BitlangTrade,
   timeframe: ReviewTimeframe,
-  candles: Candlestick[]
+  candles: Candlestick[],
+  displayedPricePrecision: number
 ): SeriesMarker<UTCTimestamp>[] {
   if (!candles.length) return [];
   const interval = timeframeMs(timeframe);
@@ -503,14 +525,14 @@ function buildTradeMarkers(
       position: 'belowBar',
       color: trade.direction === '多' ? '#089981' : '#f23645',
       shape: 'arrowUp',
-      text: `开 ${formatNumber(trade.entryPrice, 4)}`,
+      text: `开 ${formatPrice(trade.entryPrice, displayedPricePrecision)}`,
     },
     {
       time: markerTime(Date.parse(trade.exitTime)),
       position: 'aboveBar',
       color: trade.profit >= 0 ? '#089981' : '#f23645',
       shape: 'arrowDown',
-      text: `平 ${formatNumber(trade.exitPrice, 4)}`,
+      text: `平 ${formatPrice(trade.exitPrice, displayedPricePrecision)}`,
     },
   ];
 }

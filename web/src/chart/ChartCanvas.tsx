@@ -33,6 +33,7 @@ import type {
 } from '@/features/drawings/drawing-types';
 import { ChartDrawingOverlay } from '@/features/drawings/ChartDrawingOverlay';
 import { UsSessionBandsOverlay } from '@/chart/UsSessionBandsOverlay';
+import { candlePriceFormat, formatPrice } from './chart-price';
 
 interface ChartCanvasProps {
   candles: Candlestick[];
@@ -120,7 +121,7 @@ function candlesEqual(
 }
 /** Place the focus bar near 80% of the viewport, leaving ~20% room on the right. */
 const FOCUS_VIEWPORT_RATIO = 0.8;
-const PRICE_SCALE_MIN_WIDTH = 72;
+const PRICE_SCALE_MIN_WIDTH = 96;
 const EDGE_LOAD_DEBOUNCE_MS = 100;
 const CROSSHAIR_NOTIFY_INTERVAL_MS = 32;
 const MAX_INCREMENTAL_APPEND_BARS = 8;
@@ -354,6 +355,11 @@ export const ChartCanvas = memo(function ChartCanvas({
       borderDownColor: '#f23645',
       wickUpColor: '#089981',
       wickDownColor: '#f23645',
+      priceFormat: {
+        type: 'custom',
+        minMove: 1e-8,
+        formatter: (price: number) => formatPrice(price),
+      },
     });
     const volumeSeries = showVolume
       ? chart.addHistogramSeries({
@@ -669,6 +675,9 @@ export const ChartCanvas = memo(function ChartCanvas({
       return;
     }
 
+    series.applyOptions({
+      priceFormat: candlePriceFormat(candles),
+    });
     const firstCandle = candles[0];
     const lastCandle = candles[candles.length - 1];
     const previousCandles = prevCandlesRef.current;

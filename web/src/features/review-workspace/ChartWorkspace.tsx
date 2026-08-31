@@ -9,6 +9,7 @@ import {
   type PerpetualSymbolSearchItem,
 } from '@/api/market-api';
 import { ChartCanvas } from '@/chart/ChartCanvas';
+import { candlePricePrecision } from '@/chart/chart-price';
 import { computeReadoutInfo, type ReadoutInfo } from '@/chart/candlestick-readout';
 import type { ReplayState } from '@/features/replay/replay-state';
 import {
@@ -836,10 +837,14 @@ export function ChartWorkspace({
   );
   const displayCandle =
     hoveredCandle || (visibleCandles.length > 0 ? visibleCandles[visibleCandles.length - 1] : null);
+  const displayedPricePrecision = useMemo(
+    () => candlePricePrecision(visibleCandles),
+    [visibleCandles]
+  );
   const readoutInfo: ReadoutInfo | null = useMemo(() => {
     if (!displayCandle) return null;
-    return computeReadoutInfo(displayCandle);
-  }, [displayCandle]);
+    return computeReadoutInfo(displayCandle, displayedPricePrecision);
+  }, [displayCandle, displayedPricePrecision]);
 
   const selectedDrawing = useMemo(
     () => drawings.find((drawing) => drawing.id === selectedDrawingId),
