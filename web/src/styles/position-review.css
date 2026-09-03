@@ -39,6 +39,46 @@
   background: var(--bg-dark-700);
 }
 
+.posrev-credential-block {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 8px;
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-sm);
+  background: var(--bg-dark-800);
+}
+
+.posrev-credential-block strong {
+  font-size: 12px;
+  color: var(--text-primary);
+}
+
+.posrev-exchange-badge {
+  display: inline-flex;
+  align-items: center;
+  height: 18px;
+  padding: 0 6px;
+  border-radius: 999px;
+  border: 1px solid var(--border-color);
+  background: var(--bg-dark-800);
+  color: var(--text-muted);
+  font-size: 10px;
+  font-weight: 600;
+}
+
+.posrev-exchange-badge.gate {
+  color: #22d3ee;
+  border-color: color-mix(in srgb, #22d3ee 45%, var(--border-color));
+  background: color-mix(in srgb, #22d3ee 12%, var(--bg-dark-800));
+}
+
+.posrev-exchange-badge.bitget {
+  color: #60a5fa;
+  border-color: color-mix(in srgb, #60a5fa 45%, var(--border-color));
+  background: color-mix(in srgb, #60a5fa 12%, var(--bg-dark-800));
+}
+
 .posrev-credentials p,
 .posrev-synced,
 .posrev-error {
@@ -62,7 +102,9 @@
 }
 
 .posrev-credentials input,
-.posrev-credentials button {
+.posrev-credentials button,
+.posrev-credential-block input,
+.posrev-credential-block button {
   height: 30px;
   padding: 0 8px;
   border: 1px solid var(--border-color);
@@ -123,6 +165,7 @@
 .posrev-row-sym {
   display: flex;
   align-items: center;
+  flex-wrap: wrap;
   gap: 6px;
 }
 
@@ -254,6 +297,7 @@
 .posrev-chart-header-actions {
   display: flex;
   align-items: center;
+  flex-wrap: wrap;
   gap: 8px;
   min-width: 0;
 }

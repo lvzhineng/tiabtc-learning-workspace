@@ -9,6 +9,9 @@ import ccxt
 from market_data_provider import CCXT_TIMEFRAMES
 
 
+BITGET_CANDLE_MAX_RANGE_MS = 89 * 24 * 60 * 60 * 1000
+
+
 def https_proxy_url():
     proxy = (
         os.environ.get("HTTPS_PROXY")
@@ -101,6 +104,7 @@ def parse_uta_fill(row):
     elif isinstance(fee_detail, dict):
         fee = _first_float(fee_detail.get("fee"), fee_detail.get("totalFee"))
     return {
+        "venue": "bitget",
         "execId": exec_id,
         "orderId": order_id,
         "chartSymbol": chart_symbol,
@@ -175,6 +179,15 @@ class BitgetUtaPositionProvider:
             config["httpsProxy"] = proxy
         self.exchange = ccxt.bitget(config)
         self.request_lock = threading.RLock()
+
+    def warm_up_markets(self):
+        try:
+            with self.request_lock:
+                if self.exchange.markets:
+                    return
+                self.exchange.load_markets()
+        except (ccxt.BaseError, OSError, TimeoutError, ConnectionError) as error:
+            raise RuntimeError(f"CCXT Bitget 市场信息预热失败：{error}") from error
 
     def _uta_params(self, extra=None):
         params = {"uta": True, "productType": "USDT-FUTURES"}
@@ -343,6 +356,11 @@ class BitgetUtaPositionProvider:
                 math.ceil((end_timestamp - cursor) / interval_milliseconds) + 1,
             )
             page_limit = min(200, remaining)
+            page_until = min(
+                end_timestamp,
+                cursor + (page_limit - 1) * interval_milliseconds,
+                cursor + BITGET_CANDLE_MAX_RANGE_MS,
+            )
             try:
                 with self.request_lock:
                     rows = self.exchange.fetch_ohlcv(
@@ -352,14 +370,20 @@ class BitgetUtaPositionProvider:
                         limit=page_limit,
                         params={
                             "uta": True,
-                            "until": end_timestamp,
+                            "until": page_until,
                             "category": "USDT-FUTURES",
                         },
                     )
             except (ccxt.BaseError, OSError, TimeoutError, ConnectionError) as error:
                 raise RuntimeError(f"CCXT Bitget K 线请求失败：{error}") from error
             if not rows:
-                break
+                if page_until >= end_timestamp:
+                    break
+                next_cursor = page_until + interval_milliseconds
+                if next_cursor <= cursor:
+                    break
+                cursor = next_cursor
+                continue
             received_timestamps = []
             for row in rows:
                 if len(row) < 6:
@@ -378,12 +402,22 @@ class BitgetUtaPositionProvider:
                         float(row[5]),
                     )
             if not received_timestamps:
-                break
+                if page_until >= end_timestamp:
+                    break
+                next_cursor = page_until + interval_milliseconds
+                if next_cursor <= cursor:
+                    break
+                cursor = next_cursor
+                continue
             latest_timestamp = max(received_timestamps)
-            if latest_timestamp >= end_timestamp or len(rows) < page_limit:
-                break
             next_cursor = latest_timestamp + interval_milliseconds
+            if page_until < end_timestamp:
+                next_cursor = max(next_cursor, page_until + interval_milliseconds)
+            if latest_timestamp >= end_timestamp or next_cursor > end_timestamp:
+                break
             if next_cursor <= cursor:
+                break
+            if len(rows) < page_limit and page_until >= end_timestamp:
                 break
             cursor = next_cursor
         return [

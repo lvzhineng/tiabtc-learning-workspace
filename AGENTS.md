@@ -9,7 +9,7 @@
 1. **顺序学习**：管理 TiaBTC 公开视频的学习状态，并可从视频发布时间进入行情复盘。
 2. **行情复盘**：查看 Bybit 永续合约 K 线、成交量、自由回放、持久化画图和模拟交易。
 3. **bit浪浪实盘分析**：读取导入的历史交割单，左侧选择交易，右侧显示对应 K 线、成交量和开平仓标记。
-4. **仓位复盘**：读取本机保存的 Bitget UTA 只读密钥，手动同步历史仓位与当前持仓，左侧筛选列表，右侧显示对应 K 线、开平仓标记，并支持备注与标签。
+4. **仓位复盘**：读取本机保存的 Bitget UTA / Gate 只读密钥，手动同步历史仓位与当前持仓，所有交易所仓位汇聚在同一列表，右侧显示对应 K 线、开平仓标记，并支持备注与标签。
 
 默认入口是顺序学习。项目只保留 React/Vite 前端入口，不要重新引入旧版独立 HTML 页面。不要把仓位复盘与 bit浪浪交割单、模拟交易混为一类。
 
@@ -21,7 +21,8 @@ start-workspace.cmd
        ├─ React 18 + Vite + TypeScript     http://127.0.0.1:3000
        └─ Python ThreadingHTTPServer API   http://127.0.0.1:8765
           ├─ CCXT / Bybit USDT Perpetual   （K 线主源）
-          ├─ CCXT / Bitget UTA             （仓位复盘私有账户 + K 线回退）
+          ├─ CCXT / Bitget UTA             （仓位复盘私有账户 + 非 BTC/ETH K 线）
+          ├─ CCXT / Gate USDT Perpetual    （仓位复盘私有账户 + 非 BTC/ETH K 线）
           └─ tiabtc-review.sqlite
 ```
 
@@ -30,6 +31,7 @@ start-workspace.cmd
 - 后端入口：`study_server.py`
 - Bybit 行情提供器：`market_data_provider.py`
 - Bitget 仓位/回退行情提供器：`bitget_position_provider.py`
+- Gate 仓位/回退行情提供器：`gate_position_provider.py`
 - SQLite 数据库：`tiabtc-review.sqlite`
 - 视频快照：`web/public/videos.json`
 - Bit浪浪交割单快照：`web/public/bitlang-trades.json`
@@ -48,9 +50,9 @@ Python 后端是纯 API 服务。禁止恢复项目目录静态文件服务；�
 - **OI/CVD 已退役**：不要恢复行情复盘 OI/CVD 开关、副图、`GET /api/chart/flow` 或启动预热。旧 `market_oi_*` / `market_cvd_*` 表仅作为历史兼容数据保留，不主动删除，也不再自动更新。
 - 上述三个入口的 K 线共用 `market_candles` 和 `market_cache_ranges`。
 - **仓位复盘** K 线规则：
-  - 优先 Bybit（走现有 `market_candles` / `market_cache_ranges`）；
-  - 仅当 Bybit 目录中不存在该 USDT 永续 symbol 时，才回退 Bitget；
-  - Bitget 回退 K 线写入独立表 `venue_market_candles` / `venue_market_cache_ranges`，禁止与 Bybit 缓存混写。
+  - `BTCUSDT` / `ETHUSDT` 走 Bybit（现有 `market_candles` / `market_cache_ranges`）；
+  - 其余合约走该仓位所属交易所（Bitget 或 Gate），写入独立表 `venue_market_candles` / `venue_market_cache_ranges`，禁止与 Bybit 缓存混写；
+  - 本所拉取失败且 Bybit 目录确认有该合约时，再回退 Bybit 并在响应 `warning` 中说明；前端窗口缓存 key 必须带 candle venue，避免 Bitget/Gate 同名合约混写。
 - 单次 K 线响应上限约 **3000** 根（`MAX_CANDLES_PER_RESPONSE`）。过长仓位/交易窗口截在开仓附近，响应带 `truncated`；前端窗口缓存走 `web/src/api/candle-window-cache.ts` 分片 LRU。不要为了「一次看完全程」去掉该上限。
 - SQLite 是本地行情缓存，不是独立行情源。
 - 请求时应优先读取 SQLite，只下载缺失区间，并合并相邻缓存范围。
@@ -103,22 +105,23 @@ Python 后端是纯 API 服务。禁止恢复项目目录静态文件服务；�
 - 画图按交割单 `id` 持久化到 `bitlang_trade_drawings`；刷新后仍在，切换周期保留，切换交易隔离。禁止写入 `chart_drawings` / `position_drawings`。
 - 看板时间窗按快照最晚开仓时间裁切，不要用 `Date.now()`。
 
-### 3.6 仓位复盘（Bitget UTA）
+### 3.6 仓位复盘（Bitget UTA + Gate）
 
 - 第四个顶部入口由 `AppShell.tsx` 的 `positions` tab 管理；默认入口仍是顺序学习。
 - 仓位复盘内含 **K 线复盘**与**账户看板**两个视图，不要再加第五个顶部入口。看板日记跳转到某笔仓位时，应切回 K 线并定位该仓位。
-- 仅支持 **Bitget UTA** 只读同步；CCXT 调用必须带 `uta=True`。不要实现下单、改单、撤单或任何交易写接口。
-- 密钥经 Fernet 加密后写入 `app_settings`；对称密钥文件为 `.run/credential-key`。GET 接口只返回 `configured: true/false`，**永不回传明文密钥**。
-- 同步为手动触发（`POST /api/position-review/sync`），默认拉取约 90 天已平仓 + 当前持仓；不要改成后台轮询或自动实盘跟单。
+- 支持 **Bitget UTA** 与 **Gate USDT 永续** 只读同步；Bitget CCXT 调用必须带 `uta=True`。Gate 鉴权只需 API Key + Secret（无 Passphrase）。不要实现下单、改单、撤单或任何交易写接口。
+- 两所密钥分别 Fernet 加密后写入 `app_settings`；对称密钥文件为 `.run/credential-key`。GET 接口只返回 `configured` 与 `venues.bitget/gate` 布尔值，**永不回传明文密钥**。
+- 同步为手动触发（`POST /api/position-review/sync`），对已配置的交易所各拉取约 90 天已平仓 + 当前持仓，写入同一 `exchange_positions` 列表（按 `venue` 区分）；不要改成后台轮询或自动实盘跟单。
 - 并发同步：已有同步进行中时再次 `POST /api/position-review/sync` 返回 **409**，前端提示稍后再试；不要改成排队自动重试或后台轮询。
-- `GET /api/position-review` 须在同一只读事务中组装 positions / tags / fills / balance / `configured`。
+- `GET /api/position-review` 须在同一只读事务中组装 positions / tags / fills / balance / `configured` / `venues`。
 - `GET /api/position-review/cache-audit` 只读对照 `venue_market_cache_ranges` 与实际 K 线连续性；禁止自动改写缓存范围。
 - 仓位按 `(venue, position_id)` upsert；备注与标签不因同步被覆盖。开仓合成 ID 在平仓后若能按 symbol/side/开仓时间匹配，应迁移备注/标签到交易所 `positionId`。
 - 前端仓位复盘 API 封装在 `web/src/api/position-review-api.ts`，不要在组件内直接拼私有账户请求。
 - 备注、标签、仓位-标签映射走 `/api/position-review/notes|tags|position-tags`；筛选与排序只作用于列表视图，不修改库内原始仓位行。
 - 领域对象需带 `venue`；图表 symbol 使用紧凑 USDT 形式（如 `BTCUSDT`、`INTCUSDT`）。
+- Gate 开仓杠杆优先读 `lever`，否则逐仓读 `leverage`、全仓读 `cross_leverage_limit`。已平仓历史接口不含杠杆时允许为空，并从匹配的开仓行继承。
 - 仓位画图走 `/api/position-review/drawings`，写入 `position_drawings`；禁止写入 `chart_drawings` / `bitlang_trade_drawings`。
-- v1 不做 CSV 导入、AI 分析或多交易所一夜切换；扩展其他交易所前必须单独评估 CCXT 能力与鉴权差异。
+- 不做 CSV 导入或 AI 分析；再扩展其他交易所前必须单独评估 CCXT 能力与鉴权差异。
 
 ## 4. 数据安全
 
@@ -163,7 +166,8 @@ Python 后端是纯 API 服务。禁止恢复项目目录静态文件服务；�
 | `start-workspace.ps1` | 检查依赖、启动前后端、打开指定工作台 |
 | `study_server.py` | API、SQLite 表、行情缓存、画图、模拟交易与仓位复盘持久化 |
 | `market_data_provider.py` | CCXT Bybit 行情适配、代理、限频与永续目录 |
-| `bitget_position_provider.py` | CCXT Bitget UTA 只读仓位/余额与回退 K 线 |
+| `bitget_position_provider.py` | CCXT Bitget UTA 只读仓位/余额与仓位复盘 K 线 |
+| `gate_position_provider.py` | CCXT Gate USDT 永续只读仓位/余额、杠杆与仓位复盘 K 线 |
 | `web/src/app/AppShell.tsx` | 四个工作台导航、主题和连接状态 |
 | `web/src/chart/ChartCanvas.tsx` | K 线、成交量、视口、十字线和边界加载 |
 | `web/src/chart/chart-time.ts` | 毫秒/秒边界转换和北京时间格式化 |
@@ -218,15 +222,15 @@ Python 后端是纯 API 服务。禁止恢复项目目录静态文件服务；�
 7. Bit浪浪点击交易后开平仓区间居中。
 8. Bit浪浪画图可保存；刷新后仍在；切周期仍在；切交易后加载该笔画图。
 9. 行情复盘持久化画图仍可正常读取和保存。
-10. 仓位复盘：保存只读密钥后可同步列表；点击仓位后开平仓区间居中；切换周期后重新定位。
-11. 仓位复盘：备注与标签可保存；画图按仓位持久化，刷新后仍在，切周期仍在；主流合约 K 线来源显示 Bybit，Bybit 无合约时应回退 Bitget。
+10. 仓位复盘：保存 Bitget 或 Gate 只读密钥后可同步列表；两所仓位汇聚在同一列表；点击仓位后开平仓区间居中；切换周期后重新定位。
+11. 仓位复盘：备注与标签可保存；画图按仓位持久化，刷新后仍在，切周期仍在；BTC/ETH 的 K 线来源显示 Bybit，其它合约显示该仓位所属交易所；本所失败且 Bybit 有该合约时回退 Bybit。
 12. GET `/api/position-review` 与相关接口响应中不得出现明文 API Key/Secret/Passphrase。
 13. 控制台没有未处理异常，接口错误能显示可理解的信息。
 14. 行情复盘不存在「OI / CVD」开关或副图；页面不请求 `/api/chart/flow`，服务启动时不进行 OI/CVD 预热。
 15. 仓位复盘账户看板可进入；日记跳转切回 K 线并居中。
 16. 过长 1m 仓位出现截断提示，不一次拉全历史。
 17. 同步进行中再次同步显示冲突（409），页面不被打挂。
-18. 密钥面板「审计 Bitget 回退缓存」只读、不改库。
+18. 密钥面板「审计回退缓存」只读、不改库。
 19. 全局确认框打开时后台不可操作。
 20. bit浪浪：点击交易后开平仓区间居中；复盘详情抽屉可开关；复制图表可用；画图按交易持久化，刷新后仍在。
 21. bit浪浪：本机备注/标签可保存且不覆盖交割单原始备注；看板可进入；日记跳转切回 K 线并居中。

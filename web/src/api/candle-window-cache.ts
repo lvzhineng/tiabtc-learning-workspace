@@ -23,9 +23,25 @@ let nextShardId = 1;
 function seriesKey(
   source: string,
   symbol: string,
-  interval: ReviewTimeframe
+  interval: ReviewTimeframe,
+  venue?: string | null
 ): string {
+  if (source === 'position') {
+    const candleVenue = (venue || 'bybit').toLowerCase();
+    return `${source}:${candleVenue}:${symbol}:${interval}`;
+  }
   return `${source}:${symbol}:${interval}`;
+}
+
+export function positionCandleCacheVenue(
+  symbol: string,
+  positionVenue?: string | null
+): string {
+  const compact = String(symbol || '').trim().toUpperCase();
+  if (compact === 'BTCUSDT' || compact === 'ETHUSDT') return 'bybit';
+  const venue = String(positionVenue || '').trim().toLowerCase();
+  if (venue === 'bitget' || venue === 'gate') return venue;
+  return 'bybit';
 }
 
 function lowerBound(candles: Candlestick[], timestampMs: number): number {
@@ -144,7 +160,7 @@ export function rememberCandleWindow(
   venue?: string | null
 ): void {
   if (!incoming.length) return;
-  const key = seriesKey(source, symbol, interval);
+  const key = seriesKey(source, symbol, interval, venue);
   const overlapIds = overlappingShardIds(key, incoming);
   let combined = incoming.slice();
   let combinedVenue = venue ?? null;
@@ -173,9 +189,10 @@ export function sliceCachedCandleWindow(
   interval: ReviewTimeframe,
   fromMs: number,
   toMs: number,
-  padBars = 200
+  padBars = 200,
+  venue?: string | null
 ): { candles: Candlestick[]; venue: string | null } | null {
-  const key = seriesKey(source, symbol, interval);
+  const key = seriesKey(source, symbol, interval, venue);
   const intervalMs = TIMEFRAME_SECONDS_MAP[interval] * 1000;
   const start = fromMs - intervalMs * padBars;
   const end = toMs + intervalMs * padBars;
@@ -192,10 +209,10 @@ export function sliceCachedCandleWindow(
   if (!matching.length) return null;
 
   let merged: Candlestick[] = [];
-  let venue: string | null = null;
+  let resolvedVenue: string | null = null;
   for (const shard of matching) {
     merged = mergeCandles(merged, shard.candles);
-    venue = venue ?? shard.venue;
+    resolvedVenue = resolvedVenue ?? shard.venue;
   }
   if (!merged.length) return null;
 
@@ -222,10 +239,11 @@ export function sliceCachedCandleWindow(
     shardCache.delete(id);
     shardCache.set(id, shard);
   }
-  return { candles: sliced, venue };
+  return { candles: sliced, venue: resolvedVenue };
 }
 
 export function candleVenueLabel(venue: string | null | undefined): string {
-  if (venue === 'bitget') return 'Bybit 无此合约，已回退 Bitget';
+  if (venue === 'bitget') return 'K 线来源 Bitget';
+  if (venue === 'gate') return 'K 线来源 Gate';
   return 'K 线来源 Bybit';
 }

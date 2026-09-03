@@ -25,6 +25,7 @@ import {
 } from './position-review-format';
 import {
   positionPnl,
+  venueLabel,
   type PositionTag,
   type ReviewPosition,
 } from './position-review-types';
@@ -202,6 +203,10 @@ export function PositionReviewPanel({
     isProfit?: boolean;
     isLoss?: boolean;
   }> = [
+    {
+      label: '交易所',
+      value: venueLabel(position.venue),
+    },
     {
       label: '方向 / 杠杆',
       value: `${position.side === 'long' ? '多头 (Long)' : '空头 (Short)'} · ${formatLeverage(position.leverage)}`,

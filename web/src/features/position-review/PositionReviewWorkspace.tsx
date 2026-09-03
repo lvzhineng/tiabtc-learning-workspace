@@ -22,8 +22,8 @@ import {
 import {
   fetchPositionReviewState,
   fetchVenueCacheAudit,
-  saveBitgetCredentials,
-  syncBitgetPositions,
+  savePositionReviewCredentials,
+  syncPositionReview,
 } from '@/api/position-review-api';
 import {
   TIMEFRAME_DISPLAY_MAP,
@@ -43,8 +43,13 @@ import {
   storedString,
   writeLocalUiState,
 } from '@/ui/persistence/local-ui-state';
-import type { PositionTag, ReviewPosition } from './position-review-types';
-import { positionPnl } from './position-review-types';
+import type {
+  PositionReviewVenues,
+  PositionTag,
+  ReviewPosition,
+  ReviewVenue,
+} from './position-review-types';
+import { positionKey, positionPnl, venueLabel } from './position-review-types';
 import { summarizePositions } from './position-stats';
 import { PositionReviewChart } from './PositionReviewChart';
 import { PositionReviewPanel } from './PositionReviewPanel';
@@ -54,7 +59,6 @@ import {
   formatNumber,
   formatRoi,
   formatShanghaiTime,
-  formatShanghaiTimeShort,
 } from './position-review-format';
 import '@/styles/bitlang.css';
 import '@/styles/position-review.css';
@@ -69,6 +73,7 @@ type StatusFilter = 'all' | 'open' | 'closed';
 type SideFilter = 'all' | 'long' | 'short';
 type SortField = 'entryTimeMs' | 'netPnl';
 type DateRangeFilter = 'all' | '1d' | '3d' | '7d' | '30d' | '90d';
+type VenueFilter = 'all' | ReviewVenue;
 
 const DATE_RANGE_MS_MAP: Record<Exclude<DateRangeFilter, 'all'>, number> = {
   '1d': 1 * 24 * 60 * 60 * 1000,
@@ -82,6 +87,7 @@ type PositionReviewUiState = {
   search: string;
   dateRange: DateRangeFilter;
   symbolFilter: string;
+  venueFilter: VenueFilter;
   side: SideFilter;
   status: StatusFilter;
   result: ResultFilter;
@@ -115,6 +121,11 @@ function loadPositionReviewUiState(): PositionReviewUiState {
       '90d',
     ]) as DateRangeFilter,
     symbolFilter: storedString(stored.symbolFilter, 'all', undefined, 40),
+    venueFilter: storedString(stored.venueFilter, 'all', [
+      'all',
+      'bitget',
+      'gate',
+    ]) as VenueFilter,
     side: storedString(stored.side, 'all', [
       'all',
       'long',
@@ -161,11 +172,25 @@ function timeframeLabel(timeframe: ReviewTimeframe): string {
   return TIMEFRAME_DISPLAY_MAP[timeframe];
 }
 
+function matchesSelectedId(
+  position: ReviewPosition,
+  selectedId: string | null
+): boolean {
+  if (!selectedId) return false;
+  return (
+    positionKey(position) === selectedId || position.positionId === selectedId
+  );
+}
+
 export function PositionReviewWorkspace({
   themeMode = 'dark',
 }: PositionReviewWorkspaceProps) {
   const [initialUiState] = useState(loadPositionReviewUiState);
   const [configured, setConfigured] = useState(false);
+  const [venues, setVenues] = useState<PositionReviewVenues>({
+    bitget: false,
+    gate: false,
+  });
   const [syncedAt, setSyncedAt] = useState<string | null>(null);
   const [balanceTotal, setBalanceTotal] = useState<number | null>(null);
   const [positions, setPositions] = useState<ReviewPosition[]>([]);
@@ -174,10 +199,12 @@ export function PositionReviewWorkspace({
   const [syncing, setSyncing] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [showCredentials, setShowCredentials] = useState(false);
-  const [apiKey, setApiKey] = useState('');
-  const [secret, setSecret] = useState('');
-  const [passphrase, setPassphrase] = useState('');
-  const [savingCredentials, setSavingCredentials] = useState(false);
+  const [bitgetApiKey, setBitgetApiKey] = useState('');
+  const [bitgetSecret, setBitgetSecret] = useState('');
+  const [bitgetPassphrase, setBitgetPassphrase] = useState('');
+  const [gateApiKey, setGateApiKey] = useState('');
+  const [gateSecret, setGateSecret] = useState('');
+  const [savingVenue, setSavingVenue] = useState<ReviewVenue | null>(null);
   const [auditingCache, setAuditingCache] = useState(false);
 
   const [search, setSearch] = useState(initialUiState.search);
@@ -186,6 +213,9 @@ export function PositionReviewWorkspace({
     initialUiState.dateRange
   );
   const [symbolFilter, setSymbolFilter] = useState(initialUiState.symbolFilter);
+  const [venueFilter, setVenueFilter] = useState<VenueFilter>(
+    initialUiState.venueFilter
+  );
   const [side, setSide] = useState<SideFilter>(initialUiState.side);
   const [status, setStatus] = useState<StatusFilter>(initialUiState.status);
   const [result, setResult] = useState<ResultFilter>(initialUiState.result);
@@ -225,6 +255,7 @@ export function PositionReviewWorkspace({
     search,
     dateRange,
     symbolFilter,
+    venueFilter,
     side,
     status,
     result,
@@ -239,12 +270,17 @@ export function PositionReviewWorkspace({
   const applyState = useCallback(
     (state: {
       configured: boolean;
+      venues?: PositionReviewVenues;
       syncedAt: string | null;
       balance: { total: number | null } | null;
       positions: ReviewPosition[];
       tags: PositionTag[];
     }) => {
       setConfigured(state.configured);
+      setVenues({
+        bitget: Boolean(state.venues?.bitget),
+        gate: Boolean(state.venues?.gate),
+      });
       setSyncedAt(state.syncedAt);
       setBalanceTotal(state.balance?.total ?? null);
       setPositions(state.positions);
@@ -305,6 +341,7 @@ export function PositionReviewWorkspace({
         if (tradeTime < cutoffMs) return false;
       }
       if (symbolFilter !== 'all' && item.chartSymbol !== symbolFilter) return false;
+      if (venueFilter !== 'all' && item.venue !== venueFilter) return false;
       if (side !== 'all' && item.side !== side) return false;
       if (status !== 'all' && item.status !== status) return false;
       const pnl = positionPnl(item);
@@ -317,7 +354,7 @@ export function PositionReviewWorkspace({
         const tagNames = item.tagIds
           .map((id) => tags.find((tag) => tag.id === id)?.name || '')
           .join(' ');
-        const haystack = `${item.chartSymbol} ${item.unifiedSymbol} ${item.note} ${tagNames}`.toLowerCase();
+        const haystack = `${item.chartSymbol} ${item.unifiedSymbol} ${item.venue} ${item.note} ${tagNames}`.toLowerCase();
         if (!haystack.includes(query)) return false;
       }
       return true;
@@ -346,6 +383,7 @@ export function PositionReviewWorkspace({
     symbolFilter,
     tagFilter,
     tags,
+    venueFilter,
   ]);
 
   useEffect(() => {
@@ -361,7 +399,7 @@ export function PositionReviewWorkspace({
     safePage * PAGE_SIZE + PAGE_SIZE
   );
   const selected =
-    pageTrades.find((item) => item.positionId === selectedId) ||
+    pageTrades.find((item) => matchesSelectedId(item, selectedId)) ||
     pageTrades[0] ||
     null;
   const selectedPnl = selected ? positionPnl(selected) : 0;
@@ -375,6 +413,7 @@ export function PositionReviewWorkspace({
       search,
       dateRange,
       symbolFilter,
+      venueFilter,
       side,
       status,
       result,
@@ -411,13 +450,14 @@ export function PositionReviewWorkspace({
     symbolFilter,
     tagFilter,
     timeframe,
+    venueFilter,
     viewMode,
   ]);
 
   useEffect(() => {
     if (pendingRevealIdRef.current) return;
-    if (selected && selected.positionId !== selectedId) {
-      setSelectedId(selected.positionId);
+    if (selected && !matchesSelectedId(selected, selectedId)) {
+      setSelectedId(positionKey(selected));
     }
   }, [selected, selectedId]);
 
@@ -431,7 +471,7 @@ export function PositionReviewWorkspace({
   useEffect(() => {
     const revealId = pendingRevealIdRef.current;
     if (!revealId) return;
-    const index = filtered.findIndex((item) => item.positionId === revealId);
+    const index = filtered.findIndex((item) => matchesSelectedId(item, revealId));
     if (index < 0) return;
     setPage(Math.floor(index / PAGE_SIZE));
     setSelectedId(revealId);
@@ -443,8 +483,8 @@ export function PositionReviewWorkspace({
 
   const openPositionOnChart = useCallback((positionId: string) => {
     pendingRevealIdRef.current = positionId;
-    const visibleIndex = filteredRef.current.findIndex(
-      (item) => item.positionId === positionId
+    const visibleIndex = filteredRef.current.findIndex((item) =>
+      matchesSelectedId(item, positionId)
     );
     if (visibleIndex >= 0) {
       setPage(Math.floor(visibleIndex / PAGE_SIZE));
@@ -453,6 +493,7 @@ export function PositionReviewWorkspace({
       setSearch('');
       setDateRange('all');
       setSymbolFilter('all');
+      setVenueFilter('all');
       setSide('all');
       setStatus('all');
       setResult('all');
@@ -485,45 +526,66 @@ export function PositionReviewWorkspace({
       : timeframe;
 
   const filteredIds = useMemo(
-    () => filtered.map((item) => item.positionId),
+    () => filtered.map((item) => positionKey(item)),
     [filtered]
   );
 
   useReviewListKeyboard({
     enabled: viewMode === 'chart',
     itemIds: filteredIds,
-    selectedId: selected?.positionId,
+    selectedId: selected ? positionKey(selected) : null,
     pageSize: PAGE_SIZE,
     onSelect: selectPosition,
     onTimeframe: applyManualTimeframe,
   });
 
   useEffect(() => {
-    scrollReviewRowIntoView(listRef.current, selected?.positionId);
-  }, [page, selected?.positionId]);
+    scrollReviewRowIntoView(
+      listRef.current,
+      selected ? positionKey(selected) : null
+    );
+  }, [page, selected]);
 
   const stats = useMemo(() => summarizePositions(filtered), [filtered]);
   const syncedAtMs = syncedAt ? Date.parse(syncedAt) : NaN;
   const isSyncStale =
     Number.isFinite(syncedAtMs) && Date.now() - syncedAtMs > SYNC_STALE_MS;
 
-  const handleSaveCredentials = async () => {
-    setSavingCredentials(true);
+  const handleSaveCredentials = async (venue: ReviewVenue) => {
+    setSavingVenue(venue);
     setError(null);
     try {
-      await saveBitgetCredentials({ apiKey, secret, passphrase });
-      setApiKey('');
-      setSecret('');
-      setPassphrase('');
+      if (venue === 'bitget') {
+        await savePositionReviewCredentials({
+          venue,
+          apiKey: bitgetApiKey,
+          secret: bitgetSecret,
+          passphrase: bitgetPassphrase,
+        });
+        setBitgetApiKey('');
+        setBitgetSecret('');
+        setBitgetPassphrase('');
+        setVenues((current) => ({ ...current, bitget: true }));
+      } else {
+        await savePositionReviewCredentials({
+          venue,
+          apiKey: gateApiKey,
+          secret: gateSecret,
+        });
+        setGateApiKey('');
+        setGateSecret('');
+        setVenues((current) => ({ ...current, gate: true }));
+      }
       setConfigured(true);
-      setShowCredentials(false);
-      toast.success('Bitget 只读密钥已成功加密保存');
+      toast.success(
+        venue === 'gate' ? 'Gate 只读密钥已成功加密保存' : 'Bitget 只读密钥已成功加密保存'
+      );
     } catch (cause) {
       const errMsg = cause instanceof Error ? cause.message : '保存密钥失败';
       setError(errMsg);
       toast.error(errMsg);
     } finally {
-      setSavingCredentials(false);
+      setSavingVenue(null);
     }
   };
 
@@ -531,7 +593,7 @@ export function PositionReviewWorkspace({
     setSyncing(true);
     setError(null);
     try {
-      const state = await syncBitgetPositions();
+      const state = await syncPositionReview();
       applyState(state);
       toast.success(`同步完成，共获取 ${state.positions.length} 笔仓位`);
     } catch (cause) {
@@ -549,7 +611,7 @@ export function PositionReviewWorkspace({
       const report = await fetchVenueCacheAudit();
       if (report.inconsistentCount === 0 && !report.scanTruncated) {
         toast.success(
-          `Bitget 回退缓存只读审计通过，共 ${report.rangeCount} 条区间一致。未改库。`
+          `回退缓存只读审计通过，共 ${report.rangeCount} 条区间一致。未改库。`
         );
         return;
       }
@@ -576,7 +638,7 @@ export function PositionReviewWorkspace({
   const updateSelected = (next: ReviewPosition) => {
     setPositions((current) =>
       current.map((item) =>
-        item.positionId === next.positionId ? next : item
+        positionKey(item) === positionKey(next) ? next : item
       )
     );
   };
@@ -610,7 +672,9 @@ export function PositionReviewWorkspace({
           <div>
             <strong>仓位复盘</strong>
             <span>
-              Bitget UTA
+              {[venues.bitget && 'Bitget', venues.gate && 'Gate']
+                .filter(Boolean)
+                .join(' · ') || '未配置交易所'}
               {balanceTotal != null ? ` · ${formatNumber(balanceTotal)} USDT` : ''}
             </span>
           </div>
@@ -650,52 +714,87 @@ export function PositionReviewWorkspace({
           </div>
           {showCredentials && (
             <div className="posrev-credentials">
-              <p>只需只读权限，密钥加密保存在本机，不会回传到页面。</p>
-              <input
-                value={apiKey}
-                onChange={(event) => setApiKey(event.target.value)}
-                placeholder="API Key"
-                type="password"
-                autoComplete="new-password"
-                autoCapitalize="none"
-                spellCheck={false}
-              />
-              <input
-                value={secret}
-                onChange={(event) => setSecret(event.target.value)}
-                placeholder="Secret"
-                type="password"
-                autoComplete="new-password"
-                autoCapitalize="none"
-                spellCheck={false}
-              />
-              <input
-                value={passphrase}
-                onChange={(event) => setPassphrase(event.target.value)}
-                placeholder="Passphrase"
-                type="password"
-                autoComplete="new-password"
-                autoCapitalize="none"
-                spellCheck={false}
-              />
-              <button
-                type="button"
-                onClick={() => void handleSaveCredentials()}
-                disabled={
-                  savingCredentials ||
-                  !apiKey.trim() ||
-                  !secret.trim() ||
-                  !passphrase.trim()
-                }
-              >
-                {savingCredentials ? '保存中' : '保存密钥'}
-              </button>
+              <p>只需只读权限。Bitget 与 Gate 可同时保存，同步后仓位会汇聚到同一列表。密钥加密保存在本机，不会回传到页面。</p>
+              <div className="posrev-credential-block">
+                <strong>Bitget UTA{venues.bitget ? ' · 已配置' : ''}</strong>
+                <input
+                  value={bitgetApiKey}
+                  onChange={(event) => setBitgetApiKey(event.target.value)}
+                  placeholder="API Key"
+                  type="password"
+                  autoComplete="new-password"
+                  autoCapitalize="none"
+                  spellCheck={false}
+                />
+                <input
+                  value={bitgetSecret}
+                  onChange={(event) => setBitgetSecret(event.target.value)}
+                  placeholder="Secret"
+                  type="password"
+                  autoComplete="new-password"
+                  autoCapitalize="none"
+                  spellCheck={false}
+                />
+                <input
+                  value={bitgetPassphrase}
+                  onChange={(event) => setBitgetPassphrase(event.target.value)}
+                  placeholder="Passphrase"
+                  type="password"
+                  autoComplete="new-password"
+                  autoCapitalize="none"
+                  spellCheck={false}
+                />
+                <button
+                  type="button"
+                  onClick={() => void handleSaveCredentials('bitget')}
+                  disabled={
+                    savingVenue !== null ||
+                    !bitgetApiKey.trim() ||
+                    !bitgetSecret.trim() ||
+                    !bitgetPassphrase.trim()
+                  }
+                >
+                  {savingVenue === 'bitget' ? '保存中' : '保存 Bitget 密钥'}
+                </button>
+              </div>
+              <div className="posrev-credential-block">
+                <strong>Gate USDT 永续{venues.gate ? ' · 已配置' : ''}</strong>
+                <input
+                  value={gateApiKey}
+                  onChange={(event) => setGateApiKey(event.target.value)}
+                  placeholder="API Key"
+                  type="password"
+                  autoComplete="new-password"
+                  autoCapitalize="none"
+                  spellCheck={false}
+                />
+                <input
+                  value={gateSecret}
+                  onChange={(event) => setGateSecret(event.target.value)}
+                  placeholder="Secret"
+                  type="password"
+                  autoComplete="new-password"
+                  autoCapitalize="none"
+                  spellCheck={false}
+                />
+                <button
+                  type="button"
+                  onClick={() => void handleSaveCredentials('gate')}
+                  disabled={
+                    savingVenue !== null ||
+                    !gateApiKey.trim() ||
+                    !gateSecret.trim()
+                  }
+                >
+                  {savingVenue === 'gate' ? '保存中' : '保存 Gate 密钥'}
+                </button>
+              </div>
               <button
                 type="button"
                 onClick={() => void handleCacheAudit()}
                 disabled={auditingCache}
               >
-                {auditingCache ? '审计中' : '审计 Bitget 回退缓存'}
+                {auditingCache ? '审计中' : '审计回退缓存'}
               </button>
             </div>
           )}
@@ -774,6 +873,24 @@ export function PositionReviewWorkspace({
               onClick={() => setNoTag((value) => !value)}
             >
               未打标
+            </button>
+            <button
+              type="button"
+              className={venueFilter === 'bitget' ? 'active' : ''}
+              onClick={() =>
+                setVenueFilter((value) => (value === 'bitget' ? 'all' : 'bitget'))
+              }
+            >
+              Bitget
+            </button>
+            <button
+              type="button"
+              className={venueFilter === 'gate' ? 'active' : ''}
+              onClick={() =>
+                setVenueFilter((value) => (value === 'gate' ? 'all' : 'gate'))
+              }
+            >
+              Gate
             </button>
           </div>
           <div className="bitlang-filter-row">
@@ -889,7 +1006,7 @@ export function PositionReviewWorkspace({
             const showClosedHeader =
               item.status !== 'open' && (!prev || prev.status === 'open');
             return (
-              <div key={item.positionId}>
+              <div key={positionKey(item)}>
                 {showOpenHeader && (
                   <div className="review-list-section">持仓中</div>
                 )}
@@ -898,18 +1015,21 @@ export function PositionReviewWorkspace({
                 )}
               <button
                 type="button"
-                data-review-id={item.positionId}
+                data-review-id={positionKey(item)}
                 className={`bitlang-trade-row posrev-trade-row ${
-                  item.positionId === selected?.positionId ? 'active' : ''
+                  selected && positionKey(item) === positionKey(selected) ? 'active' : ''
                 }`}
                 onClick={() => {
-                  setSelectedId(item.positionId);
+                  setSelectedId(positionKey(item));
                   setFocusRevision((revision) => revision + 1);
                 }}
               >
                 <div className="posrev-row-top">
                   <div className="posrev-row-sym">
                     <strong>{item.chartSymbol}</strong>
+                    <span className={`posrev-exchange-badge ${item.venue}`}>
+                      {venueLabel(item.venue)}
+                    </span>
                     <span className={`posrev-side-badge ${item.side}`}>
                       {item.side === 'long' ? '多' : '空'}
                       {item.leverage ? ` ${Math.round(item.leverage)}x` : ''}
@@ -919,7 +1039,7 @@ export function PositionReviewWorkspace({
                     )}
                   </div>
                   <span className="posrev-row-time">
-                    {formatShanghaiTimeShort(item.entryTimeMs)}
+                    {formatShanghaiTime(item.entryTimeMs)}
                   </span>
                 </div>
 
@@ -1005,7 +1125,9 @@ export function PositionReviewWorkspace({
             onNoteUpdated={(positionId, note) => {
               setPositions((current) =>
                 current.map((item) =>
-                  item.positionId === positionId ? { ...item, note } : item
+                  matchesSelectedId(item, positionId)
+                    ? { ...item, note }
+                    : item
                 )
               );
             }}
@@ -1020,6 +1142,9 @@ export function PositionReviewWorkspace({
               <div>
                 <div className="posrev-chart-title">
                   <h2>{selected.chartSymbol}</h2>
+                  <span className={`posrev-exchange-badge ${selected.venue}`}>
+                    {venueLabel(selected.venue)}
+                  </span>
                   <span className={`posrev-side-badge ${selected.side}`}>
                     {selected.side === 'long' ? '多' : '空'}
                     {selected.leverage ? ` ${Math.round(selected.leverage)}x` : ''}
@@ -1121,7 +1246,7 @@ export function PositionReviewWorkspace({
                 </header>
                 <div className="posrev-detail-drawer-body">
                   <PositionReviewPanel
-                    key={selected.positionId}
+                    key={positionKey(selected)}
                     position={selected}
                     tags={tags}
                     onChange={updateSelected}
@@ -1134,7 +1259,9 @@ export function PositionReviewWorkspace({
           </>
         ) : (
           <div className="bitlang-state">
-            {configured ? '没有符合筛选条件的仓位。' : '先保存 Bitget 只读密钥，再点同步。'}
+            {configured
+              ? '没有符合筛选条件的仓位。'
+              : '先保存 Bitget 或 Gate 只读密钥，再点同步。'}
           </div>
         )}
       </section>

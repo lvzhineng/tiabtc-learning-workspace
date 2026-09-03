@@ -112,23 +112,30 @@ class DrawingStorageTests(unittest.TestCase):
         self.assertFalse(study_server.cached_range_contains("BTCUSDT", "60", 900, 3800))
         self.assertFalse(study_server.cached_range_contains("BTCUSDT", "60", 1200, 4100))
 
-    def test_position_review_prefers_bybit_until_catalog_confirms_absence(self):
-        with mock.patch.object(
-            study_server.MARKET_DATA_PROVIDER,
-            "usdt_perpetual_presence",
-            return_value="unknown",
-        ):
-            self.assertEqual(
-                study_server.resolve_position_candle_venue("BTCUSDT"),
-                "bybit",
-            )
+    def test_position_review_candles_use_bybit_only_for_btc_eth(self):
         with mock.patch.object(
             study_server.MARKET_DATA_PROVIDER,
             "usdt_perpetual_presence",
             return_value="present",
         ):
             self.assertEqual(
-                study_server.resolve_position_candle_venue("INTCUSDT"),
+                study_server.resolve_position_candle_venue("BTCUSDT", "gate"),
+                "bybit",
+            )
+            self.assertEqual(
+                study_server.resolve_position_candle_venue("ETHUSDT", "bitget"),
+                "bybit",
+            )
+            self.assertEqual(
+                study_server.resolve_position_candle_venue("ETHFIUSDT", "gate"),
+                "gate",
+            )
+            self.assertEqual(
+                study_server.resolve_position_candle_venue("INTCUSDT", "bitget"),
+                "bitget",
+            )
+            self.assertEqual(
+                study_server.resolve_position_candle_venue("ARBUSDT"),
                 "bybit",
             )
         with mock.patch.object(
@@ -140,6 +147,39 @@ class DrawingStorageTests(unittest.TestCase):
                 study_server.resolve_position_candle_venue("SHIBUSDT"),
                 "bitget",
             )
+
+    def test_position_review_falls_back_to_bybit_when_venue_fetch_fails(self):
+        bybit_row = {
+            "timestamp": 1_700_000_000_000,
+            "open": 1,
+            "high": 1,
+            "low": 1,
+            "close": 1,
+            "volume": 1,
+        }
+        with mock.patch.object(
+            study_server,
+            "load_venue_candle_range",
+            return_value=([], "sqlite", "Gate K 线请求失败"),
+        ), mock.patch.object(
+            study_server.MARKET_DATA_PROVIDER,
+            "usdt_perpetual_presence",
+            return_value="present",
+        ), mock.patch.object(
+            study_server,
+            "load_candle_range",
+            return_value=([bybit_row], "bybit", ""),
+        ):
+            payload = study_server.load_position_review_candles(
+                "ARBUSDT",
+                "15",
+                1_700_000_000_000,
+                1_700_000_900_000,
+                "gate",
+            )
+        self.assertEqual(payload["candleVenue"], "bybit")
+        self.assertEqual(payload["candles"], [bybit_row])
+        self.assertIn("已回退 Bybit", payload["warning"])
 
     def test_bybit_presence_is_unknown_before_catalog_loads(self):
         from market_data_provider import CcxtBybitMarketDataProvider
@@ -847,7 +887,9 @@ class PositionReviewStorageTests(unittest.TestCase):
             }
         )
         with study_server.DATABASE_LOCK, study_server.database() as connection:
-            study_server._delete_unannotated_stale_open_positions(connection, set())
+            study_server._delete_unannotated_stale_open_positions(
+                connection, "bitget", set()
+            )
             remaining = {
                 row["position_id"]: row["status"]
                 for row in connection.execute(

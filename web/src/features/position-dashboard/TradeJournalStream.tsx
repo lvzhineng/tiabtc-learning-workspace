@@ -5,6 +5,7 @@ import {
   type PositionTag,
   type ReviewPosition,
 } from '@/api/position-review-api';
+import { positionKey, venueLabel } from '@/features/position-review/position-review-types';
 import { formatChartTime } from '@/chart/chart-time';
 import { toast } from '@/ui/feedback/toast';
 import {
@@ -84,7 +85,7 @@ export function TradeJournalStream({
   }, [page, positions.length, safePage]);
 
   const startEdit = (pos: ReviewPosition) => {
-    setEditingId(pos.positionId);
+    setEditingId(positionKey(pos));
     setDraftNote(pos.note || '');
   };
 
@@ -101,7 +102,7 @@ export function TradeJournalStream({
         positionId: pos.positionId,
         note: draftNote,
       });
-      onNoteUpdated?.(pos.positionId, draftNote);
+      onNoteUpdated?.(positionKey(pos), draftNote);
       setEditingId(null);
       toast.success('复盘笔记已保存');
     } catch (err) {
@@ -160,7 +161,7 @@ export function TradeJournalStream({
         ) : pageItems.map((pos) => {
           const pnl = positionPnl(pos);
           const isProfit = pnl >= 0;
-          const isEditing = editingId === pos.positionId;
+          const isEditing = editingId === positionKey(pos);
 
           const tradeTags = pos.tagIds
             .map((id: number) => tags.find((t: PositionTag) => t.id === id))
@@ -168,13 +169,16 @@ export function TradeJournalStream({
 
           return (
             <div
-              key={pos.positionId}
+              key={positionKey(pos)}
               className={`posdash-journal-card ${isProfit ? 'profit-border' : 'loss-border'}`}
             >
               {/* 卡片头部 */}
               <div className="posdash-journal-card-header">
                 <div className="posdash-journal-identity">
                   <span className="posdash-journal-symbol">{pos.chartSymbol}</span>
+                  <span className={`posrev-exchange-badge ${pos.venue}`}>
+                    {venueLabel(pos.venue)}
+                  </span>
                   <span
                     className={`posrev-side-badge ${pos.side}`}
                     style={{ fontSize: 10, padding: '1px 6px', fontWeight: 600 }}
@@ -286,7 +290,7 @@ export function TradeJournalStream({
                     <button
                       type="button"
                       className="posdash-journal-action-btn highlight"
-                      onClick={() => onNavigateToPosition(pos.positionId)}
+                      onClick={() => onNavigateToPosition(positionKey(pos))}
                       title="在仓位复盘中查看对应 K 线与开平仓位"
                     >
                       <ExternalLink size={12} />

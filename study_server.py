@@ -16,7 +16,12 @@ from urllib.parse import parse_qs, unquote, urlparse
 
 from cryptography.fernet import Fernet, InvalidToken
 
-from bitget_position_provider import BitgetUtaPositionProvider, classify_fill_role
+from bitget_position_provider import (
+    BITGET_CANDLE_MAX_RANGE_MS,
+    BitgetUtaPositionProvider,
+    classify_fill_role,
+)
+from gate_position_provider import GateUsdtPositionProvider
 from market_data_provider import CcxtBybitMarketDataProvider
 
 
@@ -83,6 +88,8 @@ MARKET_REFRESHING = set()
 RUN_DIR = ROOT / ".run"
 CREDENTIAL_KEY_FILE = RUN_DIR / "credential-key"
 POSITION_REVIEW_VENUE = "bitget"
+POSITION_REVIEW_VENUES = ("bitget", "gate")
+POSITION_REVIEW_BYBIT_CANDLE_SYMBOLS = frozenset({"BTCUSDT", "ETHUSDT"})
 FILL_MATCH_PAD_MS = 2000
 TAG_COLORS = ("#3b82f6", "#10b981", "#f59e0b", "#ef4444", "#8b5cf6", "#14b8a6")
 BITLANG_TRADE_ID_RE = re.compile(r"^[0-9a-f]{64}$")
@@ -92,11 +99,13 @@ CACHE_AUDIT_MAX_CANDLES_PER_RANGE = 20000
 
 
 class SyncInProgressError(RuntimeError):
-    """Rejected a concurrent Bitget position-review sync."""
+    """Rejected a concurrent position-review sync."""
 
 
 VENUE_MARKET_FETCH_LOCKS = {}
 VENUE_MARKET_FETCH_FAILURES = {}
+VENUE_POSITION_PROVIDERS = {}
+VENUE_POSITION_PROVIDERS_LOCK = threading.Lock()
 
 
 def _load_state_unlocked():
@@ -1102,6 +1111,7 @@ def warm_up_market_provider():
         print("[market] CCXT Bybit 市场信息预热完成", flush=True)
     except RuntimeError as error:
         print(f"[market] {error}", flush=True)
+    warm_up_venue_market_providers()
 
 
 def schedule_candle_refresh(symbol, interval, start_timestamp, end_timestamp):
@@ -2309,6 +2319,7 @@ def save_bitget_credentials(payload):
             "ON CONFLICT(key) DO UPDATE SET value = excluded.value",
             encrypted,
         )
+    _invalidate_venue_provider("bitget")
     return {"configured": True}
 
 
@@ -2333,6 +2344,79 @@ def load_bitget_credentials():
         "secret": _decrypt_secret(secret),
         "password": _decrypt_secret(passphrase),
     }
+
+
+def gate_credentials_configured():
+    return bool(
+        _app_setting("gate_api_key_enc") and _app_setting("gate_api_secret_enc")
+    )
+
+
+def save_gate_credentials(payload):
+    if not isinstance(payload, dict):
+        raise ValueError("密钥格式无效")
+    api_key = str(payload.get("apiKey") or "").strip()
+    secret = str(payload.get("secret") or "").strip()
+    if not api_key or not secret:
+        raise ValueError("需要 API Key 和 Secret")
+    if len(api_key) > 200 or len(secret) > 200:
+        raise ValueError("密钥长度超出限制")
+    encrypted = (
+        ("gate_api_key_enc", _encrypt_secret(api_key)),
+        ("gate_api_secret_enc", _encrypt_secret(secret)),
+    )
+    with CREDENTIAL_LOCK, DATABASE_LOCK, database() as connection:
+        connection.executemany(
+            "INSERT INTO app_settings (key, value) VALUES (?, ?) "
+            "ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+            encrypted,
+        )
+    _invalidate_venue_provider("gate")
+    return {"configured": True, "venue": "gate"}
+
+
+def load_gate_credentials():
+    with DATABASE_LOCK, database() as connection:
+        rows = connection.execute(
+            "SELECT key, value FROM app_settings WHERE key IN (?, ?)",
+            ("gate_api_key_enc", "gate_api_secret_enc"),
+        ).fetchall()
+    values = {row["key"]: row["value"] for row in rows}
+    api_key = values.get("gate_api_key_enc")
+    secret = values.get("gate_api_secret_enc")
+    if not api_key or not secret:
+        raise ValueError("尚未配置 Gate 只读 API")
+    return {
+        "apiKey": _decrypt_secret(api_key),
+        "secret": _decrypt_secret(secret),
+    }
+
+
+def save_position_review_credentials(payload):
+    if not isinstance(payload, dict):
+        raise ValueError("密钥格式无效")
+    venue = str(payload.get("venue") or POSITION_REVIEW_VENUE).strip().lower()
+    if venue == "bitget":
+        result = save_bitget_credentials(payload)
+        result["venue"] = "bitget"
+        return result
+    if venue == "gate":
+        return save_gate_credentials(payload)
+    raise ValueError("不支持的交易所")
+
+
+def position_review_configured():
+    return bitget_credentials_configured() or gate_credentials_configured()
+
+
+def _later_timestamp(*values):
+    latest = None
+    for value in values:
+        if not value:
+            continue
+        if latest is None or str(value) > str(latest):
+            latest = value
+    return latest
 
 
 def _upsert_exchange_position(connection, position, synced_at):
@@ -2490,7 +2574,7 @@ def _upsert_position_fill(connection, fill, synced_at):
              time_ms = excluded.time_ms,
              synced_at = excluded.synced_at""",
         (
-            POSITION_REVIEW_VENUE,
+            fill.get("venue") or POSITION_REVIEW_VENUE,
             fill["execId"],
             fill.get("orderId"),
             fill["chartSymbol"],
@@ -2509,6 +2593,7 @@ def _upsert_position_fill(connection, fill, synced_at):
 
 def _fill_from_row(row):
     return {
+        "venue": row["venue"] if "venue" in row.keys() else None,
         "execId": row["exec_id"],
         "orderId": row["order_id"],
         "chartSymbol": row["chart_symbol"],
@@ -2592,6 +2677,10 @@ def assign_fills_to_positions(positions, fills):
         if fill_time is None:
             continue
         for position in positions_by_symbol.get(fill.get("chartSymbol"), []):
+            fill_venue = fill.get("venue")
+            position_venue = position.get("venue")
+            if fill_venue and position_venue and fill_venue != position_venue:
+                continue
             entry_ms = position.get("entryTimeMs")
             if entry_ms is None:
                 continue
@@ -2664,11 +2753,11 @@ def assign_fills_to_positions(positions, fills):
     return assigned
 
 
-def _delete_unannotated_stale_open_positions(connection, active_position_ids):
+def _delete_unannotated_stale_open_positions(connection, venue, active_position_ids):
     stale_open = connection.execute(
         """SELECT position_id FROM exchange_positions
            WHERE venue = ? AND status = 'open'""",
-        (POSITION_REVIEW_VENUE,),
+        (venue,),
     ).fetchall()
     for row in stale_open:
         position_id = row["position_id"]
@@ -2689,11 +2778,11 @@ def _delete_unannotated_stale_open_positions(connection, active_position_ids):
                    WHERE venue = ? AND position_id = ?
                  )""",
             (
-                POSITION_REVIEW_VENUE,
+                venue,
                 position_id,
-                POSITION_REVIEW_VENUE,
+                venue,
                 position_id,
-                POSITION_REVIEW_VENUE,
+                venue,
                 position_id,
             ),
         ).fetchone()[0]
@@ -2701,84 +2790,177 @@ def _delete_unannotated_stale_open_positions(connection, active_position_ids):
             connection.execute(
                 """UPDATE exchange_positions SET status = 'stale'
                    WHERE venue = ? AND position_id = ?""",
-                (POSITION_REVIEW_VENUE, position_id),
+                (venue, position_id),
             )
             continue
         connection.execute(
             "DELETE FROM exchange_positions WHERE venue = ? AND position_id = ?",
-            (POSITION_REVIEW_VENUE, position_id),
+            (venue, position_id),
         )
 
 
-def sync_bitget_positions():
+def sync_position_review():
     if not POSITION_SYNC_LOCK.acquire(blocking=False):
         raise SyncInProgressError("仓位同步正在进行，请稍后再试")
     try:
-        return _sync_bitget_positions()
+        return _sync_position_review()
     finally:
         POSITION_SYNC_LOCK.release()
 
 
-def _sync_bitget_positions():
-    credentials = load_bitget_credentials()
-    provider = BitgetUtaPositionProvider(
-        credentials["apiKey"],
-        credentials["secret"],
-        credentials["password"],
-    )
-    now_ms = int(time.time() * 1000)
+def sync_bitget_positions():
+    return sync_position_review()
+
+
+def _fetch_closed_and_fills(fetch_closed, fetch_fills, now_ms):
     window_ms = 30 * 24 * 60 * 60 * 1000
     closed = []
     seen_ids = set()
     for index in range(3):
         until_ms = now_ms - index * window_ms
         since_ms = until_ms - window_ms
-        for position in provider.fetch_closed_positions(since_ms, until_ms):
+        for position in fetch_closed(since_ms, until_ms):
             if position["positionId"] in seen_ids:
                 continue
             seen_ids.add(position["positionId"])
             closed.append(position)
-    opened = provider.fetch_open_positions()
-    open_ids = {item["positionId"] for item in opened}
-    balance = provider.fetch_balance_usdt()
     fills = []
     fills_ok = True
     try:
         for index in range(3):
             until_ms = now_ms - index * window_ms
             since_ms = until_ms - window_ms
-            fills.extend(provider.fetch_fills(since_ms, until_ms))
+            fills.extend(fetch_fills(since_ms, until_ms))
     except RuntimeError as error:
         fills_ok = False
         print(f"[position-review] 成交明细同步失败，保留已有成交：{error}", flush=True)
-    synced_at = datetime.now().astimezone().isoformat()
-    with DATABASE_LOCK, database() as connection:
-        for position in closed:
-            _migrate_open_annotations(connection, position, closed)
-            _upsert_exchange_position(connection, position, synced_at)
-        _delete_unannotated_stale_open_positions(connection, open_ids)
-        for position in opened:
-            _upsert_exchange_position(connection, position, synced_at)
-        if fills_ok:
-            for fill in fills:
-                _upsert_position_fill(connection, fill, synced_at)
-        connection.execute(
-            "INSERT INTO app_settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
-            ("bitget_last_synced_at", synced_at),
+    return closed, fills, fills_ok
+
+
+def _persist_venue_sync(connection, venue, closed, opened, fills, fills_ok, synced_at, balance_key, balance_total):
+    open_ids = {item["positionId"] for item in opened}
+    for position in closed:
+        _migrate_open_annotations(connection, position, closed)
+        _upsert_exchange_position(connection, position, synced_at)
+    _delete_unannotated_stale_open_positions(connection, venue, open_ids)
+    for position in opened:
+        _upsert_exchange_position(connection, position, synced_at)
+    if fills_ok:
+        for fill in fills:
+            _upsert_position_fill(connection, fill, synced_at)
+    connection.execute(
+        "INSERT INTO app_settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+        (f"{venue}_last_synced_at", synced_at),
+    )
+    connection.execute(
+        "INSERT INTO app_settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+        (balance_key, json.dumps(balance_total)),
+    )
+
+
+def _sync_bitget_snapshot(now_ms):
+    provider = venue_position_provider("bitget")
+    closed, fills, fills_ok = _fetch_closed_and_fills(
+        provider.fetch_closed_positions,
+        provider.fetch_fills,
+        now_ms,
+    )
+    opened = provider.fetch_open_positions()
+    balance = provider.fetch_balance_usdt()
+    return closed, opened, fills, fills_ok, balance
+
+
+def _sync_gate_snapshot(now_ms):
+    provider = venue_position_provider("gate")
+    closed, fills, fills_ok = _fetch_closed_and_fills(
+        provider.fetch_closed_positions,
+        provider.fetch_fills,
+        now_ms,
+    )
+    opened = provider.fetch_open_positions()
+    balance = provider.fetch_balance_usdt()
+    return closed, opened, fills, fills_ok, balance
+
+
+def _sync_position_review():
+    bitget_ready = bitget_credentials_configured()
+    gate_ready = gate_credentials_configured()
+    if not bitget_ready and not gate_ready:
+        raise ValueError("尚未配置只读 API")
+    now_ms = int(time.time() * 1000)
+    snapshots = []
+    if bitget_ready:
+        closed, opened, fills, fills_ok, balance = _sync_bitget_snapshot(now_ms)
+        snapshots.append(
+            {
+                "venue": "bitget",
+                "closed": closed,
+                "opened": opened,
+                "fills": fills,
+                "fillsOk": fills_ok,
+                "balance": balance,
+                "balanceKey": "bitget_usdt_total",
+            }
         )
+    if gate_ready:
+        closed, opened, fills, fills_ok, balance = _sync_gate_snapshot(now_ms)
+        snapshots.append(
+            {
+                "venue": "gate",
+                "closed": closed,
+                "opened": opened,
+                "fills": fills,
+                "fillsOk": fills_ok,
+                "balance": balance,
+                "balanceKey": "gate_usdt_total",
+            }
+        )
+    synced_at = datetime.now().astimezone().isoformat()
+    closed_count = 0
+    open_count = 0
+    with DATABASE_LOCK, database() as connection:
+        for snapshot in snapshots:
+            _persist_venue_sync(
+                connection,
+                snapshot["venue"],
+                snapshot["closed"],
+                snapshot["opened"],
+                snapshot["fills"],
+                snapshot["fillsOk"],
+                synced_at,
+                snapshot["balanceKey"],
+                snapshot["balance"].get("total"),
+            )
+            closed_count += len(snapshot["closed"])
+            open_count += len(snapshot["opened"])
         connection.execute(
             "INSERT INTO app_settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
-            ("bitget_usdt_total", json.dumps(balance.get("total"))),
+            ("position_review_last_synced_at", synced_at),
         )
     return {
         "configured": True,
         "syncedAt": synced_at,
-        "closedCount": len(closed),
-        "openCount": len(opened),
-        "balance": balance,
+        "closedCount": closed_count,
+        "openCount": open_count,
+        "balance": _combined_balance([item["balance"] for item in snapshots]),
+        "venues": {
+            "bitget": bitget_ready,
+            "gate": gate_ready,
+        },
         "positions": list_position_review(),
         "tags": list_position_tags(),
     }
+
+
+def _combined_balance(balances):
+    totals = [
+        item.get("total")
+        for item in balances or []
+        if isinstance(item, dict) and item.get("total") is not None
+    ]
+    if not totals:
+        return None
+    return {"total": sum(totals)}
 
 
 def _read_position_tags(connection):
@@ -3204,12 +3386,10 @@ def _read_position_review(connection):
            ORDER BY COALESCE(p.exit_time_ms, p.entry_time_ms) DESC"""
     ).fetchall()
     fill_rows = connection.execute(
-        """SELECT exec_id, order_id, chart_symbol, unified_symbol, side, trade_side,
+        """SELECT venue, exec_id, order_id, chart_symbol, unified_symbol, side, trade_side,
                   price, quantity, pnl, fee, time_ms
            FROM position_fills
-           WHERE venue = ?
-           ORDER BY time_ms ASC""",
-        (POSITION_REVIEW_VENUE,),
+           ORDER BY time_ms ASC"""
     ).fetchall()
     positions = []
     for row in rows:
@@ -3260,44 +3440,79 @@ def get_position_review_state():
             row["key"]: row["value"]
             for row in connection.execute(
                 """SELECT key, value FROM app_settings
-                   WHERE key IN (?, ?, ?, ?, ?)""",
+                   WHERE key IN (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                 (
                     "bitget_api_key_enc",
                     "bitget_api_secret_enc",
                     "bitget_api_passphrase_enc",
                     "bitget_last_synced_at",
                     "bitget_usdt_total",
+                    "gate_api_key_enc",
+                    "gate_api_secret_enc",
+                    "gate_last_synced_at",
+                    "gate_usdt_total",
+                    "position_review_last_synced_at",
                 ),
             ).fetchall()
         }
         positions = _read_position_review(connection)
         tags = _read_position_tags(connection)
-    usdt_raw = settings.get("bitget_usdt_total")
-    usdt_total = None
-    if usdt_raw not in (None, ""):
+
+    def _parse_usdt(raw):
+        if raw in (None, ""):
+            return None
         try:
-            usdt_total = json.loads(usdt_raw)
+            return json.loads(raw)
         except json.JSONDecodeError:
-            usdt_total = None
+            return None
+
+    bitget_configured = bool(
+        settings.get("bitget_api_key_enc")
+        and settings.get("bitget_api_secret_enc")
+        and settings.get("bitget_api_passphrase_enc")
+    )
+    gate_configured = bool(
+        settings.get("gate_api_key_enc") and settings.get("gate_api_secret_enc")
+    )
+    bitget_total = _parse_usdt(settings.get("bitget_usdt_total"))
+    gate_total = _parse_usdt(settings.get("gate_usdt_total"))
+    combined = _combined_balance(
+        [
+            {"total": bitget_total} if bitget_total is not None else {},
+            {"total": gate_total} if gate_total is not None else {},
+        ]
+    )
     return {
-        "configured": bool(
-            settings.get("bitget_api_key_enc")
-            and settings.get("bitget_api_secret_enc")
-            and settings.get("bitget_api_passphrase_enc")
+        "configured": bitget_configured or gate_configured,
+        "venues": {
+            "bitget": bitget_configured,
+            "gate": gate_configured,
+        },
+        "syncedAt": _later_timestamp(
+            settings.get("position_review_last_synced_at"),
+            settings.get("bitget_last_synced_at"),
+            settings.get("gate_last_synced_at"),
         ),
-        "syncedAt": settings.get("bitget_last_synced_at"),
-        "balance": {"total": usdt_total} if usdt_total is not None else None,
+        "balance": combined,
+        "balances": {
+            "bitget": {"total": bitget_total} if bitget_total is not None else None,
+            "gate": {"total": gate_total} if gate_total is not None else None,
+        },
         "positions": positions,
         "tags": tags,
     }
 
 
-def resolve_position_candle_venue(symbol):
-    # Prefer CCXT Bybit whenever the compact USDT perpetual exists there.
-    # Only fall back to Bitget after the Bybit catalog has loaded and the
-    # symbol is confirmed missing. An unloaded catalog must not send BTCUSDT
-    # etc. to Bitget.
-    presence = MARKET_DATA_PROVIDER.usdt_perpetual_presence(symbol)
+def resolve_position_candle_venue(symbol, preferred_venue=None):
+    # 仓位复盘：BTCUSDT / ETHUSDT 固定走 Bybit；其余走该仓位所属交易所。
+    # 未带 venue 时仍按 Bybit 目录决定，避免把主流合约误送到本所。
+    compact = str(symbol or "").strip().upper()
+    preferred = str(preferred_venue or "").strip().lower()
+    if compact in POSITION_REVIEW_BYBIT_CANDLE_SYMBOLS:
+        return "bybit"
+    if preferred in POSITION_REVIEW_VENUES:
+        return preferred
+    presence = MARKET_DATA_PROVIDER.usdt_perpetual_presence(compact)
     if presence == "absent":
         return "bitget"
     return "bybit"
@@ -3433,8 +3648,57 @@ def list_venue_candles(venue, symbol, interval, start_timestamp, end_timestamp):
     ]
 
 
-def load_bitget_candle_range(symbol, interval, start_timestamp, end_timestamp):
-    venue = "bitget"
+def _invalidate_venue_provider(venue):
+    with VENUE_POSITION_PROVIDERS_LOCK:
+        VENUE_POSITION_PROVIDERS.pop(venue, None)
+
+
+def venue_position_provider(venue):
+    if venue not in POSITION_REVIEW_VENUES:
+        venue = "bitget"
+    with VENUE_POSITION_PROVIDERS_LOCK:
+        cached = VENUE_POSITION_PROVIDERS.get(venue)
+        if cached is not None:
+            return cached
+        if venue == "gate":
+            credentials = load_gate_credentials()
+            provider = GateUsdtPositionProvider(
+                credentials["apiKey"],
+                credentials["secret"],
+            )
+        else:
+            credentials = load_bitget_credentials()
+            provider = BitgetUtaPositionProvider(
+                credentials["apiKey"],
+                credentials["secret"],
+                credentials["password"],
+            )
+        VENUE_POSITION_PROVIDERS[venue] = provider
+        return provider
+
+
+def warm_up_venue_market_providers():
+    if gate_credentials_configured():
+        try:
+            venue_position_provider("gate").warm_up_markets()
+            print("[market] CCXT Gate 市场信息预热完成", flush=True)
+        except (ValueError, RuntimeError) as error:
+            print(f"[market] Gate 市场信息预热失败：{error}", flush=True)
+    if bitget_credentials_configured():
+        try:
+            venue_position_provider("bitget").warm_up_markets()
+            print("[market] CCXT Bitget 市场信息预热完成", flush=True)
+        except (ValueError, RuntimeError) as error:
+            print(f"[market] Bitget 市场信息预热失败：{error}", flush=True)
+
+
+def _fallback_candle_provider(venue):
+    return venue_position_provider(venue)
+
+
+def load_venue_candle_range(venue, symbol, interval, start_timestamp, end_timestamp):
+    if venue not in POSITION_REVIEW_VENUES:
+        venue = "bitget"
     fetch_key = (venue, symbol, interval)
     missing_ranges = missing_venue_cached_ranges(
         venue, symbol, interval, start_timestamp, end_timestamp
@@ -3454,16 +3718,19 @@ def load_bitget_candle_range(symbol, interval, start_timestamp, end_timestamp):
                     warning = f"{failed_message}（稍后再试，避免重复等待）"
                 else:
                     try:
-                        credentials = load_bitget_credentials()
-                        provider = BitgetUtaPositionProvider(
-                            credentials["apiKey"],
-                            credentials["secret"],
-                            credentials["password"],
-                        )
+                        provider = _fallback_candle_provider(venue)
                         interval_milliseconds = INTERVAL_MILLISECONDS[interval]
+                        if venue == "gate":
+                            chunk_limit = 1000
+                        else:
+                            max_bars = max(
+                                1,
+                                BITGET_CANDLE_MAX_RANGE_MS // interval_milliseconds,
+                            )
+                            chunk_limit = min(200, max_bars)
                         for missing_start, missing_end in missing_ranges:
                             for chunk_start, chunk_end in market_range_chunks(
-                                interval, missing_start, missing_end, limit=200
+                                interval, missing_start, missing_end, limit=chunk_limit
                             ):
                                 fetched = provider.fetch_candles(
                                     symbol,
@@ -3481,7 +3748,7 @@ def load_bitget_candle_range(symbol, interval, start_timestamp, end_timestamp):
                                     fetched,
                                 )
                         VENUE_MARKET_FETCH_FAILURES.pop(fetch_key, None)
-                        source = "bitget"
+                        source = venue
                     except (ValueError, RuntimeError) as error:
                         VENUE_MARKET_FETCH_FAILURES[fetch_key] = (
                             time.monotonic(),
@@ -3492,7 +3759,15 @@ def load_bitget_candle_range(symbol, interval, start_timestamp, end_timestamp):
     return candles, source, warning
 
 
-def load_position_review_candles(symbol, interval, entry_timestamp, exit_timestamp):
+def load_bitget_candle_range(symbol, interval, start_timestamp, end_timestamp):
+    return load_venue_candle_range(
+        "bitget", symbol, interval, start_timestamp, end_timestamp
+    )
+
+
+def load_position_review_candles(
+    symbol, interval, entry_timestamp, exit_timestamp, preferred_venue=None
+):
     if not isinstance(symbol, str) or not re.fullmatch(r"[A-Z0-9]{3,20}USDT", symbol):
         raise ValueError("仓位交易对无法映射为 USDT 永续合约")
     if interval not in VALID_INTERVALS:
@@ -3508,7 +3783,7 @@ def load_position_review_candles(symbol, interval, entry_timestamp, exit_timesta
     start_timestamp, end_timestamp, truncated = trade_candle_window(
         entry_timestamp, exit_timestamp, interval, now_timestamp
     )
-    candle_venue = resolve_position_candle_venue(symbol)
+    candle_venue = resolve_position_candle_venue(symbol, preferred_venue)
     print(
         f"[market] position-review {symbol} {interval} venue={candle_venue}",
         flush=True,
@@ -3526,13 +3801,38 @@ def load_position_review_candles(symbol, interval, entry_timestamp, exit_timesta
             "entry": entry_timestamp,
             "exit": exit_timestamp,
         }
-    candles, source, warning = load_bitget_candle_range(
-        symbol, interval, start_timestamp, end_timestamp
+    candles, source, warning = load_venue_candle_range(
+        candle_venue, symbol, interval, start_timestamp, end_timestamp
     )
+    if warning and not candles:
+        presence = MARKET_DATA_PROVIDER.usdt_perpetual_presence(symbol)
+        if presence == "present":
+            bybit_candles, bybit_source, bybit_warning = load_candle_range(
+                symbol, interval, start_timestamp, end_timestamp
+            )
+            if bybit_candles:
+                fallback_warning = f"本所 {candle_venue} K 线不可用，已回退 Bybit"
+                if warning:
+                    fallback_warning = f"{fallback_warning}（{warning}）"
+                if bybit_warning:
+                    fallback_warning = f"{fallback_warning}；{bybit_warning}"
+                print(
+                    f"[market] position-review {symbol} {interval} venue=bybit fallback",
+                    flush=True,
+                )
+                return {
+                    "candles": bybit_candles,
+                    "source": bybit_source,
+                    "candleVenue": "bybit",
+                    "warning": fallback_warning,
+                    "truncated": truncated,
+                    "entry": entry_timestamp,
+                    "exit": exit_timestamp,
+                }
     return {
         "candles": candles,
         "source": source,
-        "candleVenue": "bitget",
+        "candleVenue": candle_venue,
         "warning": warning,
         "truncated": truncated,
         "entry": entry_timestamp,
@@ -3735,6 +4035,7 @@ class StudyHandler(BaseHTTPRequestHandler):
                 interval = query.get("interval", [""])[0]
                 entry = int(query.get("entry", ["0"])[0])
                 exit_timestamp = int(query.get("exit", ["0"])[0])
+                preferred_venue = query.get("venue", [""])[0]
                 return self.send_json(
                     HTTPStatus.OK,
                     load_position_review_candles(
@@ -3742,6 +4043,7 @@ class StudyHandler(BaseHTTPRequestHandler):
                         interval,
                         entry,
                         exit_timestamp,
+                        preferred_venue,
                     ),
                 )
             except ValueError as error:
@@ -3824,9 +4126,11 @@ class StudyHandler(BaseHTTPRequestHandler):
             if parsed.path == "/api/position-review/drawings":
                 return self.send_json(HTTPStatus.OK, save_position_drawing(payload))
             if parsed.path == "/api/position-review/credentials":
-                return self.send_json(HTTPStatus.OK, save_bitget_credentials(payload))
+                return self.send_json(
+                    HTTPStatus.OK, save_position_review_credentials(payload)
+                )
             if parsed.path == "/api/position-review/sync":
-                return self.send_json(HTTPStatus.OK, sync_bitget_positions())
+                return self.send_json(HTTPStatus.OK, sync_position_review())
             if parsed.path == "/api/position-review/notes":
                 return self.send_json(HTTPStatus.OK, save_position_note(payload))
             if parsed.path == "/api/position-review/tags":

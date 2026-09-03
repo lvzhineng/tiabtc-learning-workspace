@@ -28,6 +28,7 @@ import {
   boundedTradeWindowMs,
   candleVenueLabel,
   clipTradeFocusRange,
+  positionCandleCacheVenue,
   sliceCachedCandleWindow,
 } from '@/api/candle-window-cache';
 import { DraggableDrawingToolbar } from '@/features/drawings/DraggableDrawingToolbar';
@@ -59,7 +60,9 @@ export function PositionReviewChart({
   const [loadedContextKey, setLoadedContextKey] = useState('');
   const [error, setError] = useState<string | null>(null);
   const [warning, setWarning] = useState<string | null>(null);
-  const [candleVenue, setCandleVenue] = useState('bybit');
+  const [candleVenue, setCandleVenue] = useState(() =>
+    positionCandleCacheVenue(position.chartSymbol, position.venue)
+  );
   const [reloadToken, setReloadToken] = useState(0);
   const [copyingChart, setCopyingChart] = useState(false);
   const chartRootRef = useRef<HTMLDivElement | null>(null);
@@ -83,7 +86,9 @@ export function PositionReviewChart({
       symbol,
       timeframe,
       window.fromMs,
-      window.toMs
+      window.toMs,
+      200,
+      positionCandleCacheVenue(symbol, position.venue)
     );
     return cached?.candles ?? [];
   });
@@ -130,7 +135,12 @@ export function PositionReviewChart({
       const png = captureChartPng(chartRootRef.current, themeMode, {
         symbol,
         timeframe: TIMEFRAME_DISPLAY_MAP[timeframe],
-        source: candleVenue === 'bitget' ? 'Bitget' : 'Bybit',
+        source:
+          candleVenue === 'bitget'
+            ? 'Bitget'
+            : candleVenue === 'gate'
+              ? 'Gate'
+              : 'Bybit',
       });
       await navigator.clipboard.write([
         new ClipboardItem({ 'image/png': png }),
@@ -167,7 +177,9 @@ export function PositionReviewChart({
       symbol,
       timeframe,
       window.fromMs,
-      window.toMs
+      window.toMs,
+      200,
+      positionCandleCacheVenue(symbol, position.venue)
     );
     if (cached?.candles.length) {
       setCandles(cached.candles);
@@ -176,7 +188,7 @@ export function PositionReviewChart({
       setLoading(false);
     } else {
       setCandles([]);
-      setCandleVenue('bybit');
+      setCandleVenue(positionCandleCacheVenue(symbol, position.venue));
       setLoadedContextKey('');
       setLoading(true);
     }
@@ -186,7 +198,8 @@ export function PositionReviewChart({
       timeframe,
       entryTimeMs,
       exitForFetch,
-      controller.signal
+      controller.signal,
+      position.venue
     )
       .then((batch) => {
         if (controller.signal.aborted || contextKeyRef.current !== chartContextKey) {
@@ -221,7 +234,15 @@ export function PositionReviewChart({
       earlierRequestRef.current?.abort();
       laterRequestRef.current?.abort();
     };
-  }, [chartContextKey, closedExitTimeMs, entryTimeMs, reloadToken, symbol, timeframe]);
+  }, [
+    chartContextKey,
+    closedExitTimeMs,
+    entryTimeMs,
+    position.venue,
+    reloadToken,
+    symbol,
+    timeframe,
+  ]);
 
   const loadEarlier = useCallback(() => {
     if (loading || isLoadingEarlier || candles.length === 0 || earlierRequestRef.current) {
@@ -240,7 +261,8 @@ export function PositionReviewChart({
       timeframe,
       earliestTimestamp,
       500,
-      controller.signal
+      controller.signal,
+      position.venue
     )
       .then((batch) => {
         if (!controller.signal.aborted && contextKeyRef.current === requestContextKey) {
@@ -268,7 +290,7 @@ export function PositionReviewChart({
           setIsLoadingEarlier(false);
         }
       });
-  }, [candles, isLoadingEarlier, loading, symbol, timeframe]);
+  }, [candles, isLoadingEarlier, loading, position.venue, symbol, timeframe]);
 
   const loadLater = useCallback(() => {
     if (loading || isLoadingLater || candles.length === 0 || laterRequestRef.current) {
@@ -287,7 +309,8 @@ export function PositionReviewChart({
       timeframe,
       latestTimestamp,
       500,
-      controller.signal
+      controller.signal,
+      position.venue
     )
       .then((batch) => {
         if (!controller.signal.aborted && contextKeyRef.current === requestContextKey) {
@@ -316,7 +339,7 @@ export function PositionReviewChart({
           setIsLoadingLater(false);
         }
       });
-  }, [candles, isLoadingLater, loading, symbol, timeframe]);
+  }, [candles, isLoadingLater, loading, position.venue, symbol, timeframe]);
 
   const retryLoad = useCallback(() => {
     const kind = failedEdgeRef.current;
@@ -485,7 +508,7 @@ export function PositionReviewChart({
         !(chartLoading && displayedCandles.length > 0) && (
         <div
           className={`posrev-venue-badge ${
-            candleVenue === 'bitget' ? 'fallback' : ''
+            candleVenue === 'bitget' || candleVenue === 'gate' ? 'fallback' : ''
           }`}
         >
           {candleVenueLabel(candleVenue)}

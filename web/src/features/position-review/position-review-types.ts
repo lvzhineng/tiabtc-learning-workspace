@@ -44,12 +44,34 @@ export interface ReviewPosition {
   fills?: PositionFill[];
 }
 
+export type ReviewVenue = 'bitget' | 'gate';
+
+export interface PositionReviewVenues {
+  bitget: boolean;
+  gate: boolean;
+}
+
 export interface PositionReviewState {
   configured: boolean;
+  venues?: PositionReviewVenues;
   syncedAt: string | null;
   balance: { total: number | null } | null;
+  balances?: {
+    bitget: { total: number | null } | null;
+    gate: { total: number | null } | null;
+  };
   positions: ReviewPosition[];
   tags: PositionTag[];
+}
+
+export function positionKey(position: Pick<ReviewPosition, 'venue' | 'positionId'>): string {
+  return `${position.venue}::${position.positionId}`;
+}
+
+export function venueLabel(venue: string | null | undefined): string {
+  if (venue === 'gate') return 'Gate';
+  if (venue === 'bitget') return 'Bitget';
+  return venue || '未知交易所';
 }
 
 export interface PositionCandleBatch {

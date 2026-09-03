@@ -6,6 +6,7 @@ import {
   rememberCandleWindow,
   sliceCachedCandleWindow,
   boundedTradeWindowMs,
+  positionCandleCacheVenue,
   TRUNCATED_WINDOW_HINT,
 } from './candle-window-cache';
 import {
@@ -120,14 +121,30 @@ export async function fetchVenueCacheAudit(): Promise<VenueCacheAudit> {
   return requestJson<VenueCacheAudit>('/api/position-review/cache-audit');
 }
 
+export async function savePositionReviewCredentials(payload: {
+  venue: 'bitget' | 'gate';
+  apiKey: string;
+  secret: string;
+  passphrase?: string;
+}): Promise<{ configured: boolean; venue: string }> {
+  return requestJson('/api/position-review/credentials', {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  });
+}
+
 export async function saveBitgetCredentials(payload: {
   apiKey: string;
   secret: string;
   passphrase: string;
-}): Promise<{ configured: boolean }> {
-  return requestJson('/api/position-review/credentials', {
+}): Promise<{ configured: boolean; venue: string }> {
+  return savePositionReviewCredentials({ venue: 'bitget', ...payload });
+}
+
+export async function syncPositionReview(): Promise<PositionReviewState> {
+  return requestJson('/api/position-review/sync', {
     method: 'POST',
-    body: JSON.stringify(payload),
+    body: JSON.stringify({}),
   });
 }
 
@@ -346,15 +363,19 @@ export async function fetchPositionReviewCandles(
   interval: ReviewTimeframe,
   entryTimeMs: number,
   exitTimeMs: number,
-  signal?: AbortSignal
+  signal?: AbortSignal,
+  venue?: string
 ): Promise<PositionCandleBatch> {
   const window = boundedTradeWindowMs(entryTimeMs, exitTimeMs, interval);
+  const cacheVenue = positionCandleCacheVenue(symbol, venue);
   const cached = sliceCachedCandleWindow(
     'position',
     symbol,
     interval,
     window.fromMs,
-    window.toMs
+    window.toMs,
+    200,
+    cacheVenue
   );
   if (cached) {
     return {
@@ -370,6 +391,7 @@ export async function fetchPositionReviewCandles(
     entry: String(entryTimeMs),
     exit: String(exitTimeMs),
   });
+  if (venue) params.set('venue', venue);
   return requestPositionCandles(params, symbol, interval, signal);
 }
 
@@ -378,7 +400,8 @@ export async function fetchPositionEarlierCandles(
   interval: ReviewTimeframe,
   beforeMs: number,
   limit = 500,
-  signal?: AbortSignal
+  signal?: AbortSignal,
+  venue?: string
 ): Promise<PositionCandleBatch> {
   const intervalMs = TIMEFRAME_SECONDS_MAP[interval] * 1000;
   const exitTimeMs = beforeMs - intervalMs;
@@ -392,6 +415,7 @@ export async function fetchPositionEarlierCandles(
     entry: String(entryTimeMs),
     exit: String(exitTimeMs),
   });
+  if (venue) params.set('venue', venue);
   return requestPositionCandles(params, symbol, interval, signal);
 }
 
@@ -400,7 +424,8 @@ export async function fetchPositionLaterCandles(
   interval: ReviewTimeframe,
   afterMs: number,
   limit = 500,
-  signal?: AbortSignal
+  signal?: AbortSignal,
+  venue?: string
 ): Promise<PositionCandleBatch> {
   const intervalMs = TIMEFRAME_SECONDS_MAP[interval] * 1000;
   const entryTimeMs = afterMs + intervalMs;
@@ -414,5 +439,6 @@ export async function fetchPositionLaterCandles(
     entry: String(entryTimeMs),
     exit: String(exitTimeMs),
   });
+  if (venue) params.set('venue', venue);
   return requestPositionCandles(params, symbol, interval, signal);
 }

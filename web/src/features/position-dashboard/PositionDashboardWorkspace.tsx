@@ -259,7 +259,7 @@ export function PositionDashboardWorkspace({
           </select>
 
           {balanceTotal != null && (
-            <div className="posdash-balance-chip" title="Bitget UTA 账户总权益">
+            <div className="posdash-balance-chip" title="已配置交易所账户权益合计">
               <span className="posdash-live-dot" />
               <Wallet size={13} />
               <span>{balanceTotal.toFixed(2)} USDT</span>
@@ -271,7 +271,7 @@ export function PositionDashboardWorkspace({
             className="posdash-btn"
             onClick={handleSync}
             disabled={syncing || !configured}
-            title={configured ? '同步最新仓位' : '需在仓位复盘中配置密钥'}
+            title={configured ? '同步最新仓位' : '需在仓位复盘中配置 Bitget 或 Gate 密钥'}
           >
             <RefreshCw size={13} className={syncing ? 'spin' : ''} />
             {syncing ? '同步中' : '同步'}

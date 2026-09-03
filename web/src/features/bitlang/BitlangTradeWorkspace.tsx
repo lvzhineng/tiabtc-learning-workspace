@@ -856,7 +856,7 @@ export function BitlangTradeWorkspace({
                   </span>
                 </div>
                 <span className="posrev-row-time">
-                  {formatTradeTime(trade.entryTime).slice(5)}
+                  {formatTradeTime(trade.entryTime)}
                 </span>
               </div>
               <div className="posrev-row-bottom">
