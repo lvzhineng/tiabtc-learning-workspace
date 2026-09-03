@@ -518,19 +518,20 @@ function buildTradeMarkers(
       );
     return timestampMsToUtcTimestamp(candle.timestampMs);
   };
+  const isLong = trade.direction === '多';
   return [
     {
       time: markerTime(Date.parse(trade.entryTime)),
-      position: 'belowBar',
-      color: trade.direction === '多' ? '#089981' : '#f23645',
-      shape: 'arrowUp',
+      position: isLong ? 'belowBar' : 'aboveBar',
+      color: isLong ? '#089981' : '#f23645',
+      shape: isLong ? 'arrowUp' : 'arrowDown',
       text: `开 ${formatPrice(trade.entryPrice, displayedPricePrecision)}`,
     },
     {
       time: markerTime(Date.parse(trade.exitTime)),
-      position: 'aboveBar',
+      position: isLong ? 'aboveBar' : 'belowBar',
       color: trade.profit >= 0 ? '#089981' : '#f23645',
-      shape: 'arrowDown',
+      shape: isLong ? 'arrowDown' : 'arrowUp',
       text: `平 ${formatPrice(trade.exitPrice, displayedPricePrecision)}`,
     },
   ];

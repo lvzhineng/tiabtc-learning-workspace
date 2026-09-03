@@ -208,6 +208,7 @@ export function BitlangDashboardWorkspace({
       calendarPositions={dashboardPositions}
       selectedCalendarDate={selectedCalendarDate}
       onSelectCalendarDate={setSelectedCalendarDate}
+      anchorEndMs={snapshotEndMs}
       journalTitle="交割单反思日记流 (Trading Journal Stream)"
       journalSubtitle="入场依据与心得沉淀"
       journalSlot={

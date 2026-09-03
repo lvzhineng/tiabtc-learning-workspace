@@ -50,6 +50,7 @@ export interface CommonDashboardLayoutProps {
   calendarPositions: ReviewPosition[];
   selectedCalendarDate: string | null;
   onSelectCalendarDate: (date: string | null) => void;
+  anchorEndMs?: number;
 
   extraHeader?: ReactNode;
 
@@ -79,6 +80,7 @@ export function CommonDashboardLayout(props: CommonDashboardLayoutProps) {
     calendarPositions,
     selectedCalendarDate,
     onSelectCalendarDate,
+    anchorEndMs,
     extraHeader,
     journalSlot,
     journalTitle = '交易反思日记流 (Trading Journal Stream)',
@@ -306,6 +308,7 @@ export function CommonDashboardLayout(props: CommonDashboardLayoutProps) {
           positions={calendarPositions}
           selectedDate={selectedCalendarDate}
           onSelectDate={onSelectCalendarDate}
+          anchorEndMs={anchorEndMs}
         />
       </section>
 

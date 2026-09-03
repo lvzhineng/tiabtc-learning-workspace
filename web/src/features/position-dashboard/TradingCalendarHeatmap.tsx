@@ -8,6 +8,7 @@ interface TradingCalendarHeatmapProps {
   positions: ReviewPosition[];
   selectedDate: string | null;
   onSelectDate: (date: string | null) => void;
+  anchorEndMs?: number;
 }
 
 interface DayStats {
@@ -23,7 +24,9 @@ const WEEKDAY_LABELS = ['一', '二', '三', '四', '五', '六', '日'];
 
 // Asia/Shanghai YYYY-MM-DD
 function formatShanghaiDate(timestampMs: number): string {
+  if (!timestampMs || Number.isNaN(timestampMs)) return '';
   const date = new Date(timestampMs);
+  if (Number.isNaN(date.getTime())) return '';
   const parts = new Intl.DateTimeFormat('zh-CN', {
     timeZone: 'Asia/Shanghai',
     year: 'numeric',
@@ -40,6 +43,7 @@ export function TradingCalendarHeatmap({
   positions,
   selectedDate,
   onSelectDate,
+  anchorEndMs,
 }: TradingCalendarHeatmapProps) {
   const [hoveredDay, setHoveredDay] = useState<DayStats | null>(null);
 
@@ -48,7 +52,9 @@ export function TradingCalendarHeatmap({
     const map = new Map<string, { pnl: number; count: number; winCount: number; lossCount: number }>();
     for (const p of positions) {
       const timeMs = p.exitTimeMs ?? p.entryTimeMs;
+      if (!timeMs || Number.isNaN(timeMs)) continue;
       const dateStr = formatShanghaiDate(timeMs);
+      if (!dateStr) continue;
       const pnl = positionPnl(p);
       const current = map.get(dateStr) || { pnl: 0, count: 0, winCount: 0, lossCount: 0 };
       current.pnl += pnl;
@@ -60,20 +66,30 @@ export function TradingCalendarHeatmap({
     return map;
   }, [positions]);
 
-  // Generate 12 weeks grid ending at current week's Sunday
+  // Generate 12 weeks grid ending at reference week's Sunday
   const weeks = useMemo(() => {
-    const today = new Date();
-    // find Sunday of current week
-    const currentDay = today.getDay(); // 0 is Sun
+    let latestTimeMs = anchorEndMs;
+    if (latestTimeMs == null) {
+      let maxTime = 0;
+      for (const p of positions) {
+        const t = p.exitTimeMs ?? p.entryTimeMs;
+        if (t && !Number.isNaN(t) && t > maxTime) maxTime = t;
+      }
+      latestTimeMs = maxTime > 0 ? maxTime : Date.now();
+    }
+
+    const refDate = new Date(latestTimeMs);
+    // find Sunday of reference week
+    const currentDay = refDate.getDay(); // 0 is Sun
     const daysToSun = currentDay === 0 ? 0 : 7 - currentDay;
-    const endSun = new Date(today);
-    endSun.setDate(today.getDate() + daysToSun);
-    endSun.setHours(23, 59, 59, 999);
+    const endSun = new Date(refDate);
+    endSun.setDate(refDate.getDate() + daysToSun);
+    endSun.setHours(12, 0, 0, 0);
 
     const totalDays = 12 * 7;
     const startMon = new Date(endSun);
     startMon.setDate(endSun.getDate() - totalDays + 1);
-    startMon.setHours(0, 0, 0, 0);
+    startMon.setHours(12, 0, 0, 0);
 
     const grid: DayStats[][] = [];
     let currentWeek: DayStats[] = [];
@@ -101,7 +117,7 @@ export function TradingCalendarHeatmap({
     }
 
     return grid;
-  }, [dailyMap]);
+  }, [anchorEndMs, dailyMap, positions]);
 
   return (
     <div className="cal-heatmap-root">

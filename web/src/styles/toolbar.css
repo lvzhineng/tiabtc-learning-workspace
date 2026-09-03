@@ -10,7 +10,7 @@
   max-width: calc(100% - 16px);
   background-color: var(--bg-dark-800, #141922);
   border: 1px solid var(--border-color, #2a3142);
-  border-radius: 8px;
+  border-radius: 6px;
   box-shadow: var(--shadow-main, 0 8px 24px rgba(0, 0, 0, 0.28));
   user-select: none;
   touch-action: none;
@@ -18,11 +18,11 @@
 }
 
 .toolbar-drag-handle {
-  width: 16px;
-  min-width: 16px;
+  width: 13px;
+  min-width: 13px;
   background-color: transparent;
-  border-top-left-radius: 8px;
-  border-bottom-left-radius: 8px;
+  border-top-left-radius: 6px;
+  border-bottom-left-radius: 6px;
   cursor: grab;
   display: flex;
   align-items: center;
@@ -44,21 +44,21 @@
   display: flex;
   align-items: center;
   flex-flow: row nowrap;
-  padding: 4px;
+  padding: 2px 3px;
   gap: 2px;
   max-width: calc(100vw - 72px);
-  max-height: 46px;
+  max-height: 32px;
   overflow-x: auto;
   overflow-y: hidden;
   scrollbar-width: thin;
 }
 
 .toolbar-btn {
-  flex: 0 0 36px;
-  width: 36px;
-  height: 36px;
+  flex: 0 0 26px;
+  width: 26px;
+  height: 26px;
   padding: 0;
-  border-radius: 6px;
+  border-radius: 4px;
   background: transparent;
   border: none;
   color: var(--text-primary, #e6e9f0);
@@ -71,8 +71,8 @@
 
 .toolbar-btn svg {
   display: block;
-  width: 26px;
-  height: 26px;
+  width: 18px;
+  height: 18px;
   flex-shrink: 0;
 }
 
@@ -103,13 +103,13 @@
 }
 
 .toolbar-paper-trade-btn {
-  height: 28px;
-  margin-left: 4px;
-  margin-right: 4px;
-  padding: 0 10px;
+  height: 22px;
+  margin-left: 3px;
+  margin-right: 3px;
+  padding: 0 7px;
   border: none;
-  border-radius: 6px;
-  font-size: 11px;
+  border-radius: 4px;
+  font-size: 10px;
   font-weight: 600;
   font-family: inherit;
   cursor: pointer;

@@ -310,8 +310,8 @@ export const ChartCanvas = memo(function ChartCanvas({
           ),
       },
       grid: {
-        vertLines: { color: theme.grid },
-        horzLines: { color: theme.grid },
+        vertLines: { visible: false },
+        horzLines: { visible: false },
       },
       crosshair: {
         mode: CrosshairMode.Normal,
@@ -567,6 +567,7 @@ export const ChartCanvas = memo(function ChartCanvas({
     const resizeObserver = new ResizeObserver((entries) => {
       if (!entries.length || !entries[0].contentRect) return;
       const { width, height } = entries[0].contentRect;
+      if (width <= 0 || height <= 0) return;
       chart.applyOptions({ width, height });
     });
     resizeObserver.observe(container);
@@ -612,8 +613,8 @@ export const ChartCanvas = memo(function ChartCanvas({
         textColor: theme.text,
       },
       grid: {
-        vertLines: { color: theme.grid },
-        horzLines: { color: theme.grid },
+        vertLines: { visible: false },
+        horzLines: { visible: false },
       },
       rightPriceScale: {
         borderColor: theme.border,

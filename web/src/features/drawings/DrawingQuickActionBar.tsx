@@ -5,6 +5,7 @@ import {
   Trash2,
 } from 'lucide-react';
 import type { DrawingToolState } from './drawing-types';
+import { saveDrawingStyle } from './drawing-style-storage';
 
 interface DrawingQuickActionBarProps {
   drawing: DrawingToolState;
@@ -38,6 +39,7 @@ export const DrawingQuickActionBar = memo(function DrawingQuickActionBar({
   const isLocked = Boolean(drawing.locked);
 
   const handleColorSelect = (color: string) => {
+    saveDrawingStyle(drawing.toolType, { color });
     onUpdateDrawing({
       ...drawing,
       color,
@@ -45,6 +47,7 @@ export const DrawingQuickActionBar = memo(function DrawingQuickActionBar({
   };
 
   const handleWidthSelect = (width: number) => {
+    saveDrawingStyle(drawing.toolType, { lineWidth: width });
     onUpdateDrawing({
       ...drawing,
       lineWidth: width,
@@ -52,11 +55,13 @@ export const DrawingQuickActionBar = memo(function DrawingQuickActionBar({
   };
 
   const handleStyleToggle = () => {
+    const nextStyle = isDashed ? 'solid' : 'dashed';
+    saveDrawingStyle(drawing.toolType, { lineStyle: nextStyle });
     onUpdateDrawing({
       ...drawing,
       extra: {
         ...(drawing.extra || {}),
-        lineStyle: isDashed ? 'solid' : 'dashed',
+        lineStyle: nextStyle,
       },
     });
   };

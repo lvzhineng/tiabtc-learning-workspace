@@ -17,13 +17,14 @@ import {
   timestampMsToUtcTimestamp,
 } from '@/chart/chart-time';
 import { formatPrice } from '@/chart/candlestick-readout';
-import type {
-  ActiveToolType,
-  DrawingPoint,
-  DrawingToolState,
+import {
+  ANCHOR_COUNTS,
+  type ActiveToolType,
+  type DrawingPoint,
+  type DrawingToolState,
 } from './drawing-types';
-import { ANCHOR_COUNTS } from './drawing-types';
 import { DrawingQuickActionBar } from './DrawingQuickActionBar';
+import { getSavedDrawingStyle } from './drawing-style-storage';
 
 function isPositionTool(toolType: string): boolean {
   return (
@@ -362,6 +363,7 @@ export function ChartDrawingOverlay({
   );
 
   const saveNewDrawing = (points: DrawingPoint[]) => {
+    const savedStyle = getSavedDrawingStyle(activeTool);
     const drawing: DrawingToolState = {
       id: drawingId(),
       videoId,
@@ -369,12 +371,14 @@ export function ChartDrawingOverlay({
       interval,
       toolType: activeTool,
       points,
-      color: '#2962ff',
-      lineWidth: 2,
-      extra:
-        activeTool === 'half-retracement'
+      color: savedStyle.color,
+      lineWidth: savedStyle.lineWidth,
+      extra: {
+        ...(activeTool === 'half-retracement'
           ? { retracementVariant: 'half' }
-          : {},
+          : {}),
+        lineStyle: savedStyle.lineStyle,
+      },
     };
     setDraftPoints([]);
     setHoverPoint(null);
@@ -595,6 +599,10 @@ export function ChartDrawingOverlay({
     !isFreehandTool && hoverPoint && draftPoints.length > 0
       ? [...draftPoints, hoverPoint]
       : [];
+  const activeToolStyle = useMemo(
+    () => getSavedDrawingStyle(activeTool),
+    [activeTool]
+  );
   const draftPreview: DrawingToolState | null =
     previewPoints.length > 1
       ? {
@@ -604,10 +612,12 @@ export function ChartDrawingOverlay({
           interval,
           toolType: activeTool,
           points: previewPoints,
-          color: '#facc15',
-          lineWidth: 2,
+          color: activeToolStyle.color,
+          lineWidth: activeToolStyle.lineWidth,
           locked: true,
-          extra: {},
+          extra: {
+            lineStyle: activeToolStyle.lineStyle,
+          },
         }
       : null;
 

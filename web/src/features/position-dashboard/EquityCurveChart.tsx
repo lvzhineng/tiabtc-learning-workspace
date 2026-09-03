@@ -148,8 +148,12 @@ export function EquityCurveChart({ positions }: Props) {
     const padLeft = 45;
     const padRight = 20;
 
-    let computedMin = Math.min(0, ...dataSeries.map((d) => d.cumulative));
-    let computedMax = Math.max(0, ...dataSeries.map((d) => d.cumulative));
+    let computedMin = 0;
+    let computedMax = 0;
+    for (const d of dataSeries) {
+      if (d.cumulative < computedMin) computedMin = d.cumulative;
+      if (d.cumulative > computedMax) computedMax = d.cumulative;
+    }
     if (computedMax === computedMin) {
       computedMax += 10;
       computedMin -= 10;

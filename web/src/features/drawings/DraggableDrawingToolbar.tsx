@@ -34,7 +34,6 @@ import {
   IconTrendLine,
   IconUndo,
   IconUnlock,
-  IconVolumeProfile,
 } from './drawing-toolbar-icons';
 import '@/styles/toolbar.css';
 
@@ -82,11 +81,6 @@ const QUICK_TOOLS: Array<{
   { tool: 'ParallelChannel', title: '平行通道', Icon: IconParallelChannel },
   { tool: 'Rectangle', title: '矩形 (Alt+R)', Icon: IconRectangle },
   { tool: 'text-annotation', title: '文字', Icon: IconText },
-  {
-    tool: 'fixed-range-volume-profile',
-    title: '固定范围成交量分布图',
-    Icon: IconVolumeProfile,
-  },
   { tool: 'arrow-mark-up', title: '向上箭头', Icon: IconArrowUp },
   { tool: 'arrow-mark-down', title: '向下箭头', Icon: IconArrowDown },
   { tool: 'brush', title: '笔刷', Icon: IconBrush },

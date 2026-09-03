@@ -778,6 +778,16 @@ export function PositionReviewWorkspace({
 
   return (
     <div className={`bitlang-review-shell ${sidebarCollapsed ? 'sidebar-collapsed' : ''}`}>
+      {sidebarCollapsed && (
+        <button
+          type="button"
+          className="bitlang-sidebar-toggle-btn bitlang-sidebar-expand-float"
+          onClick={() => setSidebarCollapsed(false)}
+          title="展开侧边栏 ([)"
+        >
+          <PanelLeftOpen size={15} />
+        </button>
+      )}
       <aside className="bitlang-sidebar">
         <div className="bitlang-sidebar-title">
           <div>
@@ -961,16 +971,6 @@ export function PositionReviewWorkspace({
         </section>
       ) : (
       <section className="bitlang-chart-workspace posrev-chart-workspace">
-        {sidebarCollapsed && (
-          <button
-            type="button"
-            className="bitlang-sidebar-toggle-btn bitlang-sidebar-expand-float"
-            onClick={() => setSidebarCollapsed(false)}
-            title="展开侧边栏 ([)"
-          >
-            <PanelLeftOpen size={15} />
-          </button>
-        )}
         {selected ? (
           <>
             <header className="bitlang-chart-header">

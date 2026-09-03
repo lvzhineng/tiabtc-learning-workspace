@@ -357,13 +357,6 @@ export function useDrawingWorkspace(
     );
     if (!target) return;
     const workspaceRevision = workspaceRevisionRef.current;
-    const confirmed = await confirmDialog({
-      title: '删除画图',
-      message: '确认删除当前选中的画图吗？',
-      confirmText: '确认删除',
-      isDanger: true,
-    });
-    if (!confirmed || workspaceRevisionRef.current !== workspaceRevision) return;
 
     if (persistence === 'memory') {
       const current = drawingsRef.current;
@@ -372,6 +365,7 @@ export function useDrawingWorkspace(
         current
       );
       setSelectedDrawingId(null);
+      toast.success('已删除画图 (可按 Ctrl+Z 恢复)');
       return;
     }
 
@@ -409,7 +403,7 @@ export function useDrawingWorkspace(
         current
       );
       setSelectedDrawingId(null);
-      toast.success('已删除画图');
+      toast.success('已删除画图 (可按 Ctrl+Z 恢复)');
     } catch (deleteError) {
       toast.error(
         `删除画图记录失败: ${
@@ -437,12 +431,12 @@ export function useDrawingWorkspace(
       title: '清空画图',
       message:
         persistence === 'memory'
-          ? `确认要清空当前 Symbol (${symbol}) 的所有临时画图吗？`
+          ? `确认要清空当前 Symbol (${symbol}) 的所有临时画图吗？（可按 Ctrl+Z 恢复）`
           : persistence === 'position'
-            ? `确认要清空当前仓位 (${symbol}) 的所有画图记录吗？此操作无法撤销。`
+            ? `确认要清空当前仓位 (${symbol}) 的所有画图记录吗？（可按 Ctrl+Z 恢复）`
             : persistence === 'bitlang'
-              ? `确认要清空当前交易 (${symbol}) 的所有画图记录吗？此操作无法撤销。`
-              : `确认要清空当前 Symbol (${symbol}) 的所有画图记录吗？此操作无法撤销。`,
+              ? `确认要清空当前交易 (${symbol}) 的所有画图记录吗？（可按 Ctrl+Z 恢复）`
+              : `确认要清空当前 Symbol (${symbol}) 的所有画图记录吗？（可按 Ctrl+Z 恢复）`,
       confirmText: '确认清空',
       isDanger: true,
     });
@@ -451,7 +445,7 @@ export function useDrawingWorkspace(
     if (persistence === 'memory') {
       commitLocalChange([], current);
       setSelectedDrawingId(null);
-      toast.success('已清空临时画图');
+      toast.success('已清空临时画图 (可按 Ctrl+Z 恢复)');
       return;
     }
 
@@ -480,7 +474,7 @@ export function useDrawingWorkspace(
       confirmedDrawingsRef.current = [];
       commitLocalChange([], drawingsRef.current);
       setSelectedDrawingId(null);
-      toast.success('已清空所有画图记录');
+      toast.success('已清空所有画图记录 (可按 Ctrl+Z 恢复)');
     } catch (clearError) {
       toast.error(
         `清空画图失败: ${
@@ -506,13 +500,6 @@ export function useDrawingWorkspace(
       );
       if (!target) return;
       const workspaceRevision = workspaceRevisionRef.current;
-      const confirmed = await confirmDialog({
-        title: '删除画图',
-        message: '确认删除此画图吗？',
-        confirmText: '确认删除',
-        isDanger: true,
-      });
-      if (!confirmed || workspaceRevisionRef.current !== workspaceRevision) return;
 
       if (persistence === 'memory') {
         const current = drawingsRef.current;
@@ -521,7 +508,7 @@ export function useDrawingWorkspace(
           current
         );
         if (selectedDrawingId === targetId) setSelectedDrawingId(null);
-        toast.success('已删除画图');
+        toast.success('已删除画图 (可按 Ctrl+Z 恢复)');
         return;
       }
 
@@ -559,7 +546,7 @@ export function useDrawingWorkspace(
           current
         );
         if (selectedDrawingId === targetId) setSelectedDrawingId(null);
-        toast.success('已删除画图');
+        toast.success('已删除画图 (可按 Ctrl+Z 恢复)');
       } catch (deleteError) {
         toast.error(
           `删除画图记录失败: ${
