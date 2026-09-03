@@ -1,12 +1,12 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Copy, RefreshCw } from 'lucide-react';
+import { Copy, GitCommit, RefreshCw } from 'lucide-react';
 import type { SeriesMarker, UTCTimestamp } from 'lightweight-charts';
 import {
   fetchPositionEarlierCandles,
   fetchPositionLaterCandles,
   fetchPositionReviewCandles,
 } from '@/api/position-review-api';
-import { ChartCanvas } from '@/chart/ChartCanvas';
+import { ChartCanvas, findNearestCandle } from '@/chart/ChartCanvas';
 import { captureChartPng } from '@/chart/capture-chart-png';
 import { formatPrice, pricePrecision } from '@/chart/chart-price';
 import {
@@ -363,21 +363,24 @@ export function PositionReviewChart({
   const chartLoading = loading || !contextReady;
   const chartError = contextReady ? error : null;
   const chartWarning = contextReady ? warning : null;
-  const displayedPricePrecision = useMemo(
-    () =>
-      pricePrecision([
-        ...displayedCandles.flatMap((candle) => [
-          candle.open,
-          candle.high,
-          candle.low,
-          candle.close,
-        ]),
-        position.entryPrice,
-        position.exitPrice,
-        ...(position.fills ?? []).map((fill) => fill.price),
-      ]),
-    [displayedCandles, position.entryPrice, position.exitPrice, position.fills]
-  );
+  const displayedPricePrecision = useMemo(() => {
+    function* values() {
+      for (const candle of displayedCandles) {
+        yield candle.open;
+        yield candle.high;
+        yield candle.low;
+        yield candle.close;
+      }
+      yield position.entryPrice;
+      yield position.exitPrice;
+      if (position.fills) {
+        for (const fill of position.fills) {
+          yield fill.price;
+        }
+      }
+    }
+    return pricePrecision(values());
+  }, [displayedCandles, position.entryPrice, position.exitPrice, position.fills]);
   const markers = useMemo(
     () =>
       buildPositionMarkers(
@@ -388,6 +391,32 @@ export function PositionReviewChart({
       ),
     [displayedCandles, displayedPricePrecision, position, timeframe]
   );
+  const [showTrajectory, setShowTrajectory] = useState(false);
+
+  const trajectoryPoints = useMemo(() => {
+    if (!showTrajectory || !displayedCandles.length) return null;
+    const fills = position.fills || [];
+    if (fills.length < 2) return null;
+
+    const sorted = [...fills].sort((a, b) => a.timeMs - b.timeMs);
+    const points: { time: UTCTimestamp; value: number }[] = [];
+    const seenTimes = new Set<number>();
+
+    for (const fill of sorted) {
+      if (fill.price == null) continue;
+      const nearest = findNearestCandle(displayedCandles, fill.timeMs);
+      if (!nearest) continue;
+      const t = Math.floor(nearest.timestampMs / 1000) as UTCTimestamp;
+      if (seenTimes.has(t)) {
+        points[points.length - 1] = { time: t, value: fill.price };
+      } else {
+        seenTimes.add(t);
+        points.push({ time: t, value: fill.price });
+      }
+    }
+    return points.length >= 2 ? points : null;
+  }, [displayedCandles, position.fills, showTrajectory]);
+
   const focusExitMs =
     closedExitTimeMs ??
     (displayedCandles.length
@@ -438,6 +467,17 @@ export function PositionReviewChart({
         {copyingChart ? <RefreshCw size={14} className="spin" /> : <Copy size={14} />}
         <span>{copyingChart ? '复制中' : '复制图表'}</span>
       </button>
+      {position.fills && position.fills.length >= 2 && (
+        <button
+          type="button"
+          className={`posrev-copy-chart posrev-trajectory-btn ${showTrajectory ? 'active' : ''}`}
+          onClick={() => setShowTrajectory((v) => !v)}
+          title="显示/隐藏分批调仓折线轨迹"
+        >
+          <GitCommit size={14} />
+          <span>{showTrajectory ? '隐藏轨迹' : '调仓轨迹'}</span>
+        </button>
+      )}
       <ChartCanvas
         candles={displayedCandles}
         symbol={symbol}
@@ -445,6 +485,7 @@ export function PositionReviewChart({
         viewportContextKey={chartContextKey}
         themeMode={themeMode}
         systemMarkers={markers}
+        trajectoryPoints={trajectoryPoints}
         focusRangeMs={
           contextReady && displayedCandles.length > 0
             ? clipTradeFocusRange(

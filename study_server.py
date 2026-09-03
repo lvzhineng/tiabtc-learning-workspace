@@ -778,7 +778,7 @@ def save_candles(symbol, interval, start_timestamp, end_timestamp, candles):
 
 
 def list_candles(symbol, interval, start_timestamp, end_timestamp):
-    with DATABASE_LOCK, database() as connection:
+    with database() as connection:
         rows = connection.execute(
             """SELECT timestamp, open, high, low, close, volume
                FROM market_candles
@@ -2667,7 +2667,9 @@ def _aggregate_fill_operations(items):
 
 def assign_fills_to_positions(positions, fills):
     now_ms = int(time.time() * 1000)
-    grouped = {position["positionId"]: [] for position in positions}
+    grouped = {
+        (position.get("venue"), position["positionId"]): [] for position in positions
+    }
     positions_by_symbol = {}
     for position in positions:
         positions_by_symbol.setdefault(position.get("chartSymbol"), []).append(position)
@@ -2699,12 +2701,15 @@ def assign_fills_to_positions(positions, fills):
         if not eligible:
             continue
         chosen, role, _ = max(eligible, key=lambda item: item[0]["entryTimeMs"])
-        grouped[chosen["positionId"]].append({**fill, "role": role})
+        chosen_key = (chosen.get("venue"), chosen["positionId"])
+        if chosen_key in grouped:
+            grouped[chosen_key].append({**fill, "role": role})
 
     assigned = {}
     for position in positions:
+        pos_key = (position.get("venue"), position["positionId"])
         items = sorted(
-            grouped.get(position["positionId"], []),
+            grouped.get(pos_key, []),
             key=lambda item: (item.get("timeMs") or 0, item.get("execId") or ""),
         )
         items = _aggregate_fill_operations(items)
@@ -2746,10 +2751,12 @@ def assign_fills_to_positions(positions, fills):
                     "pnl": item.get("pnl"),
                 }
             )
-        assigned[position["positionId"]] = sorted(
+        sorted_annotated = sorted(
             annotated,
             key=lambda item: (item.get("timeMs") or 0, item.get("execId") or ""),
         )
+        assigned[pos_key] = sorted_annotated
+        assigned[position["positionId"]] = sorted_annotated
     return assigned
 
 
@@ -2889,32 +2896,43 @@ def _sync_position_review():
         raise ValueError("尚未配置只读 API")
     now_ms = int(time.time() * 1000)
     snapshots = []
+    sync_errors = []
     if bitget_ready:
-        closed, opened, fills, fills_ok, balance = _sync_bitget_snapshot(now_ms)
-        snapshots.append(
-            {
-                "venue": "bitget",
-                "closed": closed,
-                "opened": opened,
-                "fills": fills,
-                "fillsOk": fills_ok,
-                "balance": balance,
-                "balanceKey": "bitget_usdt_total",
-            }
-        )
+        try:
+            closed, opened, fills, fills_ok, balance = _sync_bitget_snapshot(now_ms)
+            snapshots.append(
+                {
+                    "venue": "bitget",
+                    "closed": closed,
+                    "opened": opened,
+                    "fills": fills,
+                    "fillsOk": fills_ok,
+                    "balance": balance,
+                    "balanceKey": "bitget_usdt_total",
+                }
+            )
+        except RuntimeError as error:
+            sync_errors.append(f"Bitget: {error}")
+            print(f"[position-review] Bitget 同步失败：{error}", flush=True)
     if gate_ready:
-        closed, opened, fills, fills_ok, balance = _sync_gate_snapshot(now_ms)
-        snapshots.append(
-            {
-                "venue": "gate",
-                "closed": closed,
-                "opened": opened,
-                "fills": fills,
-                "fillsOk": fills_ok,
-                "balance": balance,
-                "balanceKey": "gate_usdt_total",
-            }
-        )
+        try:
+            closed, opened, fills, fills_ok, balance = _sync_gate_snapshot(now_ms)
+            snapshots.append(
+                {
+                    "venue": "gate",
+                    "closed": closed,
+                    "opened": opened,
+                    "fills": fills,
+                    "fillsOk": fills_ok,
+                    "balance": balance,
+                    "balanceKey": "gate_usdt_total",
+                }
+            )
+        except RuntimeError as error:
+            sync_errors.append(f"Gate: {error}")
+            print(f"[position-review] Gate 同步失败：{error}", flush=True)
+    if not snapshots and sync_errors:
+        raise RuntimeError("；".join(sync_errors))
     synced_at = datetime.now().astimezone().isoformat()
     closed_count = 0
     open_count = 0
@@ -2937,6 +2955,7 @@ def _sync_position_review():
             "INSERT INTO app_settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
             ("position_review_last_synced_at", synced_at),
         )
+    warning = "；".join(sync_errors) if sync_errors else None
     return {
         "configured": True,
         "syncedAt": synced_at,
@@ -2947,6 +2966,7 @@ def _sync_position_review():
             "bitget": bitget_ready,
             "gate": gate_ready,
         },
+        "warning": warning,
         "positions": list_position_review(),
         "tags": list_position_tags(),
     }
@@ -3425,7 +3445,8 @@ def _read_position_review(connection):
         positions, [_fill_from_row(row) for row in fill_rows]
     )
     for position in positions:
-        position["fills"] = grouped.get(position["positionId"], [])
+        pos_key = (position.get("venue"), position["positionId"])
+        position["fills"] = grouped.get(pos_key) or grouped.get(position["positionId"], [])
     return positions
 
 
@@ -3626,7 +3647,7 @@ def save_venue_candles(venue, symbol, interval, start_timestamp, end_timestamp, 
 
 
 def list_venue_candles(venue, symbol, interval, start_timestamp, end_timestamp):
-    with DATABASE_LOCK, database() as connection:
+    with database() as connection:
         rows = connection.execute(
             """SELECT timestamp, open, high, low, close, volume
                FROM venue_market_candles

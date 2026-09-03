@@ -359,20 +359,19 @@ export function BitlangTradeChart({
   const chartLoading = loading || !contextReady;
   const chartError = contextReady ? error : null;
   const chartWarning = contextReady ? warning : null;
-  const displayedPricePrecision = useMemo(
-    () =>
-      pricePrecision([
-        ...displayedCandles.flatMap((candle) => [
-          candle.open,
-          candle.high,
-          candle.low,
-          candle.close,
-        ]),
-        trade.entryPrice,
-        trade.exitPrice,
-      ]),
-    [displayedCandles, trade.entryPrice, trade.exitPrice]
-  );
+  const displayedPricePrecision = useMemo(() => {
+    function* values() {
+      for (const candle of displayedCandles) {
+        yield candle.open;
+        yield candle.high;
+        yield candle.low;
+        yield candle.close;
+      }
+      yield trade.entryPrice;
+      yield trade.exitPrice;
+    }
+    return pricePrecision(values());
+  }, [displayedCandles, trade.entryPrice, trade.exitPrice]);
   const markers = useMemo(
     () =>
       buildTradeMarkers(

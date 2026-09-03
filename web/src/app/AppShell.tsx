@@ -9,7 +9,9 @@ import {
   Moon,
   Sun,
   Tags,
+  Keyboard,
 } from 'lucide-react';
+import { ShortcutHelpModal } from '@/ui/feedback/ShortcutHelpModal';
 import { ChartWorkspace } from '@/features/review-workspace/ChartWorkspace';
 import { LearningWorkspace } from '@/features/learning/LearningWorkspace';
 import { BitlangTradeWorkspace } from '@/features/bitlang/BitlangTradeWorkspace';
@@ -68,6 +70,25 @@ export function AppShell() {
 
   const [videoReviewContext, setVideoReviewContext] =
     useState<VideoReviewContext | null>(initialVideoReviewContext);
+  const [showShortcuts, setShowShortcuts] = useState(false);
+
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === '?' || (e.shiftKey && e.key === '/')) {
+        const target = e.target as HTMLElement | null;
+        if (
+          target &&
+          ['INPUT', 'TEXTAREA', 'SELECT'].includes(target.tagName.toUpperCase())
+        ) {
+          return;
+        }
+        e.preventDefault();
+        setShowShortcuts((prev) => !prev);
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, []);
 
   const checkConnection = async () => {
     setLoading(true);
@@ -205,6 +226,15 @@ export function AppShell() {
           <button
             type="button"
             className="app-icon-btn"
+            onClick={() => setShowShortcuts(true)}
+            title="快捷键速查指南 (?)"
+            aria-label="快捷键速查指南"
+          >
+            <Keyboard size={15} />
+          </button>
+          <button
+            type="button"
+            className="app-icon-btn"
             onClick={() =>
               setThemeMode((current) =>
                 current === 'dark' ? 'light' : 'dark'
@@ -259,6 +289,11 @@ export function AppShell() {
           <BitlangTradeWorkspace themeMode={themeMode} />
         )}
       </main>
+
+      <ShortcutHelpModal
+        isOpen={showShortcuts}
+        onClose={() => setShowShortcuts(false)}
+      />
     </div>
   );
 }

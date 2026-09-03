@@ -36,8 +36,27 @@ function neededPrecision(value: number, cap: number): number {
 }
 
 function typicalAbs(values: number[]): number {
-  const sorted = values.map(Math.abs).sort((left, right) => left - right);
-  return sorted[Math.floor(sorted.length / 2)];
+  const len = values.length;
+  if (len <= 64) {
+    const sorted = values.map(Math.abs).sort((left, right) => left - right);
+    return sorted[Math.floor(len / 2)];
+  }
+  const step = Math.floor(len / 33);
+  const sampled: number[] = [];
+  for (let index = 0; index < len && sampled.length < 33; index += step) {
+    sampled.push(Math.abs(values[index]));
+  }
+  sampled.sort((left, right) => left - right);
+  return sampled[Math.floor(sampled.length / 2)];
+}
+
+export function* candlePrices(candles: Candlestick[]): Generator<number> {
+  for (const candle of candles) {
+    yield candle.open;
+    yield candle.high;
+    yield candle.low;
+    yield candle.close;
+  }
 }
 
 export function pricePrecision(
@@ -64,14 +83,7 @@ export function pricePrecision(
 }
 
 export function candlePricePrecision(candles: Candlestick[]): number {
-  return pricePrecision(
-    candles.flatMap((candle) => [
-      candle.open,
-      candle.high,
-      candle.low,
-      candle.close,
-    ])
-  );
+  return pricePrecision(candlePrices(candles));
 }
 
 export function formatPrice(

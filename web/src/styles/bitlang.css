@@ -7,6 +7,44 @@
   grid-template-columns: 350px minmax(0, 1fr);
   background: var(--bg-dark-900);
   color: var(--text-primary);
+  position: relative;
+}
+
+.bitlang-review-shell.sidebar-collapsed {
+  grid-template-columns: 0px minmax(0, 1fr);
+}
+
+.bitlang-review-shell.sidebar-collapsed .bitlang-sidebar {
+  display: none;
+}
+
+.bitlang-sidebar-toggle-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  padding: 0;
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-sm);
+  background: var(--bg-dark-700);
+  color: var(--text-muted);
+  cursor: pointer;
+  transition: color 0.15s ease, background 0.15s ease, border-color 0.15s ease;
+}
+
+.bitlang-sidebar-toggle-btn:hover {
+  color: var(--text-primary);
+  background: var(--bg-dark-600);
+  border-color: var(--accent-blue);
+}
+
+.bitlang-sidebar-expand-float {
+  position: absolute;
+  top: 12px;
+  left: 12px;
+  z-index: 20;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.4);
 }
 
 .bitlang-state {
@@ -179,6 +217,8 @@
   color: var(--text-secondary);
   text-align: left;
   cursor: pointer;
+  font-variant-numeric: tabular-nums;
+  transition: background-color 0.12s ease;
 }
 
 .bitlang-trade-row:hover,

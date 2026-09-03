@@ -4,6 +4,7 @@ import {
   ColorType,
   PriceScaleMode,
   CrosshairMode,
+  LineStyle,
   type IChartApi,
   type ISeriesApi,
   type CandlestickData,
@@ -73,6 +74,8 @@ interface ChartCanvasProps {
   showUsSessionBands?: boolean;
   /** Warm vertical bands for the weekend in America/New_York. */
   showWeekendBands?: boolean;
+  /** Optional connecting line series for position fills trajectory. */
+  trajectoryPoints?: { time: UTCTimestamp; value: number }[] | null;
 }
 
 function findNearestCandleIndex(
@@ -96,7 +99,7 @@ function findNearestCandleIndex(
     : low;
 }
 
-function findNearestCandle(
+export function findNearestCandle(
   candles: Candlestick[],
   targetTimeMs: number
 ): Candlestick | null {
@@ -187,11 +190,13 @@ export const ChartCanvas = memo(function ChartCanvas({
   showVolume = false,
   showUsSessionBands = false,
   showWeekendBands = false,
+  trajectoryPoints = null,
 }: ChartCanvasProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const chartRef = useRef<IChartApi | null>(null);
   const seriesRef = useRef<ISeriesApi<'Candlestick'> | null>(null);
   const volumeSeriesRef = useRef<ISeriesApi<'Histogram'> | null>(null);
+  const trajectorySeriesRef = useRef<ISeriesApi<'Line'> | null>(null);
   const prevBarsCountRef = useRef<number>(0);
   const prevFirstTimestampRef = useRef<number | null>(null);
   const prevLastTimestampRef = useRef<number | null>(null);
@@ -379,9 +384,24 @@ export const ChartCanvas = memo(function ChartCanvas({
       });
     }
 
+    const trajectorySeries = chart.addLineSeries({
+      color: '#3b82f6',
+      lineWidth: 2,
+      lineStyle: LineStyle.Dashed,
+      priceLineVisible: false,
+      lastValueVisible: false,
+      crosshairMarkerVisible: true,
+      priceFormat: {
+        type: 'custom',
+        minMove: 1e-8,
+        formatter: (price: number) => formatPrice(price),
+      },
+    });
+
     chartRef.current = chart;
     seriesRef.current = series;
     volumeSeriesRef.current = volumeSeries;
+    trajectorySeriesRef.current = trajectorySeries;
     setChartReady(true);
 
     let pendingCrosshairCandle: Candlestick | null = null;
@@ -561,8 +581,21 @@ export const ChartCanvas = memo(function ChartCanvas({
       chartRef.current = null;
       seriesRef.current = null;
       volumeSeriesRef.current = null;
+      trajectorySeriesRef.current = null;
     };
   }, []); // Run once on mount
+
+  useEffect(() => {
+    const series = trajectorySeriesRef.current;
+    if (!series) return;
+    if (trajectoryPoints && trajectoryPoints.length >= 2) {
+      series.setData(trajectoryPoints);
+      series.applyOptions({ visible: true });
+    } else {
+      series.setData([]);
+      series.applyOptions({ visible: false });
+    }
+  }, [trajectoryPoints]);
 
   // Theme update without rebuilding the chart or losing the viewport.
   useEffect(() => {

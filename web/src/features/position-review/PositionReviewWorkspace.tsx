@@ -1,4 +1,5 @@
 import {
+  memo,
   useCallback,
   useDeferredValue,
   useEffect,
@@ -8,15 +9,11 @@ import {
 } from 'react';
 import {
   BarChart2,
-  ChevronDown,
-  ChevronLeft,
-  ChevronRight,
-  ChevronUp,
-  KeyRound,
   LayoutDashboard,
+  PanelLeftClose,
+  PanelLeftOpen,
   PanelRightOpen,
   RefreshCw,
-  Search,
   X,
 } from 'lucide-react';
 import {
@@ -25,6 +22,9 @@ import {
   savePositionReviewCredentials,
   syncPositionReview,
 } from '@/api/position-review-api';
+import { ReviewPagination } from '@/ui/navigation/ReviewPagination';
+import { PositionReviewToolbar } from './PositionReviewToolbar';
+import { PositionReviewCredentialsModal } from './PositionReviewCredentialsModal';
 import {
   TIMEFRAME_DISPLAY_MAP,
   suggestReviewTimeframe,
@@ -182,6 +182,100 @@ function matchesSelectedId(
   );
 }
 
+interface PositionReviewListItemProps {
+  item: ReviewPosition;
+  isActive: boolean;
+  showOpenHeader: boolean;
+  showClosedHeader: boolean;
+  tags: PositionTag[];
+  onSelect: (key: string) => void;
+}
+
+const PositionReviewListItem = memo(function PositionReviewListItem({
+  item,
+  isActive,
+  showOpenHeader,
+  showClosedHeader,
+  tags,
+  onSelect,
+}: PositionReviewListItemProps) {
+  const pnl = positionPnl(item);
+  const roi = calculatePositionRoi(item);
+  const key = positionKey(item);
+
+  return (
+    <div>
+      {showOpenHeader && <div className="review-list-section">持仓中</div>}
+      {showClosedHeader && <div className="review-list-section">已平仓</div>}
+      <button
+        type="button"
+        data-review-id={key}
+        className={`bitlang-trade-row posrev-trade-row ${isActive ? 'active' : ''}`}
+        onClick={() => onSelect(key)}
+      >
+        <div className="posrev-row-top">
+          <div className="posrev-row-sym">
+            <strong>{item.chartSymbol}</strong>
+            <span className={`posrev-exchange-badge ${item.venue}`}>
+              {venueLabel(item.venue)}
+            </span>
+            <span className={`posrev-side-badge ${item.side}`}>
+              {item.side === 'long' ? '多' : '空'}
+              {item.leverage ? ` ${Math.round(item.leverage)}x` : ''}
+            </span>
+            {item.status === 'open' && (
+              <span className="posrev-open-badge">持仓中</span>
+            )}
+          </div>
+          <span className="posrev-row-time">
+            {formatShanghaiTime(item.entryTimeMs)}
+          </span>
+        </div>
+
+        <div className="posrev-row-bottom">
+          <div className="posrev-row-meta">
+            <span className="posrev-duration" title="持仓时长">
+              ⏱ {formatHoldingDuration(item.entryTimeMs, item.exitTimeMs)}
+            </span>
+            {item.tagIds.length > 0 && (
+              <div className="posrev-tag-pills">
+                {item.tagIds.slice(0, 2).map((tagId) => {
+                  const tag = tags.find((entry) => entry.id === tagId);
+                  if (!tag) return null;
+                  return (
+                    <span
+                      key={tag.id}
+                      className="posrev-tag-pill"
+                      style={{ borderColor: tag.color, color: tag.color }}
+                    >
+                      {tag.name}
+                    </span>
+                  );
+                })}
+                {item.tagIds.length > 2 && (
+                  <span className="posrev-tag-pill-more">
+                    +{item.tagIds.length - 2}
+                  </span>
+                )}
+              </div>
+            )}
+          </div>
+          <div className="posrev-row-pnl">
+            <strong className={pnl >= 0 ? 'profit' : 'loss'}>
+              {pnl >= 0 ? '+' : ''}{formatNumber(pnl)}
+            </strong>
+            {roi != null && (
+              <span className={`posrev-roi ${roi >= 0 ? 'profit' : 'loss'}`}>
+                {formatRoi(roi)}
+              </span>
+            )}
+          </div>
+        </div>
+      </button>
+    </div>
+  );
+});
+
 export function PositionReviewWorkspace({
   themeMode = 'dark',
 }: PositionReviewWorkspaceProps) {
@@ -199,13 +293,27 @@ export function PositionReviewWorkspace({
   const [syncing, setSyncing] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [showCredentials, setShowCredentials] = useState(false);
-  const [bitgetApiKey, setBitgetApiKey] = useState('');
-  const [bitgetSecret, setBitgetSecret] = useState('');
-  const [bitgetPassphrase, setBitgetPassphrase] = useState('');
-  const [gateApiKey, setGateApiKey] = useState('');
-  const [gateSecret, setGateSecret] = useState('');
   const [savingVenue, setSavingVenue] = useState<ReviewVenue | null>(null);
   const [auditingCache, setAuditingCache] = useState(false);
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
+
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === '[') {
+        const target = e.target as HTMLElement | null;
+        if (
+          target &&
+          ['INPUT', 'TEXTAREA', 'SELECT'].includes(target.tagName.toUpperCase())
+        ) {
+          return;
+        }
+        e.preventDefault();
+        setSidebarCollapsed((prev) => !prev);
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, []);
 
   const [search, setSearch] = useState(initialUiState.search);
   const deferredSearch = useDeferredValue(search);
@@ -506,6 +614,11 @@ export function PositionReviewWorkspace({
     setFocusRevision((revision) => revision + 1);
   }, []);
 
+  const handleSelectPosition = useCallback((key: string) => {
+    setSelectedId(key);
+    setFocusRevision((revision) => revision + 1);
+  }, []);
+
   const applyManualTimeframe = useCallback((next: ReviewTimeframe) => {
     setAutoTimeframe(false);
     setTimeframe(next);
@@ -551,31 +664,20 @@ export function PositionReviewWorkspace({
   const isSyncStale =
     Number.isFinite(syncedAtMs) && Date.now() - syncedAtMs > SYNC_STALE_MS;
 
-  const handleSaveCredentials = async (venue: ReviewVenue) => {
+  const handleSaveCredentials = async (
+    venue: ReviewVenue,
+    creds: { apiKey: string; secret: string; passphrase?: string }
+  ) => {
     setSavingVenue(venue);
     setError(null);
     try {
-      if (venue === 'bitget') {
-        await savePositionReviewCredentials({
-          venue,
-          apiKey: bitgetApiKey,
-          secret: bitgetSecret,
-          passphrase: bitgetPassphrase,
-        });
-        setBitgetApiKey('');
-        setBitgetSecret('');
-        setBitgetPassphrase('');
-        setVenues((current) => ({ ...current, bitget: true }));
-      } else {
-        await savePositionReviewCredentials({
-          venue,
-          apiKey: gateApiKey,
-          secret: gateSecret,
-        });
-        setGateApiKey('');
-        setGateSecret('');
-        setVenues((current) => ({ ...current, gate: true }));
-      }
+      await savePositionReviewCredentials({
+        venue,
+        apiKey: creds.apiKey,
+        secret: creds.secret,
+        passphrase: creds.passphrase,
+      });
+      setVenues((current) => ({ ...current, [venue]: true }));
       setConfigured(true);
       toast.success(
         venue === 'gate' ? 'Gate 只读密钥已成功加密保存' : 'Bitget 只读密钥已成功加密保存'
@@ -584,6 +686,7 @@ export function PositionReviewWorkspace({
       const errMsg = cause instanceof Error ? cause.message : '保存密钥失败';
       setError(errMsg);
       toast.error(errMsg);
+      throw cause;
     } finally {
       setSavingVenue(null);
     }
@@ -595,7 +698,15 @@ export function PositionReviewWorkspace({
     try {
       const state = await syncPositionReview();
       applyState(state);
-      toast.success(`同步完成，共获取 ${state.positions.length} 笔仓位`);
+      const warning = typeof state.warning === 'string' ? state.warning.trim() : '';
+      if (warning) {
+        toast.warning(
+          `同步完成，共获取 ${state.positions.length} 笔仓位。${warning}`,
+          6000
+        );
+      } else {
+        toast.success(`同步完成，共获取 ${state.positions.length} 笔仓位`);
+      }
     } catch (cause) {
       const errMsg = cause instanceof Error ? cause.message : '同步失败';
       setError(errMsg);
@@ -666,7 +777,7 @@ export function PositionReviewWorkspace({
   }
 
   return (
-    <div className="bitlang-review-shell">
+    <div className={`bitlang-review-shell ${sidebarCollapsed ? 'sidebar-collapsed' : ''}`}>
       <aside className="bitlang-sidebar">
         <div className="bitlang-sidebar-title">
           <div>
@@ -695,272 +806,68 @@ export function PositionReviewWorkspace({
               <LayoutDashboard size={13} />
               看板
             </button>
+            <button
+              type="button"
+              className="bitlang-sidebar-toggle-btn"
+              onClick={() => setSidebarCollapsed(true)}
+              title="折叠侧边栏 ([)"
+            >
+              <PanelLeftClose size={13} />
+            </button>
           </div>
         </div>
 
-        <div className="bitlang-sidebar-filters posrev-toolbar">
-          <div className="bitlang-filter-row">
-            <button type="button" onClick={handleSync} disabled={syncing || !configured}>
-              <RefreshCw size={14} className={syncing ? 'spin' : ''} />
-              {syncing ? '同步中' : '同步'}
-            </button>
-            <button
-              type="button"
-              onClick={() => setShowCredentials((value) => !value)}
-            >
-              <KeyRound size={14} />
-              密钥
-            </button>
-          </div>
-          {showCredentials && (
-            <div className="posrev-credentials">
-              <p>只需只读权限。Bitget 与 Gate 可同时保存，同步后仓位会汇聚到同一列表。密钥加密保存在本机，不会回传到页面。</p>
-              <div className="posrev-credential-block">
-                <strong>Bitget UTA{venues.bitget ? ' · 已配置' : ''}</strong>
-                <input
-                  value={bitgetApiKey}
-                  onChange={(event) => setBitgetApiKey(event.target.value)}
-                  placeholder="API Key"
-                  type="password"
-                  autoComplete="new-password"
-                  autoCapitalize="none"
-                  spellCheck={false}
-                />
-                <input
-                  value={bitgetSecret}
-                  onChange={(event) => setBitgetSecret(event.target.value)}
-                  placeholder="Secret"
-                  type="password"
-                  autoComplete="new-password"
-                  autoCapitalize="none"
-                  spellCheck={false}
-                />
-                <input
-                  value={bitgetPassphrase}
-                  onChange={(event) => setBitgetPassphrase(event.target.value)}
-                  placeholder="Passphrase"
-                  type="password"
-                  autoComplete="new-password"
-                  autoCapitalize="none"
-                  spellCheck={false}
-                />
-                <button
-                  type="button"
-                  onClick={() => void handleSaveCredentials('bitget')}
-                  disabled={
-                    savingVenue !== null ||
-                    !bitgetApiKey.trim() ||
-                    !bitgetSecret.trim() ||
-                    !bitgetPassphrase.trim()
-                  }
-                >
-                  {savingVenue === 'bitget' ? '保存中' : '保存 Bitget 密钥'}
-                </button>
-              </div>
-              <div className="posrev-credential-block">
-                <strong>Gate USDT 永续{venues.gate ? ' · 已配置' : ''}</strong>
-                <input
-                  value={gateApiKey}
-                  onChange={(event) => setGateApiKey(event.target.value)}
-                  placeholder="API Key"
-                  type="password"
-                  autoComplete="new-password"
-                  autoCapitalize="none"
-                  spellCheck={false}
-                />
-                <input
-                  value={gateSecret}
-                  onChange={(event) => setGateSecret(event.target.value)}
-                  placeholder="Secret"
-                  type="password"
-                  autoComplete="new-password"
-                  autoCapitalize="none"
-                  spellCheck={false}
-                />
-                <button
-                  type="button"
-                  onClick={() => void handleSaveCredentials('gate')}
-                  disabled={
-                    savingVenue !== null ||
-                    !gateApiKey.trim() ||
-                    !gateSecret.trim()
-                  }
-                >
-                  {savingVenue === 'gate' ? '保存中' : '保存 Gate 密钥'}
-                </button>
-              </div>
-              <button
-                type="button"
-                onClick={() => void handleCacheAudit()}
-                disabled={auditingCache}
-              >
-                {auditingCache ? '审计中' : '审计回退缓存'}
-              </button>
-            </div>
-          )}
-          {syncedAt && (
-            <span className="posrev-synced">
-              上次同步 {formatShanghaiTime(Date.parse(syncedAt))}
-            </span>
-          )}
-          {isSyncStale && (
-            <span className="posrev-stale-banner">
-              数据可能不是最新（上次同步超过 24 小时），请手动同步。
-            </span>
-          )}
-          {error && <span className="posrev-error">{error}</span>}
+        <PositionReviewToolbar
+          syncing={syncing}
+          configured={configured}
+          syncedAt={syncedAt}
+          isSyncStale={isSyncStale}
+          error={error}
+          onSync={handleSync}
+          onToggleCredentials={() => setShowCredentials((v) => !v)}
+          search={search}
+          onSearchChange={setSearch}
+          side={side}
+          onSideChange={setSide}
+          result={result}
+          onResultChange={setResult}
+          status={status}
+          onStatusChange={setStatus}
+          noNote={noNote}
+          onNoNoteChange={setNoNote}
+          noTag={noTag}
+          onNoTagChange={setNoTag}
+          venueFilter={venueFilter}
+          onVenueFilterChange={setVenueFilter}
+          dateRange={dateRange}
+          onDateRangeChange={setDateRange}
+          symbolFilter={symbolFilter}
+          onSymbolFilterChange={setSymbolFilter}
+          symbols={symbols}
+          sortField={sortField}
+          onSortFieldChange={setSortField}
+          descending={descending}
+          onDescendingChange={setDescending}
+          showMoreFilters={showMoreFilters}
+          onToggleMoreFilters={() => setShowMoreFilters((v) => !v)}
+          tagFilter={tagFilter}
+          onTagFilterChange={setTagFilter}
+          tags={tags}
+          showUsSessionBands={showUsSessionBands}
+          onToggleUsSessionBands={() => setShowUsSessionBands((v) => !v)}
+          showWeekendBands={showWeekendBands}
+          onToggleWeekendBands={() => setShowWeekendBands((v) => !v)}
+        />
 
-          <label className="bitlang-search">
-            <Search size={14} />
-            <input
-              value={search}
-              onChange={(event) => setSearch(event.target.value)}
-              placeholder="搜索交易对、备注或标签"
-            />
-          </label>
-          <div className="review-filter-chips">
-            <button
-              type="button"
-              className={side === 'long' ? 'active' : ''}
-              onClick={() => setSide((value) => (value === 'long' ? 'all' : 'long'))}
-            >
-              多
-            </button>
-            <button
-              type="button"
-              className={side === 'short' ? 'active' : ''}
-              onClick={() => setSide((value) => (value === 'short' ? 'all' : 'short'))}
-            >
-              空
-            </button>
-            <button
-              type="button"
-              className={result === 'profit' ? 'active' : ''}
-              onClick={() =>
-                setResult((value) => (value === 'profit' ? 'all' : 'profit'))
-              }
-            >
-              盈
-            </button>
-            <button
-              type="button"
-              className={result === 'loss' ? 'active' : ''}
-              onClick={() =>
-                setResult((value) => (value === 'loss' ? 'all' : 'loss'))
-              }
-            >
-              亏
-            </button>
-            <button
-              type="button"
-              className={status === 'open' ? 'active' : ''}
-              onClick={() =>
-                setStatus((value) => (value === 'open' ? 'all' : 'open'))
-              }
-            >
-              持仓中
-            </button>
-            <button
-              type="button"
-              className={noNote ? 'active' : ''}
-              onClick={() => setNoNote((value) => !value)}
-            >
-              未备注
-            </button>
-            <button
-              type="button"
-              className={noTag ? 'active' : ''}
-              onClick={() => setNoTag((value) => !value)}
-            >
-              未打标
-            </button>
-            <button
-              type="button"
-              className={venueFilter === 'bitget' ? 'active' : ''}
-              onClick={() =>
-                setVenueFilter((value) => (value === 'bitget' ? 'all' : 'bitget'))
-              }
-            >
-              Bitget
-            </button>
-            <button
-              type="button"
-              className={venueFilter === 'gate' ? 'active' : ''}
-              onClick={() =>
-                setVenueFilter((value) => (value === 'gate' ? 'all' : 'gate'))
-              }
-            >
-              Gate
-            </button>
-          </div>
-          <div className="bitlang-filter-row">
-            <select
-              value={dateRange}
-              onChange={(event) => setDateRange(event.target.value as DateRangeFilter)}
-            >
-              <option value="all">全部时间</option>
-              <option value="1d">近 1 天</option>
-              <option value="3d">近 3 天</option>
-              <option value="7d">近 7 天</option>
-              <option value="30d">近 30 天</option>
-              <option value="90d">近 90 天</option>
-            </select>
-            <select
-              value={symbolFilter}
-              onChange={(event) => setSymbolFilter(event.target.value)}
-            >
-              <option value="all">全部交易对</option>
-              {symbols.map((item) => (
-                <option key={item} value={item}>
-                  {item}
-                </option>
-              ))}
-            </select>
-          </div>
-          <div className="bitlang-filter-row">
-            <select
-              value={sortField}
-              onChange={(event) => setSortField(event.target.value as SortField)}
-            >
-              <option value="entryTimeMs">开仓时间</option>
-              <option value="netPnl">净盈亏</option>
-            </select>
-            <button type="button" onClick={() => setDescending((value) => !value)}>
-              {descending ? <ChevronDown size={15} /> : <ChevronUp size={15} />}
-              {descending ? '降序' : '升序'}
-            </button>
-          </div>
-          <button
-            type="button"
-            className="review-more-filters"
-            onClick={() => setShowMoreFilters((value) => !value)}
-          >
-            {showMoreFilters ? '收起筛选' : '更多筛选'}
-          </button>
-          {showMoreFilters && (
-            <div className="bitlang-filter-row">
-              <select
-                value={tagFilter}
-                onChange={(event) => setTagFilter(event.target.value)}
-              >
-                <option value="all">全部标签</option>
-                {tags.map((tag) => (
-                  <option key={tag.id} value={String(tag.id)}>
-                    {tag.name}
-                  </option>
-                ))}
-              </select>
-              <select
-                value={status}
-                onChange={(event) => setStatus(event.target.value as StatusFilter)}
-              >
-                <option value="all">开/平</option>
-                <option value="open">持仓中</option>
-                <option value="closed">已平仓</option>
-              </select>
-            </div>
-          )}
-        </div>
+        <PositionReviewCredentialsModal
+          isOpen={showCredentials}
+          venues={venues}
+          savingVenue={savingVenue}
+          auditingCache={auditingCache}
+          onClose={() => setShowCredentials(false)}
+          onSaveCredentials={handleSaveCredentials}
+          onAuditCache={handleCacheAudit}
+        />
 
         <div className="bitlang-progress posrev-stats-bar">
           <div className="posrev-stat-item">
@@ -999,114 +906,32 @@ export function PositionReviewWorkspace({
 
         <div className="bitlang-trade-list" ref={listRef}>
           {pageTrades.map((item, index) => {
-            const pnl = positionPnl(item);
-            const roi = calculatePositionRoi(item);
             const prev = pageTrades[index - 1];
             const showOpenHeader = item.status === 'open' && index === 0;
             const showClosedHeader =
               item.status !== 'open' && (!prev || prev.status === 'open');
+            const key = positionKey(item);
+            const isActive = Boolean(selected && key === positionKey(selected));
             return (
-              <div key={positionKey(item)}>
-                {showOpenHeader && (
-                  <div className="review-list-section">持仓中</div>
-                )}
-                {showClosedHeader && (
-                  <div className="review-list-section">已平仓</div>
-                )}
-              <button
-                type="button"
-                data-review-id={positionKey(item)}
-                className={`bitlang-trade-row posrev-trade-row ${
-                  selected && positionKey(item) === positionKey(selected) ? 'active' : ''
-                }`}
-                onClick={() => {
-                  setSelectedId(positionKey(item));
-                  setFocusRevision((revision) => revision + 1);
-                }}
-              >
-                <div className="posrev-row-top">
-                  <div className="posrev-row-sym">
-                    <strong>{item.chartSymbol}</strong>
-                    <span className={`posrev-exchange-badge ${item.venue}`}>
-                      {venueLabel(item.venue)}
-                    </span>
-                    <span className={`posrev-side-badge ${item.side}`}>
-                      {item.side === 'long' ? '多' : '空'}
-                      {item.leverage ? ` ${Math.round(item.leverage)}x` : ''}
-                    </span>
-                    {item.status === 'open' && (
-                      <span className="posrev-open-badge">持仓中</span>
-                    )}
-                  </div>
-                  <span className="posrev-row-time">
-                    {formatShanghaiTime(item.entryTimeMs)}
-                  </span>
-                </div>
-
-                <div className="posrev-row-bottom">
-                  <div className="posrev-row-meta">
-                    <span className="posrev-duration" title="持仓时长">
-                      ⏱ {formatHoldingDuration(item.entryTimeMs, item.exitTimeMs)}
-                    </span>
-                    {item.tagIds.length > 0 && (
-                      <div className="posrev-tag-pills">
-                        {item.tagIds.slice(0, 2).map((tagId) => {
-                          const tag = tags.find((entry) => entry.id === tagId);
-                          if (!tag) return null;
-                          return (
-                            <span
-                              key={tag.id}
-                              className="posrev-tag-pill"
-                              style={{ borderColor: tag.color, color: tag.color }}
-                            >
-                              {tag.name}
-                            </span>
-                          );
-                        })}
-                        {item.tagIds.length > 2 && (
-                          <span className="posrev-tag-pill-more">
-                            +{item.tagIds.length - 2}
-                          </span>
-                        )}
-                      </div>
-                    )}
-                  </div>
-                  <div className="posrev-row-pnl">
-                    <strong className={pnl >= 0 ? 'profit' : 'loss'}>
-                      {pnl >= 0 ? '+' : ''}{formatNumber(pnl)}
-                    </strong>
-                    {roi != null && (
-                      <span className={`posrev-roi ${roi >= 0 ? 'profit' : 'loss'}`}>
-                        {formatRoi(roi)}
-                      </span>
-                    )}
-                  </div>
-                </div>
-              </button>
-              </div>
+              <PositionReviewListItem
+                key={key}
+                item={item}
+                isActive={isActive}
+                showOpenHeader={showOpenHeader}
+                showClosedHeader={showClosedHeader}
+                tags={tags}
+                onSelect={handleSelectPosition}
+              />
             );
           })}
         </div>
 
-        <div className="bitlang-pagination">
-          <button
-            type="button"
-            disabled={safePage <= 0}
-            onClick={() => setPage(Math.max(0, safePage - 1))}
-          >
-            <ChevronLeft size={14} />
-          </button>
-          <span>
-            {safePage + 1} / {pageCount}
-          </span>
-          <button
-            type="button"
-            disabled={safePage + 1 >= pageCount}
-            onClick={() => setPage(safePage + 1)}
-          >
-            <ChevronRight size={14} />
-          </button>
-        </div>
+        <ReviewPagination
+          page={safePage}
+          pageCount={pageCount}
+          zeroIndexed
+          onPageChange={setPage}
+        />
         <div className="posrev-shortcut-hint">
           <span>⌨️ ↑↓ / j k 切仓位 · 1-7 切周期</span>
         </div>
@@ -1136,6 +961,16 @@ export function PositionReviewWorkspace({
         </section>
       ) : (
       <section className="bitlang-chart-workspace posrev-chart-workspace">
+        {sidebarCollapsed && (
+          <button
+            type="button"
+            className="bitlang-sidebar-toggle-btn bitlang-sidebar-expand-float"
+            onClick={() => setSidebarCollapsed(false)}
+            title="展开侧边栏 ([)"
+          >
+            <PanelLeftOpen size={15} />
+          </button>
+        )}
         {selected ? (
           <>
             <header className="bitlang-chart-header">

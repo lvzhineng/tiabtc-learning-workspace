@@ -146,11 +146,23 @@
 .posrev-trade-row {
   display: flex !important;
   flex-direction: column !important;
-  gap: 4px !important;
-  padding: 8px 10px !important;
+  gap: 5px !important;
+  padding: 9px 12px !important;
   width: 100% !important;
   height: auto !important;
   border-bottom: 1px solid var(--border-color);
+  transition: background-color 0.12s ease, border-left-color 0.12s ease;
+  border-left: 3px solid transparent !important;
+  text-align: left;
+}
+
+.posrev-trade-row:hover:not(.active) {
+  background: color-mix(in srgb, var(--bg-dark-700) 70%, transparent) !important;
+}
+
+.posrev-trade-row.active {
+  background: color-mix(in srgb, var(--accent-blue) 12%, var(--bg-dark-800)) !important;
+  border-left: 3px solid var(--accent-blue) !important;
 }
 
 .posrev-row-top,
@@ -159,7 +171,7 @@
   justify-content: space-between;
   align-items: center;
   width: 100%;
-  gap: 6px;
+  gap: 8px;
 }
 
 .posrev-row-sym {
@@ -251,6 +263,7 @@
   align-items: center;
   gap: 6px;
   white-space: nowrap;
+  font-variant-numeric: tabular-nums;
 }
 
 .posrev-roi {
@@ -530,6 +543,17 @@
 .posrev-copy-chart:disabled {
   opacity: 0.5;
   cursor: not-allowed;
+}
+
+.posrev-trajectory-btn {
+  right: 98px;
+}
+
+.posrev-trajectory-btn.active {
+  background: color-mix(in srgb, var(--accent-blue) 22%, var(--bg-dark-800));
+  border-color: var(--accent-blue);
+  color: var(--accent-blue);
+  font-weight: 500;
 }
 
 /* Panel & Metrics */

@@ -9,10 +9,10 @@ import {
 import {
   BarChart2,
   ChevronDown,
-  ChevronLeft,
-  ChevronRight,
   ChevronUp,
   LayoutDashboard,
+  PanelLeftClose,
+  PanelLeftOpen,
   PanelRightOpen,
   RefreshCw,
   Search,
@@ -20,6 +20,7 @@ import {
 } from 'lucide-react';
 import type { BitlangTag } from '@/api/bitlang-review-api';
 import { fetchBitlangReviewState } from '@/api/bitlang-review-api';
+import { ReviewPagination } from '@/ui/navigation/ReviewPagination';
 import {
   TIMEFRAME_DISPLAY_MAP,
   suggestReviewTimeframe,
@@ -201,6 +202,26 @@ export function BitlangTradeWorkspace({
   const [tags, setTags] = useState<BitlangTag[]>([]);
   const [selectedId, setSelectedId] = useState(initialUiState.selectedId);
   const [focusRevision, setFocusRevision] = useState(0);
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
+
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === '[') {
+        const target = e.target as HTMLElement | null;
+        if (
+          target &&
+          ['INPUT', 'TEXTAREA', 'SELECT'].includes(target.tagName.toUpperCase())
+        ) {
+          return;
+        }
+        e.preventDefault();
+        setSidebarCollapsed((prev) => !prev);
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, []);
+
   const [search, setSearch] = useState(initialUiState.search);
   const [instrument, setInstrument] = useState(initialUiState.instrument);
   const [direction, setDirection] = useState<'all' | BitlangDirection>(
@@ -620,7 +641,7 @@ export function BitlangTradeWorkspace({
   }
 
   return (
-    <div className="bitlang-review-shell">
+    <div className={`bitlang-review-shell ${sidebarCollapsed ? 'sidebar-collapsed' : ''}`}>
       <aside className="bitlang-sidebar">
         <div className="bitlang-sidebar-title">
           <div>
@@ -643,6 +664,14 @@ export function BitlangTradeWorkspace({
             >
               <LayoutDashboard size={13} />
               看板
+            </button>
+            <button
+              type="button"
+              className="bitlang-sidebar-toggle-btn"
+              onClick={() => setSidebarCollapsed(true)}
+              title="折叠侧边栏 ([)"
+            >
+              <PanelLeftClose size={13} />
             </button>
           </div>
         </div>
@@ -905,25 +934,11 @@ export function BitlangTradeWorkspace({
           ))}
         </div>
 
-        <div className="bitlang-pagination">
-          <button
-            type="button"
-            disabled={safePage <= 1}
-            onClick={() => setPage(safePage - 1)}
-          >
-            <ChevronLeft size={14} />
-          </button>
-          <span>
-            {safePage} / {pageCount}
-          </span>
-          <button
-            type="button"
-            disabled={safePage >= pageCount}
-            onClick={() => setPage(safePage + 1)}
-          >
-            <ChevronRight size={14} />
-          </button>
-        </div>
+        <ReviewPagination
+          page={safePage}
+          pageCount={pageCount}
+          onPageChange={setPage}
+        />
         <div className="bitlang-shortcut-hint">
           <span>⌨️ ↑↓ / j k 切交易 · 1-7 切周期</span>
         </div>
@@ -948,6 +963,16 @@ export function BitlangTradeWorkspace({
         </section>
       ) : (
         <section className="bitlang-chart-workspace posrev-chart-workspace">
+          {sidebarCollapsed && (
+            <button
+              type="button"
+              className="bitlang-sidebar-toggle-btn bitlang-sidebar-expand-float"
+              onClick={() => setSidebarCollapsed(false)}
+              title="展开侧边栏 ([)"
+            >
+              <PanelLeftOpen size={15} />
+            </button>
+          )}
           {selectedTrade ? (
             <>
               <header className="bitlang-chart-header">

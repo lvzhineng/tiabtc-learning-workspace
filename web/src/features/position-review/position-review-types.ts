@@ -55,6 +55,7 @@ export interface PositionReviewState {
   configured: boolean;
   venues?: PositionReviewVenues;
   syncedAt: string | null;
+  warning?: string | null;
   balance: { total: number | null } | null;
   balances?: {
     bitget: { total: number | null } | null;

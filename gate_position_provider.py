@@ -96,12 +96,12 @@ def parse_gate_leverage(row, info):
 
 
 def parse_gate_margin_mode(row, info):
-    isolated = _first_float(row.get("leverage"), info.get("leverage"))
-    if isolated is not None:
-        return "isolated" if isolated > 0 else "cross"
     mode = str(info.get("margin_mode") or row.get("marginMode") or "").strip().lower()
     if mode in {"isolated", "cross"}:
         return mode
+    isolated = _first_float(row.get("leverage"), info.get("leverage"))
+    if isolated is not None:
+        return "isolated" if isolated > 0 else "cross"
     return None
 
 

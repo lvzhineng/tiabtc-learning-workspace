@@ -1,0 +1,134 @@
+.cal-heatmap-root {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  width: 100%;
+}
+
+.cal-heatmap-wrapper {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  overflow-x: auto;
+  padding: 4px 0;
+}
+
+.cal-heatmap-sidebar {
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  height: 105px;
+  padding-right: 4px;
+}
+
+.cal-weekday-label {
+  font-size: 10px;
+  line-height: 12px;
+  color: var(--text-muted);
+  visibility: hidden;
+  height: 12px;
+}
+
+.cal-weekday-label.visible {
+  visibility: visible;
+}
+
+.cal-heatmap-grid {
+  display: flex;
+  gap: 4px;
+}
+
+.cal-heatmap-col {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.cal-cell {
+  width: 12px;
+  height: 12px;
+  border-radius: 2px;
+  border: 1px solid transparent;
+  padding: 0;
+  cursor: default;
+  transition: transform 0.1s ease, border-color 0.15s ease, box-shadow 0.15s ease;
+}
+
+.cal-cell:not(.cal-cell-empty) {
+  cursor: pointer;
+}
+
+.cal-cell:not(.cal-cell-empty):hover {
+  transform: scale(1.25);
+  z-index: 5;
+}
+
+.cal-cell.selected {
+  outline: 2px solid var(--accent-blue);
+  outline-offset: 1px;
+  z-index: 6;
+}
+
+/* Cell Colors */
+.cal-cell-empty {
+  background: color-mix(in srgb, var(--border-color) 40%, transparent);
+}
+
+.cal-cell-even {
+  background: #64748b;
+}
+
+.cal-cell-profit-low {
+  background: rgba(34, 197, 94, 0.35);
+}
+
+.cal-cell-profit-mid {
+  background: rgba(34, 197, 94, 0.65);
+}
+
+.cal-cell-profit-high {
+  background: #22c55e;
+  box-shadow: 0 0 4px rgba(34, 197, 94, 0.5);
+}
+
+.cal-cell-loss-low {
+  background: rgba(239, 68, 68, 0.35);
+}
+
+.cal-cell-loss-mid {
+  background: rgba(239, 68, 68, 0.65);
+}
+
+.cal-cell-loss-high {
+  background: #ef4444;
+  box-shadow: 0 0 4px rgba(239, 68, 68, 0.5);
+}
+
+/* Footer & Legend */
+.cal-heatmap-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 10px;
+  font-size: 11px;
+  color: var(--text-secondary);
+}
+
+.cal-heatmap-legend {
+  display: flex;
+  align-items: center;
+  gap: 3px;
+}
+
+.cal-legend-dot {
+  width: 9px;
+  height: 9px;
+  border-radius: 2px;
+  display: inline-block;
+}
+
+.cal-heatmap-tip {
+  font-size: 11px;
+  color: var(--text-muted);
+}

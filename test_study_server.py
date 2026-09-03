@@ -1526,6 +1526,79 @@ class BitlangReviewStorageTests(unittest.TestCase):
                 0,
             )
 
+    def test_assign_fills_isolates_venues_with_same_position_id(self):
+        positions = [
+            {
+                "venue": "bitget",
+                "positionId": "pos-same",
+                "chartSymbol": "BTCUSDT",
+                "side": "long",
+                "status": "closed",
+                "entryTimeMs": 1_000,
+                "exitTimeMs": 5_000,
+            },
+            {
+                "venue": "gate",
+                "positionId": "pos-same",
+                "chartSymbol": "BTCUSDT",
+                "side": "long",
+                "status": "closed",
+                "entryTimeMs": 1_000,
+                "exitTimeMs": 5_000,
+            },
+        ]
+        fills = [
+            {
+                "venue": "bitget",
+                "execId": "fill-bitget",
+                "orderId": "order-b",
+                "chartSymbol": "BTCUSDT",
+                "side": "buy",
+                "tradeSide": "open",
+                "timeMs": 1_000,
+                "price": 100.0,
+                "quantity": 1.0,
+                "pnl": 0.0,
+            },
+            {
+                "venue": "gate",
+                "execId": "fill-gate",
+                "orderId": "order-g",
+                "chartSymbol": "BTCUSDT",
+                "side": "buy",
+                "tradeSide": "open",
+                "timeMs": 1_000,
+                "price": 100.0,
+                "quantity": 2.0,
+                "pnl": 0.0,
+            },
+        ]
+        assigned = study_server.assign_fills_to_positions(positions, fills)
+        bitget_fills = assigned[("bitget", "pos-same")]
+        gate_fills = assigned[("gate", "pos-same")]
+        self.assertEqual(len(bitget_fills), 1)
+        self.assertEqual(bitget_fills[0]["execId"], "fill-bitget")
+        self.assertEqual(len(gate_fills), 1)
+        self.assertEqual(gate_fills[0]["execId"], "fill-gate")
+
+    def test_parse_gate_margin_mode_prefers_explicit_field(self):
+        from gate_position_provider import parse_gate_margin_mode
+
+        # Explicit cross even if leverage > 0
+        mode = parse_gate_margin_mode({"leverage": 10}, {"margin_mode": "cross"})
+        self.assertEqual(mode, "cross")
+
+        # Explicit isolated
+        mode = parse_gate_margin_mode({"leverage": 0}, {"margin_mode": "isolated"})
+        self.assertEqual(mode, "isolated")
+
+        # Inferred from leverage when explicit field missing
+        mode = parse_gate_margin_mode({"leverage": 10}, {})
+        self.assertEqual(mode, "isolated")
+
+        mode = parse_gate_margin_mode({"leverage": 0}, {})
+        self.assertEqual(mode, "cross")
+
 
 if __name__ == "__main__":
     unittest.main()

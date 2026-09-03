@@ -339,23 +339,24 @@ async function requestPositionCandles(
     { signal }
   );
   const truncated = Boolean(data.truncated);
-  const warning = data.warning?.trim() || null;
-  const batch = {
-    candles: parseCandles(data, symbol, interval),
-    warning: warning || (truncated ? TRUNCATED_WINDOW_HINT : null),
-    candleVenue: data.candleVenue || 'bybit',
-    truncated,
-  };
-  if (!warning) {
+  const rawWarning = (data.warning || '').trim() || null;
+  const candleVenue = data.candleVenue || 'bybit';
+  const candles = parseCandles(data, symbol, interval);
+  if (!rawWarning) {
     rememberCandleWindow(
       'position',
       symbol,
       interval,
-      batch.candles,
-      batch.candleVenue
+      candles,
+      candleVenue
     );
   }
-  return batch;
+  return {
+    candles,
+    warning: rawWarning || (truncated ? TRUNCATED_WINDOW_HINT : null),
+    candleVenue,
+    truncated,
+  };
 }
 
 export async function fetchPositionReviewCandles(
