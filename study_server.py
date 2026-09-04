@@ -23,6 +23,7 @@ from bitget_position_provider import (
 )
 from gate_position_provider import GateUsdtPositionProvider
 from market_data_provider import CcxtBybitMarketDataProvider
+import video_catalog
 
 
 ROOT = Path(__file__).resolve().parent
@@ -71,6 +72,7 @@ DATABASE_LOCK = threading.RLock()
 STATE_LOCK = threading.RLock()
 CREDENTIAL_LOCK = threading.Lock()
 POSITION_SYNC_LOCK = threading.Lock()
+VIDEO_REFRESH_LOCK = threading.Lock()
 MARKET_FETCH_LOCKS_GUARD = threading.Lock()
 MARKET_FETCH_LOCKS = {}
 MARKET_FETCH_FAILURES = {}
@@ -99,7 +101,7 @@ CACHE_AUDIT_MAX_CANDLES_PER_RANGE = 20000
 
 
 class SyncInProgressError(RuntimeError):
-    """Rejected a concurrent position-review sync."""
+    """Rejected a concurrent long-running mutation such as position sync."""
 
 
 VENUE_MARKET_FETCH_LOCKS = {}
@@ -2815,6 +2817,21 @@ def sync_position_review():
         POSITION_SYNC_LOCK.release()
 
 
+def refresh_learning_videos():
+    if not VIDEO_REFRESH_LOCK.acquire(blocking=False):
+        raise SyncInProgressError("视频清单正在刷新，请稍后再试")
+    try:
+        result = video_catalog.refresh_video_catalog(ROOT)
+        return {
+            "ok": True,
+            "total": result["total"],
+            "added": result["added"],
+            "latestDate": result["latestDate"],
+        }
+    finally:
+        VIDEO_REFRESH_LOCK.release()
+
+
 def sync_bitget_positions():
     return sync_position_review()
 
@@ -4152,6 +4169,8 @@ class StudyHandler(BaseHTTPRequestHandler):
                 )
             if parsed.path == "/api/position-review/sync":
                 return self.send_json(HTTPStatus.OK, sync_position_review())
+            if parsed.path == "/api/videos/refresh":
+                return self.send_json(HTTPStatus.OK, refresh_learning_videos())
             if parsed.path == "/api/position-review/notes":
                 return self.send_json(HTTPStatus.OK, save_position_note(payload))
             if parsed.path == "/api/position-review/tags":

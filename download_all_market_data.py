@@ -8,10 +8,11 @@ from datetime import datetime
 from pathlib import Path
 
 import study_server
+import video_catalog
 
 
 ROOT = Path(__file__).resolve().parent
-DEFAULT_CSV = ROOT / "TiaBTC_公开视频清单_20260711.csv"
+DEFAULT_CSV = video_catalog.find_video_csv(ROOT)
 
 
 def parse_args():

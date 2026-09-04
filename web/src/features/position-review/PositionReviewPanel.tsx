@@ -20,7 +20,7 @@ import {
   formatHoldingDuration,
   formatLeverage,
   formatNumber,
-  formatRoi,
+  formatRoiWithHint,
   formatShanghaiTimeShort,
 } from './position-review-format';
 import {
@@ -247,7 +247,7 @@ export function PositionReviewPanel({
     },
     {
       label: '收益率 (净盈亏 / 保证金)',
-      value: formatRoi(roi),
+      value: formatRoiWithHint(roi),
       isProfit: (roi ?? 0) > 0,
       isLoss: (roi ?? 0) < 0,
     },

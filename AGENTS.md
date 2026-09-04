@@ -33,7 +33,7 @@ start-workspace.cmd
 - Bitget 仓位/回退行情提供器：`bitget_position_provider.py`
 - Gate 仓位/回退行情提供器：`gate_position_provider.py`
 - SQLite 数据库：`tiabtc-review.sqlite`
-- 视频快照：`web/public/videos.json`
+- 视频快照：`web/public/videos.json`（由根目录 CSV 生成；可一键从 YouTube 频道增量刷新）
 - Bit浪浪交割单快照：`web/public/bitlang-trades.json`
 - 一键启动：`start-workspace.cmd`
 - 运行日志与本地密钥材料：`.run/`（已 gitignore；含 `credential-key`）
@@ -168,6 +168,8 @@ Python 后端是纯 API 服务。禁止恢复项目目录静态文件服务；�
 | `market_data_provider.py` | CCXT Bybit 行情适配、代理、限频与永续目录 |
 | `bitget_position_provider.py` | CCXT Bitget UTA 只读仓位/余额与仓位复盘 K 线 |
 | `gate_position_provider.py` | CCXT Gate USDT 永续只读仓位/余额、杠杆与仓位复盘 K 线 |
+| `video_catalog.py` | TiaBTC YouTube 频道增量刷新、CSV 合并与 `videos.json` 重建 |
+| `scripts/refresh_videos.py` | 命令行入口：一键刷新视频清单 |
 | `web/src/app/AppShell.tsx` | 四个工作台导航、主题和连接状态 |
 | `web/src/chart/ChartCanvas.tsx` | K 线、成交量、视口、十字线和边界加载 |
 | `web/src/chart/chart-time.ts` | 毫秒/秒边界转换和北京时间格式化 |
@@ -187,7 +189,7 @@ Python 后端是纯 API 服务。禁止恢复项目目录静态文件服务；�
 | `web/src/api/candle-window-cache.ts` | 窗口 K 线分片 LRU |
 | `web/src/ui/persistence/local-ui-state.ts` | 非敏感界面偏好的 localStorage 容错读写与类型校验 |
 | `web/src/ui/feedback/GlobalConfirmDialog.tsx` | 全局确认框 |
-| `web/src/features/learning/LearningWorkspace.tsx` | 视频列表、筛选和学习状态 |
+| `web/src/features/learning/LearningWorkspace.tsx` | 视频列表、筛选、学习状态和一键刷新清单 |
 
 ## 7. 工作流程
 
@@ -236,3 +238,4 @@ Python 后端是纯 API 服务。禁止恢复项目目录静态文件服务；�
 21. bit浪浪：本机备注/标签可保存且不覆盖交割单原始备注；看板可进入；日记跳转切回 K 线并居中。
 22. 列表翻页、筛选、排序、周期和内部视图在刷新/重启后恢复；失效的交易对、标签或越界页码安全回退，且本机存储中不出现密钥和编辑草稿。
 23. 行情复盘双击切入自由复盘后，刷新仍保留回放起点、当前揭示时间和速度（自动播放按暂停恢复），未来 K 线继续隐藏；退出自由回放后刷新不得重新进入回放。
+24. 顺序学习「刷新清单」可从 YouTube 增量合并新视频并重建 `videos.json`；已有条目的标题与发布时间不被覆盖。仓位列表极端 ROI（`|roi| ≥ 999%`）只改展示为 `>±999%`，不改盈亏数字。

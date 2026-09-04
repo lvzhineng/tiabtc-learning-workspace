@@ -48,6 +48,14 @@
   flex-shrink: 0;
 }
 
+.learning-refresh-btn {
+  height: 32px;
+}
+
+.learning-catalog-meta {
+  color: var(--text-muted);
+}
+
 .learning-save-pill {
   padding: 6px 12px;
   border-radius: 999px;

@@ -7,6 +7,7 @@
     "dev": "vite",
     "build": "tsc && vite build",
     "build:videos": "python scripts/build-videos-json.py",
+    "refresh:videos": "python ../scripts/refresh_videos.py",
     "preview": "vite preview"
   },
   "dependencies": {

@@ -26,3 +26,17 @@ export async function updateLearningState(
     body: record ? JSON.stringify(record) : '',
   });
 }
+
+export type VideoCatalogRefreshResult = {
+  ok: boolean;
+  total: number;
+  added: number;
+  latestDate: string | null;
+};
+
+export async function refreshVideoCatalog(): Promise<VideoCatalogRefreshResult> {
+  return requestJson<VideoCatalogRefreshResult>('/api/videos/refresh', {
+    method: 'POST',
+    body: '{}',
+  });
+}

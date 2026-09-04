@@ -6,6 +6,8 @@ import { LearningStatsHeader } from './LearningStatsHeader';
 import { LearningFilterBar } from './LearningFilterBar';
 import { VideoTable } from './VideoTable';
 import { RefreshCw } from 'lucide-react';
+import { refreshVideoCatalog } from '@/api/video-api';
+import { toast } from '@/ui/feedback/toast';
 import {
   readLocalUiState,
   storedInteger,
@@ -45,9 +47,11 @@ function loadLearningUiState(): { filters: FilterParams; page: number } {
   };
 }
 
-function loadVideos(): Promise<VideoItem[]> {
+function loadVideos(force = false): Promise<VideoItem[]> {
+  if (force) videosRequest = null;
   if (!videosRequest) {
-    videosRequest = fetch('/videos.json')
+    const suffix = force ? `?t=${Date.now()}` : '';
+    videosRequest = fetch(`/videos.json${suffix}`)
       .then((response) => {
         if (!response.ok) throw new Error(`HTTP ${response.status}`);
         return response.json() as Promise<VideoItem[]>;
@@ -65,6 +69,7 @@ export function LearningWorkspace({
 }: Props) {
   const [videos, setVideos] = useState<VideoItem[]>([]);
   const [loadingVideos, setLoadingVideos] = useState<boolean>(true);
+  const [refreshingCatalog, setRefreshingCatalog] = useState(false);
   const [initialUiState] = useState(loadLearningUiState);
 
   const {
@@ -144,6 +149,40 @@ export function LearningWorkspace({
     return filteredVideos.slice(start, start + PAGE_SIZE);
   }, [filteredVideos, currentPageClamped]);
 
+  const latestCatalogDate = useMemo(() => {
+    let latest = '';
+    for (const video of videos) {
+      if (video.date && video.date > latest) latest = video.date;
+    }
+    return latest;
+  }, [videos]);
+
+  const handleRefreshCatalog = async () => {
+    if (refreshingCatalog) return;
+    setRefreshingCatalog(true);
+    try {
+      const result = await refreshVideoCatalog();
+      const nextVideos = await loadVideos(true);
+      setVideos(nextVideos || []);
+      if (result.added > 0) {
+        toast.success(
+          `已新增 ${result.added} 条，清单共 ${result.total} 个视频` +
+            (result.latestDate ? `，最新 ${result.latestDate}` : '')
+        );
+      } else {
+        toast.success(
+          `清单已是最新，共 ${result.total} 个视频` +
+            (result.latestDate ? `，最新 ${result.latestDate}` : '')
+        );
+      }
+    } catch (cause) {
+      const errMsg = cause instanceof Error ? cause.message : '刷新视频清单失败';
+      toast.error(errMsg);
+    } finally {
+      setRefreshingCatalog(false);
+    }
+  };
+
   return (
     <div className="learning-container">
       <section className="learning-hero">
@@ -159,6 +198,16 @@ export function LearningWorkspace({
           {saveStatus && (
             <div className="learning-save-pill">{saveStatus}</div>
           )}
+          <button
+            type="button"
+            className="ui-btn learning-refresh-btn"
+            onClick={() => void handleRefreshCatalog()}
+            disabled={refreshingCatalog || loadingVideos}
+            title="从 TiaBTC YouTube 频道拉取新视频并重建清单"
+          >
+            <RefreshCw size={14} className={refreshingCatalog ? 'spin' : undefined} />
+            <span>{refreshingCatalog ? '正在刷新清单…' : '刷新清单'}</span>
+          </button>
         </div>
       </section>
 
@@ -175,6 +224,12 @@ export function LearningWorkspace({
           <div className="learning-context-bar">
             <div>
               显示范围: 共 <strong>{filteredVideos.length}</strong> 个视频
+              {latestCatalogDate ? (
+                <span className="learning-catalog-meta">
+                  {' '}
+                  · 清单最新 {latestCatalogDate}
+                </span>
+              ) : null}
             </div>
             <div>
               页码: <strong>{currentPageClamped}</strong> / {totalPages} 页

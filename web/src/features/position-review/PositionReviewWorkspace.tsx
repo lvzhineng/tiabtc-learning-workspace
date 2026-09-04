@@ -59,6 +59,7 @@ import {
   formatNumber,
   formatRoi,
   formatShanghaiTime,
+  roiDisplayTitle,
 } from './position-review-format';
 import '@/styles/bitlang.css';
 import '@/styles/position-review.css';
@@ -265,7 +266,10 @@ const PositionReviewListItem = memo(function PositionReviewListItem({
               {pnl >= 0 ? '+' : ''}{formatNumber(pnl)}
             </strong>
             {roi != null && (
-              <span className={`posrev-roi ${roi >= 0 ? 'profit' : 'loss'}`}>
+              <span
+                className={`posrev-roi ${roi >= 0 ? 'profit' : 'loss'}`}
+                title={roiDisplayTitle(roi)}
+              >
                 {formatRoi(roi)}
               </span>
             )}
