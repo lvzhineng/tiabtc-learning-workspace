@@ -581,8 +581,16 @@ def fetch_rss_published(channel_id: str = "", playlist_id: str = "") -> dict[str
         feed_url = f"https://www.youtube.com/feeds/videos.xml?channel_id={channel_id}"
     else:
         return {}
-    xml_bytes = _http_bytes(feed_url)
-    root = ET.fromstring(xml_bytes)
+    try:
+        xml_bytes = _http_bytes(feed_url)
+    except RuntimeError:
+        return {}
+    if not xml_bytes or not xml_bytes.strip():
+        return {}
+    try:
+        root = ET.fromstring(xml_bytes)
+    except ET.ParseError:
+        return {}
     ns = {
         "atom": "http://www.w3.org/2005/Atom",
         "yt": "http://www.youtube.com/xml/schemas/2015",
