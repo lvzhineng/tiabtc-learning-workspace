@@ -1,6 +1,11 @@
-import { memo, useState } from 'react';
-import { X, RefreshCw } from 'lucide-react';
+import { memo, useEffect, useState } from 'react';
+import { ExternalLink, X, RefreshCw } from 'lucide-react';
 import type { PositionReviewVenues, ReviewVenue } from './position-review-types';
+import {
+  AFFILIATE_DISCLOSURE,
+  fetchWorkspaceSettings,
+  type InviteSettings,
+} from '@/api/workspace-settings-api';
 
 interface PositionReviewCredentialsModalProps {
   isOpen: boolean;
@@ -30,6 +35,22 @@ export const PositionReviewCredentialsModal = memo(
     const [bitgetPassphrase, setBitgetPassphrase] = useState('');
     const [gateApiKey, setGateApiKey] = useState('');
     const [gateSecret, setGateSecret] = useState('');
+    const [invites, setInvites] = useState<InviteSettings | null>(null);
+
+    useEffect(() => {
+      if (!isOpen) return;
+      let active = true;
+      void fetchWorkspaceSettings()
+        .then((settings) => {
+          if (active) setInvites(settings.invites);
+        })
+        .catch(() => {
+          if (active) setInvites(null);
+        });
+      return () => {
+        active = false;
+      };
+    }, [isOpen]);
 
     if (!isOpen) return null;
 
@@ -69,8 +90,28 @@ export const PositionReviewCredentialsModal = memo(
           </button>
         </div>
 
+        <div className="posrev-affiliate">
+          <p>{AFFILIATE_DISCLOSURE}</p>
+        </div>
+
         <div className="posrev-credential-block">
           <strong>Bitget UTA{venues.bitget ? ' · 已配置' : ''}</strong>
+          {invites?.bitgetConfigured && invites.bitget ? (
+            <a
+              className="posrev-invite-cta"
+              href={invites.bitget}
+              target="_blank"
+              rel="noopener noreferrer"
+            >
+              <ExternalLink size={12} />
+              通过邀请链接注册 Bitget
+            </a>
+          ) : (
+            <p className="posrev-invite-empty">
+              Bitget 邀请链接未配置。在右上角设置中填写，或复制{' '}
+              <code>config.local.example.json</code> 为 <code>config.local.json</code>。
+            </p>
+          )}
           <input
             value={bitgetApiKey}
             onChange={(e) => setBitgetApiKey(e.target.value)}
@@ -111,6 +152,22 @@ export const PositionReviewCredentialsModal = memo(
 
         <div className="posrev-credential-block">
           <strong>Gate USDT 永续{venues.gate ? ' · 已配置' : ''}</strong>
+          {invites?.gateConfigured && invites.gate ? (
+            <a
+              className="posrev-invite-cta"
+              href={invites.gate}
+              target="_blank"
+              rel="noopener noreferrer"
+            >
+              <ExternalLink size={12} />
+              通过邀请链接注册 Gate
+            </a>
+          ) : (
+            <p className="posrev-invite-empty">
+              Gate 邀请链接未配置。在右上角设置中填写，或复制{' '}
+              <code>config.local.example.json</code> 为 <code>config.local.json</code>。
+            </p>
+          )}
           <input
             value={gateApiKey}
             onChange={(e) => setGateApiKey(e.target.value)}

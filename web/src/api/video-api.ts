@@ -27,16 +27,40 @@ export async function updateLearningState(
   });
 }
 
+export type VideoCatalogSource = {
+  url: string;
+  kind: string;
+  label: string;
+  channelId?: string;
+  playlistId?: string;
+  template: boolean;
+  total: number;
+  latestDate: string | null;
+};
+
 export type VideoCatalogRefreshResult = {
   ok: boolean;
   total: number;
   added: number;
+  removed?: number;
+  replaced?: boolean;
   latestDate: string | null;
+  warning?: string;
+  source?: VideoCatalogSource;
 };
 
-export async function refreshVideoCatalog(): Promise<VideoCatalogRefreshResult> {
+export async function fetchVideoCatalogSource(
+  signal?: AbortSignal
+): Promise<VideoCatalogSource> {
+  return requestJson<VideoCatalogSource>('/api/videos/source', { signal });
+}
+
+export async function refreshVideoCatalog(payload?: {
+  sourceUrl?: string;
+  template?: 'tia';
+}): Promise<VideoCatalogRefreshResult> {
   return requestJson<VideoCatalogRefreshResult>('/api/videos/refresh', {
     method: 'POST',
-    body: '{}',
+    body: JSON.stringify(payload || {}),
   });
 }

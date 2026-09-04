@@ -10,8 +10,10 @@ import {
   Sun,
   Tags,
   Keyboard,
+  Settings,
 } from 'lucide-react';
 import { ShortcutHelpModal } from '@/ui/feedback/ShortcutHelpModal';
+import { SettingsModal } from '@/app/SettingsModal';
 import { ChartWorkspace } from '@/features/review-workspace/ChartWorkspace';
 import { LearningWorkspace } from '@/features/learning/LearningWorkspace';
 import { BitlangTradeWorkspace } from '@/features/bitlang/BitlangTradeWorkspace';
@@ -93,6 +95,7 @@ export function AppShell() {
   const [videoReviewContext, setVideoReviewContext] =
     useState<VideoReviewContext | null>(initialVideoReviewContext);
   const [showShortcuts, setShowShortcuts] = useState(false);
+  const [showSettings, setShowSettings] = useState(false);
 
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
@@ -220,6 +223,15 @@ export function AppShell() {
           <button
             type="button"
             className="app-icon-btn"
+            onClick={() => setShowSettings(true)}
+            title="设置"
+            aria-label="设置"
+          >
+            <Settings size={15} />
+          </button>
+          <button
+            type="button"
+            className="app-icon-btn"
             onClick={() => setShowShortcuts(true)}
             title="快捷键速查指南 (?)"
             aria-label="快捷键速查指南"
@@ -288,6 +300,10 @@ export function AppShell() {
       <ShortcutHelpModal
         isOpen={showShortcuts}
         onClose={() => setShowShortcuts(false)}
+      />
+      <SettingsModal
+        isOpen={showSettings}
+        onClose={() => setShowSettings(false)}
       />
     </div>
   );

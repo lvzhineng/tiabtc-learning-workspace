@@ -1,0 +1,46 @@
+.settings-modal {
+  max-width: 560px;
+}
+
+.settings-modal-body {
+  gap: 18px;
+}
+
+.settings-section h4 {
+  margin: 0 0 8px;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.settings-disclosure {
+  margin: 0 0 10px;
+  font-size: 13px;
+  line-height: 1.55;
+  color: var(--text-secondary);
+}
+
+.settings-hint {
+  margin: 0 0 12px;
+  font-size: 12px;
+  line-height: 1.55;
+  color: var(--text-muted);
+}
+
+.settings-hint code {
+  font-size: 11px;
+  font-family: var(--font-mono);
+}
+
+.settings-field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-bottom: 10px;
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+
+.settings-field .ui-input {
+  width: 100%;
+}

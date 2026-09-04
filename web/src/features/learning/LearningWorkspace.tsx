@@ -6,7 +6,13 @@ import { LearningStatsHeader } from './LearningStatsHeader';
 import { LearningFilterBar } from './LearningFilterBar';
 import { VideoTable } from './VideoTable';
 import { RefreshCw } from 'lucide-react';
-import { refreshVideoCatalog } from '@/api/video-api';
+import {
+  fetchVideoCatalogSource,
+  refreshVideoCatalog,
+  type VideoCatalogSource,
+} from '@/api/video-api';
+import { TIA_TEMPLATE_URL } from '@/api/workspace-settings-api';
+import { confirmDialog } from '@/ui/feedback/confirm';
 import { toast } from '@/ui/feedback/toast';
 import {
   readLocalUiState,
@@ -70,6 +76,10 @@ export function LearningWorkspace({
   const [videos, setVideos] = useState<VideoItem[]>([]);
   const [loadingVideos, setLoadingVideos] = useState<boolean>(true);
   const [refreshingCatalog, setRefreshingCatalog] = useState(false);
+  const [sourceUrl, setSourceUrl] = useState('');
+  const [catalogSource, setCatalogSource] = useState<VideoCatalogSource | null>(
+    null
+  );
   const [initialUiState] = useState(loadLearningUiState);
 
   const {
@@ -87,6 +97,15 @@ export function LearningWorkspace({
 
   useEffect(() => {
     let active = true;
+    void fetchVideoCatalogSource()
+      .then((source) => {
+        if (!active) return;
+        setCatalogSource(source);
+        if (source.url) setSourceUrl(source.url);
+      })
+      .catch(() => {
+        // 清单仍可从 videos.json 读取；来源元数据失败时保持空白。
+      });
     void loadVideos()
       .then((data: VideoItem[]) => {
         if (!active) return;
@@ -157,40 +176,115 @@ export function LearningWorkspace({
     return latest;
   }, [videos]);
 
-  const handleRefreshCatalog = async () => {
+  const applyCatalogResult = async (
+    result: Awaited<ReturnType<typeof refreshVideoCatalog>>
+  ) => {
+    const nextVideos = await loadVideos(true);
+    setVideos(nextVideos || []);
+    if (result.source) {
+      setCatalogSource(result.source);
+      if (result.source.url) setSourceUrl(result.source.url);
+    }
+    const latest = result.latestDate ? `，最新 ${result.latestDate}` : '';
+    if (result.warning) toast.warning(result.warning);
+    if (result.replaced) {
+      const removed =
+        result.removed && result.removed > 0
+          ? `，移出 ${result.removed} 条旧来源视频`
+          : '';
+      toast.success(
+        `已导入 ${result.added} 条新视频，清单共 ${result.total} 个${removed}${latest}`
+      );
+      return;
+    }
+    if (result.added > 0) {
+      toast.success(
+        `已新增 ${result.added} 条，清单共 ${result.total} 个视频${latest}`
+      );
+    } else {
+      toast.success(`清单已是最新，共 ${result.total} 个视频${latest}`);
+    }
+  };
+
+  const isSameCatalogSource = (url: string) => {
+    const next = url.trim().toLowerCase();
+    const current = (catalogSource?.url || '').trim().toLowerCase();
+    if (!next || !current) return !catalogSource?.url;
+    if (next === current) return true;
+    if (catalogSource?.template && next.includes('@tiabtc')) return true;
+    if (catalogSource?.channelId && next.includes(catalogSource.channelId.toLowerCase())) {
+      return true;
+    }
+    if (
+      catalogSource?.playlistId &&
+      next.includes(catalogSource.playlistId.toLowerCase())
+    ) {
+      return true;
+    }
+    return false;
+  };
+
+  const handleImportCatalog = async (options?: {
+    sourceUrl?: string;
+    template?: 'tia';
+    confirmSwitch?: boolean;
+  }) => {
     if (refreshingCatalog) return;
+    const nextUrl = (options?.sourceUrl ?? sourceUrl).trim();
+    if (!options?.template && !nextUrl) {
+      toast.error('请先粘贴 YouTube 频道或播放列表地址');
+      return;
+    }
+    const switching =
+      Boolean(options?.confirmSwitch) &&
+      videos.length > 0 &&
+      !options?.template &&
+      !isSameCatalogSource(nextUrl);
+    if (switching) {
+      const ok = await confirmDialog({
+        title: '用新来源重建学习清单？',
+        message:
+          '将按该频道或播放列表重建清单。已有条目的标题与发布时间会保留；不在新来源中的视频会移出清单（学习状态仍按视频 ID 保存在本地）。',
+        confirmText: '导入',
+        isDanger: true,
+      });
+      if (!ok) return;
+    }
     setRefreshingCatalog(true);
     try {
-      const result = await refreshVideoCatalog();
-      const nextVideos = await loadVideos(true);
-      setVideos(nextVideos || []);
-      if (result.added > 0) {
-        toast.success(
-          `已新增 ${result.added} 条，清单共 ${result.total} 个视频` +
-            (result.latestDate ? `，最新 ${result.latestDate}` : '')
-        );
-      } else {
-        toast.success(
-          `清单已是最新，共 ${result.total} 个视频` +
-            (result.latestDate ? `，最新 ${result.latestDate}` : '')
-        );
-      }
+      const result = await refreshVideoCatalog(
+        options?.template
+          ? { template: 'tia' }
+          : { sourceUrl: nextUrl }
+      );
+      await applyCatalogResult(result);
     } catch (cause) {
-      const errMsg = cause instanceof Error ? cause.message : '刷新视频清单失败';
+      const errMsg = cause instanceof Error ? cause.message : '导入视频清单失败';
       toast.error(errMsg);
     } finally {
       setRefreshingCatalog(false);
     }
   };
 
+  const handleRefreshCatalog = async () => {
+    await handleImportCatalog({
+      sourceUrl: catalogSource?.url || sourceUrl,
+      template: catalogSource?.template ? 'tia' : undefined,
+    });
+  };
+
+  const handleFillTiaTemplate = () => {
+    setSourceUrl(TIA_TEMPLATE_URL);
+  };
+
   return (
     <div className="learning-container">
       <section className="learning-hero">
         <div>
-          <p className="learning-eyebrow">TIA BTC · SYSTEMATIC LEARNING</p>
+          <p className="learning-eyebrow">SEQUENTIAL LEARNING</p>
           <h1 className="learning-title">顺序学习工作台</h1>
           <p className="learning-subtitle">
-            从最早的视频开始按年月推进。书签、学习状态与笔记会实时保存在本地学习状态中。
+            粘贴任意 YouTube 频道或播放列表，按发布时间推进学习，并从发布时间进入行情复盘。TiaBTC 是一键填入的示例模板，不是唯一目录。
           </p>
         </div>
 
@@ -203,12 +297,59 @@ export function LearningWorkspace({
             className="ui-btn learning-refresh-btn"
             onClick={() => void handleRefreshCatalog()}
             disabled={refreshingCatalog || loadingVideos}
-            title="从 TiaBTC YouTube 频道拉取新视频并重建清单"
+            title="按当前来源增量拉取新视频；已有标题与发布时间不会被覆盖"
           >
             <RefreshCw size={14} className={refreshingCatalog ? 'spin' : undefined} />
-            <span>{refreshingCatalog ? '正在刷新清单…' : '刷新清单'}</span>
+            <span>{refreshingCatalog ? '正在更新清单…' : '刷新当前来源'}</span>
           </button>
         </div>
+      </section>
+
+      <section className="learning-import-panel">
+        <div className="learning-import-row">
+          <input
+            className="ui-input learning-import-input"
+            value={sourceUrl}
+            onChange={(e) => setSourceUrl(e.target.value)}
+            placeholder="粘贴 YouTube 频道或播放列表地址"
+            spellCheck={false}
+            disabled={refreshingCatalog || loadingVideos}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter') {
+                e.preventDefault();
+                void handleImportCatalog({ confirmSwitch: true });
+              }
+            }}
+          />
+          <button
+            type="button"
+            className="ui-btn ui-btn-primary"
+            onClick={() => void handleImportCatalog({ confirmSwitch: true })}
+            disabled={refreshingCatalog || loadingVideos}
+          >
+            导入
+          </button>
+          <button
+            type="button"
+            className="ui-btn"
+            onClick={handleFillTiaTemplate}
+            disabled={refreshingCatalog || loadingVideos}
+            title="填入 TiaBTC 公开频道地址，再点导入"
+          >
+            示例模板 / Tia
+          </button>
+        </div>
+        <p className="learning-import-hint">
+          当前来源：
+          {catalogSource?.label || (videos.length ? 'TiaBTC 示例清单' : '尚未导入')}
+          {catalogSource?.kind === 'playlist'
+            ? ' · 播放列表'
+            : catalogSource?.kind === 'channel'
+              ? ' · 频道'
+              : ''}
+          {catalogSource?.template ? ' · 示例模板' : ''}
+          。导入会拉取视频表并按发布时间排序；已有条目的标题与时间会保留。
+        </p>
       </section>
 
       <LearningStatsHeader stats={stats} />

@@ -1,18 +1,38 @@
 # TiaBTC Learning Workspace
 
-一个本地运行的交易学习、行情复盘、实盘交割单分析和仓位复盘工作台。
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+
+一个本地运行的交易学习、行情复盘、实盘交割单分析和仓位复盘工作台。本项目以 **MIT** 许可开源，不锁源、不做功能付费墙。
 
 项目将顺序学习、行情复盘、Bit浪浪交割单分析和仓位复盘整合为一个 React 应用。行情复盘 / Bit浪浪 / 顺序学习进复盘的 K 线通过 CCXT 获取 Bybit USDT 永续合约数据。仓位复盘中 `BTCUSDT` / `ETHUSDT` 走同一套 Bybit 缓存；其余合约走该仓位所属交易所（Bitget 或 Gate），写入独立表 `venue_market_*`，本所失败且 Bybit 目录有该合约时再回退 Bybit。本地使用 SQLite 做行情与仓位缓存。
+
+## 支持作者
+
+作者通过交易所邀请链接获得交易手续费返佣（Gate 最高约 80%、Bitget 最高约 60%，以交易所当时规则为准）。**返佣比例只出现在本说明里，不会写入交易、同步或 K 线逻辑。**
+
+通过邀请链接注册时，作者可能获得手续费返佣；你可以在应用右上角「设置」中自行改邀请码，Fork 也可以覆盖默认链接。
+
+仓库默认使用作者的邀请深度链接：
+
+- Gate：`https://www.gatewebsite.app/share/VFHFAFJW`
+- Bitget：`https://partner.bitget.cafe/bg/19qdpd2n`
+
+覆盖方式（优先级从高到低：设置页保存的值 → 环境变量 → `config.local.json` → `config.defaults.json`）：
+
+1. 在工作台右上角 **设置** 中编辑 Gate / Bitget 邀请链接。
+2. 复制 `config.local.example.json` 为 `config.local.json`（已 gitignore），改成你自己的邀请深度链接。
+3. 或设置环境变量 `TIA_GATE_INVITE_URL`、`TIA_BITGET_INVITE_URL`。
+
+默认已填入上述作者邀请链接。在设置中改掉或用 `config.local.json` / 环境变量覆盖后，连接界面的注册 CTA 会跟着变。
 
 ## 功能
 
 ### 顺序学习
 
-- 浏览 TiaBTC 公开视频列表。
-- 按学习状态、日期和关键词筛选。
-- 保存未学习、学习中、已学习状态。
-- 从视频发布时间打开对应的 BTC 行情复盘。
-- 一键刷新清单：从 YouTube 频道增量拉取新视频，合并进 CSV 并重建 `videos.json`。
+- 粘贴任意 YouTube 频道或播放列表，导入为学习清单；按发布时间排序，并从发布时间打开 BTC 行情复盘。
+- TiaBTC 公开频道是一键填入的 **示例模板**，不是唯一目录。
+- 按学习状态、日期和关键词筛选；保存未学习、学习中、已学习状态。
+- 同一来源再次刷新为增量合并：已有条目的标题与发布时间不会被覆盖。
 
 ### 行情复盘
 
@@ -120,21 +140,28 @@ React/Vite
 | `.run/credential-key` | 本机 Fernet 对称密钥，用于加密 Bitget / Gate 只读密钥；已 gitignore | 否，且勿提交 |
 | `learning-state.json` | 视频学习状态 | 否 |
 | `web/public/videos.json` | 浏览器读取的视频列表快照 | 可重新生成 |
+| `video-catalog.csv` | 导入/刷新后的工作副本（已 gitignore）；未导入时回退读取 Tia 示例 CSV | 可重新生成 |
+| `video-source.json` | 当前学习清单来源（频道/播放列表，已 gitignore） | 可删除后回退示例模板 |
+| `config.defaults.json` | 仓库内邀请链接默认值（作者 Gate / Bitget 深度链接） | 否 |
+| `config.local.json` | 本机覆盖邀请链接；复制自 `config.local.example.json` | 可删除 |
 | `web/public/bitlang-trades.json` | 浏览器读取的交割单快照 | 可从原始 Excel 重新生成 |
-| `TiaBTC_公开视频清单*.csv` | 视频列表源数据（刷新清单时增量合并） | 否 |
+| `TiaBTC_公开视频清单*.csv` | 随仓库提供的 Tia 示例清单（导入其它来源时不会改写） | 否 |
 
 不要通过浏览器访问 8765 端口下的本地文件。后端只提供 `/api/*` 接口。
 
 ## 更新视频列表
 
-浏览器只读 `web/public/videos.json`。源数据是根目录 CSV（`TiaBTC_公开视频清单*.csv`），真正的上游是 [TiaBTC YouTube 频道](https://www.youtube.com/@tiabtc)。
+浏览器只读 `web/public/videos.json`。工作副本是根目录 `video-catalog.csv`（首次导入/刷新时从 Tia 示例 CSV 生成）。上游可以是任意公开 YouTube **频道**或**播放列表**。
 
-工作台内一键刷新（推荐）：打开顺序学习页，点击 **刷新清单**。后端会增量拉取频道新视频、合并进 CSV，并重建 `videos.json`。已有条目的标题与发布时间不会被覆盖。
+工作台内导入（推荐）：打开顺序学习页，把频道或播放列表 URL 粘贴到输入框后点 **导入**。**示例模板 / Tia** 只负责填入已知的 TiaBTC 频道地址，不是唯一入口。同一来源点 **刷新当前来源** 会增量拉取新视频。已有条目的标题与发布时间不会被覆盖；换来源会重建清单（不在新来源中的条目移出，学习状态仍按视频 ID 保留）。
 
 也可以在项目根目录执行：
 
 ```powershell
 python scripts/refresh_videos.py
+python scripts/refresh_videos.py --template tia
+python scripts/refresh_videos.py --url "https://www.youtube.com/@someone"
+python scripts/refresh_videos.py --url "https://www.youtube.com/playlist?list=YOUR_PLAYLIST_ID"
 ```
 
 或在 `web` 目录：
@@ -142,6 +169,8 @@ python scripts/refresh_videos.py
 ```powershell
 npm run refresh:videos
 ```
+
+`npm run refresh:videos` 等价于无参数的 `python scripts/refresh_videos.py`（增量刷新当前来源；若尚无 `video-source.json` 则使用 Tia 示例频道）。带 URL 的导入请用上面的 `python scripts/refresh_videos.py --url ...`。
 
 若只改了 CSV、不需要访问 YouTube，可只重建 JSON：
 
@@ -248,12 +277,13 @@ npm run dev -- --host 127.0.0.1 --port 3000
 - 确认密钥是 Bitget UTA 或 Gate **只读**权限，并查看 `.run/backend.err.log`。
 - `.run/credential-key` 与加密后的密钥只存在本机，不要提交到 Git。
 
-### 刷新视频清单失败
+### 刷新或导入视频清单失败
 
 - 确认能访问 YouTube；代理环境变量与行情请求相同。
 - 刷新进行中再次点击会返回 409，稍后再试。
-- 也可以在项目根目录运行 `python scripts/refresh_videos.py`，查看终端报错。
+- 也可以在项目根目录运行 `python scripts/refresh_videos.py --url "..."`，查看终端报错。
 - 只改 CSV、不访问 YouTube 时，用 `npm run build:videos` 重建 `videos.json`。
+- 换来源会写入 `video-catalog.csv`，不会改仓库里的 Tia 示例 CSV。
 
 ### 端口被占用
 
@@ -272,5 +302,6 @@ npm run dev -- --host 127.0.0.1 --port 3000
 - 本地加密：`cryptography`（Fernet）；密钥材料只存 `.run/` 与 SQLite，不入库。
 - 时间：内部 Unix 毫秒，界面按 `Asia/Shanghai` 显示。
 - 主题：支持亮色和暗色，本地记忆用户选择。
+- 许可：MIT，见 [LICENSE](LICENSE)。
 
 参与修改前请先阅读 [AGENTS.md](AGENTS.md)，其中记录了数据安全、图表交互和持久化边界。

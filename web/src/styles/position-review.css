@@ -87,6 +87,54 @@
   line-height: 1.4;
 }
 
+.posrev-affiliate {
+  padding: 8px;
+  border: 1px solid color-mix(in srgb, var(--accent-blue) 35%, var(--border-color));
+  border-radius: var(--radius-sm);
+  background: color-mix(in srgb, var(--accent-blue) 10%, var(--bg-dark-800));
+}
+
+.posrev-affiliate p {
+  margin: 0;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--text-secondary);
+}
+
+.posrev-invite-cta {
+  display: inline-flex;
+  align-items: center;
+  align-self: flex-start;
+  gap: 6px;
+  width: fit-content;
+  height: 28px;
+  padding: 0 10px;
+  border: 1px solid color-mix(in srgb, var(--accent-blue) 45%, var(--border-color));
+  border-radius: var(--radius-sm);
+  background: color-mix(in srgb, var(--accent-blue) 16%, var(--bg-dark-800));
+  color: var(--accent-blue);
+  font-size: 12px;
+  font-weight: 600;
+  text-decoration: none;
+}
+
+.posrev-invite-cta:hover {
+  color: var(--text-primary);
+  border-color: var(--border-active);
+}
+
+.posrev-invite-empty {
+  margin: 0;
+  font-size: 11px;
+  line-height: 1.45;
+  color: var(--text-muted);
+}
+
+.posrev-invite-empty code {
+  font-size: 10px;
+  font-family: var(--font-mono);
+}
+
 .posrev-error {
   color: var(--accent-red);
 }

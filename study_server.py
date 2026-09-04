@@ -24,6 +24,7 @@ from bitget_position_provider import (
 from gate_position_provider import GateUsdtPositionProvider
 from market_data_provider import CcxtBybitMarketDataProvider
 import video_catalog
+import workspace_config
 
 
 ROOT = Path(__file__).resolve().parent
@@ -33,7 +34,7 @@ DATABASE_FILE = DEFAULT_DATABASE_FILE
 SEED_DATABASE_FILE = ROOT / "data" / "tiabtc-review-seed.sqlite"
 HOST = "127.0.0.1"
 PORT = 8765
-API_VERSION = 11
+API_VERSION = 12
 VALID_STATUSES = {"unlearned", "learning", "learned"}
 VALID_SYMBOLS = {"BTCUSDT", "ETHUSDT", "SOLUSDT", "BNBUSDT", "DOGEUSDT", "XRPUSDT"}
 VALID_INTERVALS = {"1", "5", "15", "60", "240", "D", "W"}
@@ -2817,19 +2818,56 @@ def sync_position_review():
         POSITION_SYNC_LOCK.release()
 
 
-def refresh_learning_videos():
+def refresh_learning_videos(payload=None):
+    payload = payload if isinstance(payload, dict) else {}
+    source_url = str(payload.get("sourceUrl") or "").strip() or None
+    template = str(payload.get("template") or "").strip().lower() or None
+    if template and template != "tia":
+        raise ValueError("未知的示例模板")
     if not VIDEO_REFRESH_LOCK.acquire(blocking=False):
         raise SyncInProgressError("视频清单正在刷新，请稍后再试")
     try:
-        result = video_catalog.refresh_video_catalog(ROOT)
-        return {
+        result = video_catalog.refresh_video_catalog(
+            ROOT,
+            source_url=source_url,
+            template=template,
+        )
+        response = {
             "ok": True,
             "total": result["total"],
             "added": result["added"],
+            "removed": result.get("removed", 0),
+            "replaced": bool(result.get("replaced")),
             "latestDate": result["latestDate"],
+            "source": result.get("source"),
         }
+        if result.get("warning"):
+            response["warning"] = result["warning"]
+        return response
     finally:
         VIDEO_REFRESH_LOCK.release()
+
+
+def get_workspace_settings():
+    invites = workspace_config.resolve_invite_urls(
+        ROOT,
+        stored_gate=_app_setting("invite_gate_url", "") or "",
+        stored_bitget=_app_setting("invite_bitget_url", "") or "",
+    )
+    return {
+        "invites": invites,
+        "videoSource": video_catalog.describe_catalog_source(ROOT),
+    }
+
+
+def save_invite_urls(payload):
+    if not isinstance(payload, dict):
+        raise ValueError("邀请链接格式无效")
+    gate = workspace_config.normalize_invite_url(payload.get("gate"), "Gate")
+    bitget = workspace_config.normalize_invite_url(payload.get("bitget"), "Bitget")
+    _set_app_setting("invite_gate_url", gate)
+    _set_app_setting("invite_bitget_url", bitget)
+    return get_workspace_settings()
 
 
 def sync_bitget_positions():
@@ -4003,6 +4041,8 @@ class StudyHandler(BaseHTTPRequestHandler):
                         "warmCcxtMarkets",
                         "perpetualSymbolSearch",
                         "positionReview",
+                        "affiliateInvites",
+                        "genericVideoImport",
                     ],
                 },
             )
@@ -4031,6 +4071,12 @@ class StudyHandler(BaseHTTPRequestHandler):
             return self.send_json(
                 HTTPStatus.OK,
                 {"offlineMode": get_offline_mode()},
+            )
+        if parsed.path == "/api/settings":
+            return self.send_json(HTTPStatus.OK, get_workspace_settings())
+        if parsed.path == "/api/videos/source":
+            return self.send_json(
+                HTTPStatus.OK, video_catalog.describe_catalog_source(ROOT)
             )
         if parsed.path == "/api/bitlang-review":
             return self.send_json(HTTPStatus.OK, get_bitlang_review_state())
@@ -4170,7 +4216,9 @@ class StudyHandler(BaseHTTPRequestHandler):
             if parsed.path == "/api/position-review/sync":
                 return self.send_json(HTTPStatus.OK, sync_position_review())
             if parsed.path == "/api/videos/refresh":
-                return self.send_json(HTTPStatus.OK, refresh_learning_videos())
+                return self.send_json(HTTPStatus.OK, refresh_learning_videos(payload))
+            if parsed.path == "/api/settings/invites":
+                return self.send_json(HTTPStatus.OK, save_invite_urls(payload))
             if parsed.path == "/api/position-review/notes":
                 return self.send_json(HTTPStatus.OK, save_position_note(payload))
             if parsed.path == "/api/position-review/tags":

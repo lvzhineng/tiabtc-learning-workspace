@@ -7,3 +7,6 @@ data/*.sqlite-shm
 web/node_modules/
 web/dist/
 .run/
+config.local.json
+video-catalog.csv
+video-source.json

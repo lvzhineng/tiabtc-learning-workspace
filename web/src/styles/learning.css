@@ -52,6 +52,36 @@
   height: 32px;
 }
 
+.learning-import-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-bottom: 16px;
+  padding: 14px 16px;
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-md);
+  background: var(--bg-dark-800);
+}
+
+.learning-import-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+}
+
+.learning-import-input {
+  flex: 1;
+  min-width: 240px;
+}
+
+.learning-import-hint {
+  margin: 0;
+  font-size: 12px;
+  line-height: 1.55;
+  color: var(--text-muted);
+}
+
 .learning-catalog-meta {
   color: var(--text-muted);
 }
