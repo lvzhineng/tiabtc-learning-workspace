@@ -1,5 +1,6 @@
 import { useMemo, useState } from 'react';
-import { positionPnl, type ReviewPosition } from '@/api/position-review-api';
+import type { ReviewPosition } from '@/api/position-review-api';
+import { buildEquityCurve } from '@/features/position-review/position-stats';
 import { formatChartTime } from '@/chart/chart-time';
 import { TrendingDown, TrendingUp } from 'lucide-react';
 
@@ -87,58 +88,32 @@ function formatShortDate(timestampMs: number): string {
 export function EquityCurveChart({ positions }: Props) {
   const [hoveredPoint, setHoveredPoint] = useState<Point | null>(null);
 
-  const { points, maxAth, maxDrawdown, totalPnl, minVal, maxVal, yTicks } = useMemo(() => {
-    if (positions.length === 0) {
-      return { points: [], maxAth: 0, maxDrawdown: 0, totalPnl: 0, minVal: 0, maxVal: 0, yTicks: [] };
+  const { points, maxAth, maxDrawdown, totalPnl, sampleCount, minVal, maxVal, yTicks } = useMemo(() => {
+    const equity = buildEquityCurve(positions);
+    if (equity.points.length === 0) {
+      return {
+        points: [],
+        maxAth: 0,
+        maxDrawdown: 0,
+        totalPnl: 0,
+        sampleCount: 0,
+        minVal: 0,
+        maxVal: 0,
+        yTicks: [],
+      };
     }
 
-    // Sort chronologically
-    const sorted = [...positions]
-      .filter((item) => item.status === 'closed')
-      .sort(
-      (a, b) => (a.exitTimeMs || a.entryTimeMs) - (b.exitTimeMs || b.entryTimeMs)
-    );
-    if (sorted.length === 0) {
-      return { points: [], maxAth: 0, maxDrawdown: 0, totalPnl: 0, minVal: 0, maxVal: 0, yTicks: [] };
-    }
-
-    let runningPnl = 0;
-    let peak = 0;
-    let maxDd = 0;
-
-    const dataSeries: Array<{
-      timeMs: number;
-      symbol: string;
-      side: 'long' | 'short';
-      pnl: number;
-      cumulative: number;
-    }> = [];
-
-    // Starting baseline point
-    const firstTime = (sorted[0].exitTimeMs || sorted[0].entryTimeMs) - 3600000;
-    dataSeries.push({
-      timeMs: firstTime,
-      symbol: '',
-      side: 'long',
-      pnl: 0,
-      cumulative: 0,
-    });
-
-    for (const pos of sorted) {
-      const pnl = positionPnl(pos);
-      runningPnl += pnl;
-      if (runningPnl > peak) peak = runningPnl;
-      const dd = peak - runningPnl;
-      if (dd > maxDd) maxDd = dd;
-
-      dataSeries.push({
-        timeMs: pos.exitTimeMs || pos.entryTimeMs,
-        symbol: pos.chartSymbol,
-        side: pos.side,
-        pnl,
-        cumulative: runningPnl,
-      });
-    }
+    const firstTime = equity.points[0].timeMs - 3600000;
+    const dataSeries = [
+      {
+        timeMs: firstTime,
+        symbol: '',
+        side: 'long' as const,
+        pnl: 0,
+        cumulative: 0,
+      },
+      ...equity.points,
+    ];
 
     // Map to SVG coordinates (width: 600, height: 210, padding: 30 left/right, 24 top, 28 bottom)
     const svgWidth = 600;
@@ -195,9 +170,10 @@ export function EquityCurveChart({ positions }: Props) {
 
     return {
       points: mappedPoints,
-      maxAth: peak,
-      maxDrawdown: maxDd,
-      totalPnl: runningPnl,
+      maxAth: equity.peak,
+      maxDrawdown: equity.maxDrawdown,
+      totalPnl: equity.totalPnl,
+      sampleCount: equity.closed.length,
       minVal: computedMin,
       maxVal: computedMax,
       yTicks: ticks,
@@ -464,15 +440,23 @@ export function EquityCurveChart({ positions }: Props) {
       {/* 底部摘要栏 */}
       <div className="posdash-chart-summary">
         <div className="posdash-summary-item">
-          <span className="posdash-summary-label">历史最高净值 (ATH)</span>
+          <span className="posdash-summary-label" title="累计净值序列的最高点">
+            历史最高净值 (ATH)
+          </span>
           <span className="posdash-summary-val cyan-accent">
             <TrendingUp size={13} />
-            +{maxAth.toFixed(2)} USDT
+            {maxAth >= 0 ? '+' : ''}
+            {maxAth.toFixed(2)} USDT
           </span>
         </div>
 
         <div className="posdash-summary-item">
-          <span className="posdash-summary-label">最大回撤 (Max DD)</span>
+          <span
+            className="posdash-summary-label"
+            title="同一累计净值序列上，历史峰值到其后低点的最大回落"
+          >
+            最大回撤 (Max DD)
+          </span>
           <span className="posdash-summary-val loss">
             <TrendingDown size={13} />
             -{maxDrawdown.toFixed(2)} USDT
@@ -480,7 +464,9 @@ export function EquityCurveChart({ positions }: Props) {
         </div>
 
         <div className="posdash-summary-item">
-          <span className="posdash-summary-label">当前净值</span>
+          <span className="posdash-summary-label" title="已平仓净盈亏累计，等于收益曲线终点">
+            当前净值
+          </span>
           <span className={`posdash-summary-val ${totalPnl >= 0 ? 'cyan-accent' : 'loss'}`}>
             {totalPnl >= 0 ? '+' : ''}{totalPnl.toFixed(2)} USDT
           </span>
@@ -489,7 +475,7 @@ export function EquityCurveChart({ positions }: Props) {
         <div className="posdash-summary-item">
           <span className="posdash-summary-label">总样本</span>
           <span className="posdash-summary-val neutral">
-            {positions.length} 笔交易
+            {sampleCount} 笔交易
           </span>
         </div>
       </div>

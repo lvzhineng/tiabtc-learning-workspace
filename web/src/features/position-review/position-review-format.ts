@@ -18,22 +18,15 @@ export {
 } from '@/domain/formatters';
 
 export function calculatePositionRoi(position: ReviewPosition): number | null {
-  const { entryPrice, exitPrice, side, leverage, netPnl, realizedPnl, contracts } =
-    position;
-  const pnl = netPnl ?? realizedPnl;
-  if (entryPrice && exitPrice && entryPrice > 0) {
-    const lev = leverage && leverage > 0 ? leverage : 1;
-    const priceChange = (exitPrice - entryPrice) / entryPrice;
-    return (side === 'long' ? priceChange : -priceChange) * lev * 100;
-  }
-  if (pnl != null && entryPrice && contracts && contracts > 0 && entryPrice > 0) {
-    const lev = leverage && leverage > 0 ? leverage : 1;
-    const initialMargin = (entryPrice * contracts) / lev;
-    if (initialMargin > 0) {
-      return (pnl / initialMargin) * 100;
-    }
-  }
-  return null;
+  const pnl = position.netPnl ?? position.realizedPnl;
+  const { entryPrice, contracts, leverage } = position;
+  if (pnl == null || !Number.isFinite(pnl)) return null;
+  if (entryPrice == null || !(entryPrice > 0)) return null;
+  if (contracts == null || !(contracts > 0)) return null;
+  const lev = leverage != null && leverage > 0 ? leverage : 1;
+  const initialMargin = (entryPrice * contracts) / lev;
+  if (!(initialMargin > 0) || !Number.isFinite(initialMargin)) return null;
+  return (pnl / initialMargin) * 100;
 }
 
 export function mergeCandles(

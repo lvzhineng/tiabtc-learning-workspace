@@ -1,3 +1,4 @@
+import { parseVideoPublishedTimeMs } from '@/chart/chart-time';
 import type {
   VideoItem,
   UserLearningState,
@@ -77,10 +78,17 @@ export function filterAndSortVideos(
   }
 
   // 5. Sort Order (asc: earliest first, desc: latest first)
+  // Date is the primary key. Same calendar day uses publish timestamp
+  // (time-of-day), not playlist index, so 03:01 sorts before 23:14.
   result.sort((a, b) => {
     const cmp = a.date.localeCompare(b.date);
     if (cmp !== 0) {
       return params.sortOrder === 'asc' ? cmp : -cmp;
+    }
+    const timeA = parseVideoPublishedTimeMs(a.date, a.time);
+    const timeB = parseVideoPublishedTimeMs(b.date, b.time);
+    if (timeA !== timeB) {
+      return params.sortOrder === 'asc' ? timeA - timeB : timeB - timeA;
     }
     return params.sortOrder === 'asc' ? a.index - b.index : b.index - a.index;
   });

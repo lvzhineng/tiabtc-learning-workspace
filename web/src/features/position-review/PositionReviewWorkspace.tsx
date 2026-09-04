@@ -890,7 +890,7 @@ export function PositionReviewWorkspace({
               <strong>{stats.count} 笔</strong>
             </div>
           )}
-          <div className="posrev-stat-item">
+          <div className="posrev-stat-item" title="已平仓净盈亏累计，不含当前持仓未实现盈亏">
             <span>总盈亏</span>
             <strong className={stats.totalPnl >= 0 ? 'profit' : 'loss'}>
               {stats.totalPnl >= 0 ? '+' : ''}{formatNumber(stats.totalPnl)} USDT

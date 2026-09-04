@@ -173,7 +173,9 @@ export function CommonDashboardLayout(props: CommonDashboardLayoutProps) {
       <section className="posdash-kpi-grid">
         <div className="posdash-kpi-card">
           <div className="posdash-kpi-header">
-            <span className="posdash-kpi-title">累计净盈亏 (Net PnL)</span>
+            <span className="posdash-kpi-title" title="已平仓净盈亏累计，与收益曲线终点相同">
+              累计净盈亏 (Net PnL)
+            </span>
             <span className={`posdash-kpi-icon-wrap ${kpi.totalPnl >= 0 ? 'profit' : 'loss'}`}>
               {kpi.totalPnl >= 0 ? <TrendingUp size={15} /> : <TrendingDown size={15} />}
             </span>
@@ -184,11 +186,21 @@ export function CommonDashboardLayout(props: CommonDashboardLayoutProps) {
             <span className="posdash-currency-unit"> USDT</span>
           </div>
           <div className="posdash-kpi-sub">
-            <span className="posdash-sub-chip profit">
-              <ArrowUpRight size={11} /> 峰值: +{kpi.maxWin.toFixed(1)}
+            <span
+              className={`posdash-sub-chip ${kpi.peakEquity >= 0 ? 'profit' : 'loss'}`}
+              title="累计净值最高点 (ATH)，与收益曲线同一序列"
+            >
+              <ArrowUpRight size={11} /> 峰值:{' '}
+              {kpi.peakEquity >= 0 ? '+' : ''}
+              {kpi.peakEquity.toFixed(1)}
             </span>
-            <span className="posdash-sub-chip loss">
-              <ArrowDownRight size={11} /> 谷值: -{kpi.maxLoss.toFixed(1)}
+            <span
+              className={`posdash-sub-chip ${kpi.valleyEquity > 0 ? 'profit' : 'loss'}`}
+              title="累计净值最低点，与收益曲线同一序列"
+            >
+              <ArrowDownRight size={11} /> 谷值:{' '}
+              {kpi.valleyEquity >= 0 ? '+' : ''}
+              {kpi.valleyEquity.toFixed(1)}
             </span>
           </div>
         </div>

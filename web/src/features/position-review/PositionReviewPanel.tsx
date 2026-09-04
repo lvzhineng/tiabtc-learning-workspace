@@ -246,7 +246,7 @@ export function PositionReviewPanel({
       isLoss: pnl < 0,
     },
     {
-      label: '收益率估算 (ROI)',
+      label: '收益率 (净盈亏 / 保证金)',
       value: formatRoi(roi),
       isProfit: (roi ?? 0) > 0,
       isLoss: (roi ?? 0) < 0,

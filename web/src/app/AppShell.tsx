@@ -23,6 +23,28 @@ import { parseVideoPublishedTimeMs } from '@/chart/chart-time';
 type WorkspaceTab = 'learning' | 'review' | 'bitlang' | 'positions';
 export type ThemeMode = 'dark' | 'light';
 
+function writeWorkspaceUrl(
+  tab: WorkspaceTab,
+  videoContext: VideoReviewContext | null
+) {
+  const url = new URL(window.location.href);
+  if (tab === 'learning') url.searchParams.delete('tab');
+  else url.searchParams.set('tab', tab);
+  url.searchParams.delete('view');
+  if (tab === 'review' && videoContext) {
+    url.searchParams.set('videoId', videoContext.videoId);
+    url.searchParams.set('videoTitle', videoContext.title);
+    url.searchParams.set('symbol', videoContext.symbol);
+    url.searchParams.set('anchorTimeMs', String(videoContext.anchorTimeMs));
+  } else {
+    url.searchParams.delete('videoId');
+    url.searchParams.delete('videoTitle');
+    url.searchParams.delete('symbol');
+    url.searchParams.delete('anchorTimeMs');
+  }
+  window.history.replaceState(null, '', url);
+}
+
 function initialWorkspaceTab(): WorkspaceTab {
   const tab = new URLSearchParams(window.location.search).get('tab');
   if (tab === 'dashboard') return 'positions';
@@ -120,59 +142,31 @@ export function AppShell() {
     }
   }, [themeMode]);
 
-  const navigateToTab = useCallback((tab: WorkspaceTab) => {
-    setActiveTab(tab);
-    const url = new URL(window.location.href);
-    if (tab === 'learning') url.searchParams.delete('tab');
-    else url.searchParams.set('tab', tab);
-    url.searchParams.delete('view');
-    window.history.replaceState(null, '', url);
-  }, []);
+  const navigateToWorkspace = useCallback(
+    (tab: WorkspaceTab, videoContext: VideoReviewContext | null = null) => {
+      setVideoReviewContext(videoContext);
+      setActiveTab(tab);
+      writeWorkspaceUrl(tab, tab === 'review' ? videoContext : null);
+    },
+    []
+  );
 
-  const openReviewWindow = useCallback((context?: VideoReviewContext) => {
-    const url = new URL(window.location.href);
-    url.searchParams.set('tab', 'review');
-    if (context) {
-      url.searchParams.set('videoId', context.videoId);
-      url.searchParams.set('videoTitle', context.title);
-      url.searchParams.set('symbol', context.symbol);
-      url.searchParams.set('anchorTimeMs', String(context.anchorTimeMs));
-    } else {
-      url.searchParams.delete('videoId');
-      url.searchParams.delete('videoTitle');
-      url.searchParams.delete('symbol');
-      url.searchParams.delete('anchorTimeMs');
-    }
-
-    const popup = window.open(
-      url.toString(),
-      'tiabtc-review',
-      'popup=yes,width=1440,height=960'
-    );
-    if (popup) {
-      try {
-        popup.focus();
-      } catch {
-        // Focus may fail across browsers; the window is still opened.
-      }
-      return;
-    }
-
-    // Popup blocked: fall back to the in-page review workspace.
-    setVideoReviewContext(context ?? null);
-    navigateToTab('review');
-  }, [navigateToTab]);
+  const navigateToTab = useCallback(
+    (tab: WorkspaceTab) => {
+      navigateToWorkspace(tab, null);
+    },
+    [navigateToWorkspace]
+  );
 
   const handleOpenVideoReview = (video: VideoItem) => {
     const anchorTimeMs = parseVideoPublishedTimeMs(video.date, video.time);
-    const ctx: VideoReviewContext = {
+    navigateToWorkspace('review', {
       mode: 'video',
       videoId: video.videoId,
       title: video.title,
       symbol: 'BTCUSDT',
       anchorTimeMs,
-    };
-    openReviewWindow(ctx);
+    });
   };
 
   return (
@@ -197,7 +191,7 @@ export function AppShell() {
             <button
               type="button"
               className={`app-nav-btn ${activeTab === 'review' ? 'active' : ''}`}
-              onClick={() => openReviewWindow()}
+              onClick={() => navigateToTab('review')}
             >
               <BarChart2 size={14} />
               <span>行情复盘</span>
@@ -280,6 +274,7 @@ export function AppShell() {
           <LearningWorkspace onOpenVideoReview={handleOpenVideoReview} />
         ) : activeTab === 'review' ? (
           <ChartWorkspace
+            key={videoReviewContext?.videoId ?? 'market'}
             initialVideoContext={videoReviewContext}
             themeMode={themeMode}
           />
