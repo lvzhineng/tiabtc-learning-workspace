@@ -9,7 +9,19 @@ $workspaceRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
 $webRoot = Join-Path $workspaceRoot "web"
 $runtimeRoot = Join-Path $workspaceRoot ".run"
 $backendUrl = "http://127.0.0.1:8765/api/health"
-$expectedBackendVersion = '"version": 11'
+
+function Get-ExpectedBackendVersionNeedle {
+    $serverPath = Join-Path $workspaceRoot "study_server.py"
+    $match = Select-String -LiteralPath $serverPath -Pattern '^\s*API_VERSION\s*=\s*(\d+)\s*$' |
+        Select-Object -First 1
+    if (-not $match) {
+        throw "无法从 study_server.py 读取 API_VERSION"
+    }
+    $version = $match.Matches[0].Groups[1].Value
+    return '"version": ' + $version
+}
+
+$expectedBackendVersion = Get-ExpectedBackendVersionNeedle
 $frontendBaseUrl = "http://127.0.0.1:3000/"
 $frontendUrl = if ($Page -eq "review") {
     "${frontendBaseUrl}?tab=review"

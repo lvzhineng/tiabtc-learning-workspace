@@ -49,6 +49,7 @@ PACIFIC = ZoneInfo("America/Los_Angeles")
 CSV_FIELDS = ["序号", "发布日期", "发布时间（页面时区）", "视频标题", "视频链接", "视频ID"]
 MAX_BROWSE_PAGES = 20
 MAX_IMPORT_PAGES = 80
+YT_VIDEO_ID_RE = re.compile(r"^[A-Za-z0-9_-]{11}$")
 YOUTUBE_HOSTS = {
     "youtube.com",
     "www.youtube.com",
@@ -243,7 +244,7 @@ def _title_from_node(node) -> str:
 
 
 def _append_video(videos: list[dict], video_id, title: str) -> None:
-    if not video_id or not isinstance(video_id, str):
+    if not isinstance(video_id, str) or not YT_VIDEO_ID_RE.match(video_id):
         return
     videos.append(
         {
@@ -254,26 +255,72 @@ def _append_video(videos: list[dict], video_id, title: str) -> None:
     )
 
 
+def _dig_video_id(node, depth: int = 0) -> str:
+    if depth > 6 or not isinstance(node, dict):
+        return ""
+    for key in ("videoId", "contentId"):
+        value = node.get(key)
+        if isinstance(value, str) and YT_VIDEO_ID_RE.match(value):
+            return value
+    item = node.get("playlistItemData")
+    if isinstance(item, dict):
+        value = item.get("videoId")
+        if isinstance(value, str) and YT_VIDEO_ID_RE.match(value):
+            return value
+    for wrap in (
+        "watchEndpoint",
+        "reelWatchEndpoint",
+        "navigationEndpoint",
+        "onTap",
+        "innertubeCommand",
+        "commandContext",
+        "rendererContext",
+    ):
+        nested = node.get(wrap)
+        found = _dig_video_id(nested, depth + 1)
+        if found:
+            return found
+    return ""
+
+
+def _music_item_title(renderer: dict) -> str:
+    for column in renderer.get("flexColumns") or []:
+        text = (column.get("musicResponsiveListItemFlexColumnRenderer") or {}).get("text")
+        title = _title_from_node(text)
+        if title:
+            return title
+    return _title_from_node(renderer.get("title"))
+
+
 def _walk_lockups(node, videos: list[dict], continuations: list[str]) -> None:
     if isinstance(node, dict):
         if "lockupViewModel" in node:
             view = node["lockupViewModel"] or {}
             video_id = view.get("contentId")
+            if not (isinstance(video_id, str) and YT_VIDEO_ID_RE.match(video_id)):
+                video_id = _dig_video_id(view)
             metadata = ((view.get("metadata") or {}).get("lockupMetadataViewModel") or {})
             title = _title_from_node((metadata.get("title") or {}))
             _append_video(videos, video_id, title)
         renderer = (
             node.get("playlistVideoRenderer")
+            or node.get("playlistPanelVideoRenderer")
             or node.get("gridVideoRenderer")
             or node.get("videoRenderer")
             or node.get("compactVideoRenderer")
+            or node.get("tileRenderer")
+            or node.get("musicResponsiveListItemRenderer")
+            or node.get("shortsLockupViewModel")
         )
         if isinstance(renderer, dict):
             _append_video(
                 videos,
-                renderer.get("videoId"),
-                _title_from_node(renderer.get("title")),
+                _dig_video_id(renderer) or renderer.get("videoId"),
+                _music_item_title(renderer) or _title_from_node(renderer.get("title")),
             )
+        item_data = node.get("playlistItemData")
+        if isinstance(item_data, dict):
+            _append_video(videos, item_data.get("videoId"), "")
         command = node.get("continuationCommand")
         if isinstance(command, dict):
             token = command.get("token")
@@ -338,13 +385,144 @@ def fetch_channel_uploads(
     return collected
 
 
+def _browse_alert_text(data: dict) -> str:
+    for item in data.get("alerts") or []:
+        if not isinstance(item, dict):
+            continue
+        renderer = item.get("alertRenderer") or {}
+        text = _title_from_node(renderer.get("text"))
+        if text:
+            return text
+    return ""
+
+
+def _extract_yt_initial_data(html: str) -> dict | None:
+    marker_idx = html.find("var ytInitialData = ")
+    if marker_idx < 0:
+        marker_idx = html.find("ytInitialData = ")
+    if marker_idx < 0:
+        marker_idx = html.find("ytInitialData")
+    if marker_idx < 0:
+        return None
+    start = html.find("{", marker_idx)
+    if start < 0:
+        return None
+    depth = 0
+    in_str = False
+    escape = False
+    for index, char in enumerate(html[start:], start):
+        if in_str:
+            if escape:
+                escape = False
+            elif char == "\\":
+                escape = True
+            elif char == '"':
+                in_str = False
+            continue
+        if char == '"':
+            in_str = True
+        elif char == "{":
+            depth += 1
+        elif char == "}":
+            depth -= 1
+            if depth == 0:
+                try:
+                    parsed = json.loads(html[start : index + 1])
+                except json.JSONDecodeError:
+                    return None
+                return parsed if isinstance(parsed, dict) else None
+    return None
+
+
+def _collect_from_node(data: dict) -> tuple[list[dict], list[str]]:
+    videos: list[dict] = []
+    continuations: list[str] = []
+    _walk_lockups(data, videos, continuations)
+    return videos, continuations
+
+
+def _dedupe_videos(items: list[dict]) -> list[dict]:
+    collected: list[dict] = []
+    seen: set[str] = set()
+    for item in items:
+        video_id = item.get("videoId")
+        if not video_id or video_id in seen:
+            continue
+        seen.add(video_id)
+        collected.append(item)
+    return collected
+
+
+def _playlist_videos_from_html(
+    playlist_id: str,
+    known_ids: set[str],
+    full: bool,
+) -> list[dict]:
+    html = _http_bytes(
+        f"https://www.youtube.com/playlist?list={playlist_id}"
+    ).decode("utf-8", "replace")
+    data = _extract_yt_initial_data(html)
+    if not data:
+        return []
+    page_videos, continuations = _collect_from_node(data)
+    collected = _dedupe_videos(page_videos)
+    hit_known = any(item["videoId"] in known_ids for item in collected)
+    if collected and continuations and not (hit_known and not full):
+        payload = {
+            "context": {"client": WEB_CLIENT},
+            "continuation": continuations[0],
+        }
+        collected = _dedupe_videos(
+            collected
+            + _browse_videos(
+                payload,
+                known_ids,
+                full,
+                MAX_IMPORT_PAGES if full else MAX_BROWSE_PAGES,
+            )
+        )
+    return collected
+
+
+def _playlist_videos_from_rss(playlist_id: str) -> list[dict]:
+    xml_bytes = _http_bytes(
+        f"https://www.youtube.com/feeds/videos.xml?playlist_id={playlist_id}"
+    )
+    root = ET.fromstring(xml_bytes)
+    ns = {
+        "atom": "http://www.w3.org/2005/Atom",
+        "yt": "http://www.youtube.com/xml/schemas/2015",
+    }
+    videos: list[dict] = []
+    for entry in root.findall("atom:entry", ns):
+        video_el = entry.find("yt:videoId", ns)
+        title_el = entry.find("atom:title", ns)
+        if video_el is None or not video_el.text:
+            continue
+        _append_video(videos, video_el.text, (title_el.text if title_el is not None else "") or "")
+    return _dedupe_videos(videos)
+
+
+def _playlist_videos_from_next(playlist_id: str) -> list[dict]:
+    data = _http_json(
+        "https://www.youtube.com/youtubei/v1/next?prettyPrint=false",
+        {
+            "context": {"client": WEB_CLIENT},
+            "playlistId": playlist_id,
+        },
+    )
+    videos, _continuations = _collect_from_node(data)
+    return _dedupe_videos(videos)
+
+
 def fetch_playlist_videos(
     playlist_id: str,
     known_ids: set[str] | None = None,
     full: bool = False,
 ) -> list[dict]:
     known = known_ids or set()
-    browse_id = playlist_id if playlist_id.startswith("VL") else f"VL{playlist_id}"
+    raw_id = playlist_id[2:] if playlist_id.startswith("VL") else playlist_id
+    browse_id = f"VL{raw_id}"
     payload = {
         "context": {"client": WEB_CLIENT},
         "browseId": browse_id,
@@ -355,9 +533,45 @@ def fetch_playlist_videos(
         full,
         MAX_IMPORT_PAGES if full else MAX_BROWSE_PAGES,
     )
-    if not collected:
-        raise RuntimeError("YouTube 播放列表未返回任何视频")
-    return collected
+    if collected:
+        return collected
+
+    alert = ""
+    try:
+        first_page = _http_json(
+            "https://www.youtube.com/youtubei/v1/browse?prettyPrint=false",
+            {
+                "context": {"client": WEB_CLIENT},
+                "browseId": browse_id,
+            },
+        )
+        alert = _browse_alert_text(first_page)
+    except RuntimeError:
+        first_page = {}
+
+    fallbacks = (
+        lambda: _playlist_videos_from_html(raw_id, known, full),
+        lambda: _playlist_videos_from_next(raw_id),
+        lambda: _playlist_videos_from_rss(raw_id),
+    )
+    for load in fallbacks:
+        try:
+            extra = load()
+        except RuntimeError:
+            extra = []
+        if extra:
+            if not full:
+                trimmed = []
+                for item in extra:
+                    trimmed.append(item)
+                    if item["videoId"] in known:
+                        break
+                return trimmed
+            return extra
+
+    if alert:
+        raise RuntimeError(f"YouTube 播放列表不可用：{alert}")
+    raise RuntimeError("YouTube 播放列表未返回任何视频")
 
 
 def fetch_rss_published(channel_id: str = "", playlist_id: str = "") -> dict[str, datetime]:
