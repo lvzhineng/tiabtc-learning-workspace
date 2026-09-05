@@ -14,7 +14,7 @@ import time
 import urllib.error
 import urllib.request
 import xml.etree.ElementTree as ET
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 from zoneinfo import ZoneInfo
@@ -45,7 +45,10 @@ USER_AGENT = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
     "(KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36"
 )
-PACIFIC = ZoneInfo("America/Los_Angeles")
+try:
+    PACIFIC = ZoneInfo("America/Los_Angeles")
+except Exception:
+    PACIFIC = timezone(timedelta(hours=-7))
 CSV_FIELDS = ["序号", "发布日期", "发布时间（页面时区）", "视频标题", "视频链接", "视频ID"]
 MAX_BROWSE_PAGES = 20
 MAX_IMPORT_PAGES = 80

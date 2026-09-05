@@ -131,7 +131,7 @@ if (-not $npmCommand) {
 
 New-Item -ItemType Directory -Path $runtimeRoot -Force | Out-Null
 
-& $pythonCommand.Source -c "import ccxt, cryptography; assert tuple(map(int, ccxt.__version__.split('.')[:3])) >= (4, 5, 56)" 2>$null
+& $pythonCommand.Source -c "import ccxt, cryptography, tzdata; assert tuple(map(int, ccxt.__version__.split('.')[:3])) >= (4, 5, 56)" 2>$null
 if ($LASTEXITCODE -ne 0) {
     Write-Host "正在安装或更新后端 Python 依赖..." -ForegroundColor Yellow
     & $pythonCommand.Source -m pip install -r (Join-Path $workspaceRoot "requirements.txt")

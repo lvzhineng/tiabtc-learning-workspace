@@ -42,7 +42,7 @@ start-workspace.cmd
 
 Python 后端是纯 API 服务。禁止恢复项目目录静态文件服务；数据库、源代码和配置文件不能通过 8765 端口访问。
 
-依赖约束：`ccxt>=4.5.56,<5`（Bitget UTA 需要 `params.uta=True`，旧版会忽略），以及 `cryptography`（本地加密 API 密钥）。
+依赖约束：`ccxt>=4.5.56,<5`（Bitget UTA 需要 `params.uta=True`，旧版会忽略）、`cryptography`（本地加密 API 密钥），以及 `tzdata`（Windows 下 zoneinfo 时区数据库支持）。
 
 ## 3. 不可破坏的业务约束
 
