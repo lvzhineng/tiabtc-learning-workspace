@@ -1012,6 +1012,7 @@ export function PositionReviewWorkspace({
                     ? ` 到 ${formatShanghaiTime(selected.exitTimeMs)}`
                     : ' 持仓中'}
                   {` · 持仓时长 ${formatHoldingDuration(selected.entryTimeMs, selected.exitTimeMs)}`}
+                  {' · 同交易对全部已同步仓位同图显示，当前笔加大标记'}
                 </p>
               </div>
               <div className="posrev-chart-header-actions">
@@ -1061,6 +1062,7 @@ export function PositionReviewWorkspace({
             </header>
             <PositionReviewChart
               position={selected}
+              positions={positions}
               timeframe={effectiveTimeframe}
               themeMode={themeMode}
               focusRevision={focusRevision}

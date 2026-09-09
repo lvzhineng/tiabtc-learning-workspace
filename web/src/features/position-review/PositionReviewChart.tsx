@@ -7,6 +7,7 @@ import {
   fetchPositionReviewCandles,
 } from '@/api/position-review-api';
 import { ChartCanvas, findNearestCandle } from '@/chart/ChartCanvas';
+import type { TradePricePoint } from '@/chart/TradePricePrimitive';
 import { captureChartPng } from '@/chart/capture-chart-png';
 import { formatPrice, pricePrecision } from '@/chart/chart-price';
 import {
@@ -25,11 +26,9 @@ import {
 import type { Candlestick } from '@/domain/candle';
 import { TIMEFRAME_DISPLAY_MAP, type ReviewTimeframe } from '@/domain/timeframe';
 import {
-  boundedTradeWindowMs,
   candleVenueLabel,
   clipTradeFocusRange,
   positionCandleCacheVenue,
-  sliceCachedCandleWindow,
 } from '@/api/candle-window-cache';
 import { DraggableDrawingToolbar } from '@/features/drawings/DraggableDrawingToolbar';
 import { DrawingObjectTreePanel } from '@/features/drawings/DrawingObjectTreePanel';
@@ -37,9 +36,13 @@ import { useDrawingWorkspace } from '@/features/review-workspace/useDrawingWorks
 import { toast } from '@/ui/feedback/toast';
 import { FILL_KIND_LABEL, formatNumber, mergeCandles } from './position-review-format';
 import type { ReviewPosition } from './position-review-types';
+import { positionKey, venueLabel } from './position-review-types';
+
+const EMPTY_CANDLES: Candlestick[] = [];
 
 export function PositionReviewChart({
   position,
+  positions,
   timeframe,
   themeMode,
   focusRevision,
@@ -47,6 +50,7 @@ export function PositionReviewChart({
   showWeekendBands,
 }: {
   position: ReviewPosition;
+  positions: ReviewPosition[];
   timeframe: ReviewTimeframe;
   themeMode: 'dark' | 'light';
   focusRevision: number;
@@ -74,24 +78,12 @@ export function PositionReviewChart({
   const entryTimeMs = position.entryTimeMs;
   const closedExitTimeMs = position.exitTimeMs;
   const symbol = position.chartSymbol;
-  const chartContextKey = `${symbol}:${timeframe}:${entryTimeMs}:${closedExitTimeMs ?? 'open'}:${position.positionId}`;
-  const [candles, setCandles] = useState<Candlestick[]>(() => {
-    const window = boundedTradeWindowMs(
-      entryTimeMs,
-      closedExitTimeMs ?? Date.now(),
-      timeframe
-    );
-    const cached = sliceCachedCandleWindow(
-      'position',
-      symbol,
-      timeframe,
-      window.fromMs,
-      window.toMs,
-      200,
-      positionCandleCacheVenue(symbol, position.venue)
-    );
-    return cached?.candles ?? [];
-  });
+  const chartContextKey = `${symbol}:${timeframe}:${entryTimeMs}:${closedExitTimeMs ?? 'open'}:${positionKey(position)}`;
+  const markerEvents = useMemo(
+    () => buildPositionEvents(positions.filter((item) => item.chartSymbol === symbol)),
+    [positions, symbol]
+  );
+  const [candles, setCandles] = useState<Candlestick[]>(EMPTY_CANDLES);
   const {
     ready: drawingReady,
     activeTool,
@@ -171,27 +163,11 @@ export function PositionReviewChart({
     resetCandleEdgeLoadGuard(edgeLoadGuardRef.current);
 
     const exitForFetch = closedExitTimeMs ?? Date.now();
-    const window = boundedTradeWindowMs(entryTimeMs, exitForFetch, timeframe);
-    const cached = sliceCachedCandleWindow(
-      'position',
-      symbol,
-      timeframe,
-      window.fromMs,
-      window.toMs,
-      200,
-      positionCandleCacheVenue(symbol, position.venue)
-    );
-    if (cached?.candles.length) {
-      setCandles(cached.candles);
-      setCandleVenue(cached.venue || 'bybit');
-      setLoadedContextKey(chartContextKey);
-      setLoading(false);
-    } else {
-      setCandles([]);
-      setCandleVenue(positionCandleCacheVenue(symbol, position.venue));
-      setLoadedContextKey('');
-      setLoading(true);
-    }
+    // The API owns cache lookup and returns cached windows without a network request.
+    setCandles(EMPTY_CANDLES);
+    setCandleVenue(positionCandleCacheVenue(symbol, position.venue));
+    setLoadedContextKey('');
+    setLoading(true);
 
     fetchPositionReviewCandles(
       symbol,
@@ -359,7 +335,7 @@ export function PositionReviewChart({
   }, [setActiveTool]);
 
   const contextReady = loadedContextKey === chartContextKey;
-  const displayedCandles = contextReady ? candles : [];
+  const displayedCandles = contextReady ? candles : EMPTY_CANDLES;
   const chartLoading = loading || !contextReady;
   const chartError = contextReady ? error : null;
   const chartWarning = contextReady ? warning : null;
@@ -381,15 +357,12 @@ export function PositionReviewChart({
     }
     return pricePrecision(values());
   }, [displayedCandles, position.entryPrice, position.exitPrice, position.fills]);
-  const markers = useMemo(
+  const { markers, pricePoints } = useMemo(
     () =>
-      buildPositionMarkers(
-        position,
-        timeframe,
-        displayedCandles,
-        displayedPricePrecision
-      ),
-    [displayedCandles, displayedPricePrecision, position, timeframe]
+      buildPositionMarkers(markerEvents, positionKey(position), !closedExitTimeMs,
+        timeframe, displayedCandles, displayedPricePrecision),
+    [displayedCandles, displayedPricePrecision, position.venue, position.positionId,
+      closedExitTimeMs, markerEvents, timeframe]
   );
   const [showTrajectory, setShowTrajectory] = useState(false);
 
@@ -422,6 +395,12 @@ export function PositionReviewChart({
     (displayedCandles.length
       ? displayedCandles[displayedCandles.length - 1].timestampMs
       : entryTimeMs);
+  const focusRangeMs = useMemo(
+    () => contextReady && displayedCandles.length > 0
+      ? clipTradeFocusRange(entryTimeMs, focusExitMs, displayedCandles, timeframe)
+      : null,
+    [contextReady, displayedCandles, entryTimeMs, focusExitMs, timeframe]
+  );
 
   return (
     <div ref={chartRootRef} className="bitlang-chart">
@@ -485,17 +464,9 @@ export function PositionReviewChart({
         viewportContextKey={chartContextKey}
         themeMode={themeMode}
         systemMarkers={markers}
+        tradePricePoints={pricePoints}
         trajectoryPoints={trajectoryPoints}
-        focusRangeMs={
-          contextReady && displayedCandles.length > 0
-            ? clipTradeFocusRange(
-                entryTimeMs,
-                focusExitMs,
-                displayedCandles,
-                timeframe
-              )
-            : null
-        }
+        focusRangeMs={focusRangeMs}
         focusRevision={focusRevision}
         onCrosshairMove={setHoveredCandle}
         onLoadEarlier={loadEarlier}
@@ -559,66 +530,97 @@ export function PositionReviewChart({
   );
 }
 
+interface PositionMarkerEvent {
+  timeMs: number;
+  price: number | null;
+  label: string;
+  side: 'buy' | 'sell';
+  key: string;
+}
+
+function buildPositionEvents(positions: ReviewPosition[]): PositionMarkerEvent[] {
+  const events: PositionMarkerEvent[] = [];
+  for (const position of positions) {
+    const key = positionKey(position);
+    const prefix = `${venueLabel(position.venue)} ${position.side === 'long' ? '多' : '空'}`;
+    const push = (timeMs: number, price: number | null, label: string, side: 'buy' | 'sell') => {
+      if (Number.isFinite(timeMs)) events.push({ timeMs, price, label: `${prefix} ${label}`, side, key });
+    };
+    let hasOpen = false;
+    let hasClose = false;
+    for (const fill of position.fills ?? []) {
+      hasOpen ||= fill.kind === 'open';
+      hasClose ||= fill.kind === 'close';
+      push(fill.timeMs, fill.price, FILL_KIND_LABEL[fill.kind], fill.side);
+    }
+    if (!hasOpen) {
+      push(position.entryTimeMs, position.entryPrice, '开', position.side === 'long' ? 'buy' : 'sell');
+    }
+    if (position.exitTimeMs && !hasClose) {
+      push(position.exitTimeMs, position.exitPrice, '平', position.side === 'long' ? 'sell' : 'buy');
+    }
+  }
+  return events.sort((left, right) => left.timeMs - right.timeMs);
+}
+
 function buildPositionMarkers(
-  position: ReviewPosition,
+  events: PositionMarkerEvent[],
+  selectedKey: string,
+  selectedOpen: boolean,
   timeframe: ReviewTimeframe,
   candles: Candlestick[],
   displayedPricePrecision: number
-): SeriesMarker<UTCTimestamp>[] {
-  if (!candles.length) return [];
+): { markers: SeriesMarker<UTCTimestamp>[]; pricePoints: TradePricePoint[] } {
+  if (!candles.length) return { markers: [], pricePoints: [] };
   const interval = timeframeMs(timeframe);
   const markerTime = (eventTimeMs: number) => {
-    const candle =
-      candles.find(
-        (item) =>
-          item.timestampMs <= eventTimeMs && item.timestampMs + interval > eventTimeMs
-      ) ||
-      candles.reduce((nearest, item) =>
-        Math.abs(item.timestampMs - eventTimeMs) <
-        Math.abs(nearest.timestampMs - eventTimeMs)
-          ? item
-          : nearest
-      );
+    if (!Number.isFinite(eventTimeMs)) return null;
+    // Only attach events to their actual candle; unloaded ranges and gaps stay empty.
+    let low = 0;
+    let high = candles.length;
+    while (low < high) {
+      const middle = Math.floor((low + high) / 2);
+      if (candles[middle].timestampMs <= eventTimeMs) low = middle + 1;
+      else high = middle;
+    }
+    const candle = candles[low - 1];
+    if (!candle || eventTimeMs >= candle.timestampMs + interval) return null;
     return timestampMsToUtcTimestamp(candle.timestampMs);
   };
-  const fills = position.fills ?? [];
   const markers: SeriesMarker<UTCTimestamp>[] = [];
-  const pushTradeMarker = (
-    timeMs: number,
-    price: number | null,
-    text: string,
-    side: 'buy' | 'sell'
-  ) => {
-    const isBuy = side === 'buy';
+  const pricePoints: TradePricePoint[] = [];
+  // Search the sorted event index once; only visit events inside the loaded window.
+  let low = 0;
+  let high = events.length;
+  const fromMs = candles[0].timestampMs;
+  const toMs = candles[candles.length - 1].timestampMs + interval;
+  while (low < high) {
+    const middle = Math.floor((low + high) / 2);
+    if (events[middle].timeMs < fromMs) low = middle + 1;
+    else high = middle;
+  }
+  for (let index = low; index < events.length && events[index].timeMs < toMs; index += 1) {
+    const event = events[index];
+    const time = markerTime(event.timeMs);
+    if (time == null) continue;
+    const selected = event.key === selectedKey;
+    const isBuy = event.side === 'buy';
+    if (event.price != null && Number.isFinite(event.price) && event.price > 0) {
+      pricePoints.push({
+        time, price: event.price, selected,
+        color: isBuy ? '#089981' : '#f23645',
+      });
+    }
     markers.push({
-      time: markerTime(timeMs),
+      time,
       position: isBuy ? 'belowBar' : 'aboveBar',
       color: isBuy ? '#089981' : '#f23645',
       shape: isBuy ? 'arrowUp' : 'arrowDown',
-      text: `${text} ${formatPrice(price, displayedPricePrecision)}`,
+      size: selected ? 2 : 1,
+      text: `${selected ? '【当前】' : ''}${event.label}${selected ? ` ${formatPrice(event.price, displayedPricePrecision)}` : ''}`,
     });
-  };
-  const openSide = position.side === 'long' ? 'buy' : 'sell';
-  const closeSide = position.side === 'long' ? 'sell' : 'buy';
-
-  if (fills.length > 0) {
-    for (const fill of fills) {
-      const label = FILL_KIND_LABEL[fill.kind];
-      pushTradeMarker(fill.timeMs, fill.price, label, fill.side);
-    }
-    if (!fills.some((fill) => fill.kind === 'open')) {
-      pushTradeMarker(position.entryTimeMs, position.entryPrice, '开', openSide);
-    }
-    if (position.exitTimeMs && !fills.some((fill) => fill.kind === 'close')) {
-      pushTradeMarker(position.exitTimeMs, position.exitPrice, '平', closeSide);
-    }
-  } else {
-    pushTradeMarker(position.entryTimeMs, position.entryPrice, '开', openSide);
-    if (position.exitTimeMs) {
-      pushTradeMarker(position.exitTimeMs, position.exitPrice, '平', closeSide);
-    }
   }
-  if (!position.exitTimeMs) {
+  if (selectedOpen && markerTime(Date.now()) != null) {
     markers.push({
       time: timestampMsToUtcTimestamp(candles[candles.length - 1].timestampMs),
       position: 'aboveBar',
@@ -627,5 +629,6 @@ function buildPositionMarkers(
       text: '现在',
     });
   }
-  return markers.sort((left, right) => Number(left.time) - Number(right.time));
+  // Event-to-candle mapping preserves time order; the last-candle marker is appended.
+  return { markers, pricePoints };
 }

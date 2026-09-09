@@ -35,6 +35,7 @@ import type {
 import { ChartDrawingOverlay } from '@/features/drawings/ChartDrawingOverlay';
 import { UsSessionBandsOverlay } from '@/chart/UsSessionBandsOverlay';
 import { candlePriceFormat, formatPrice } from './chart-price';
+import { TradePricePrimitive, type TradePricePoint } from './TradePricePrimitive';
 
 interface ChartCanvasProps {
   candles: Candlestick[];
@@ -48,6 +49,7 @@ interface ChartCanvasProps {
   focusRevision?: number;
   initialVisibleSpan?: number;
   systemMarkers?: SeriesMarker<UTCTimestamp>[];
+  tradePricePoints?: TradePricePoint[];
   onCrosshairMove?: (candle: Candlestick | null) => void;
   onDoubleClickTime?: (timestampMs: number) => void;
   onViewportAnchorChange?: (
@@ -170,6 +172,7 @@ export const ChartCanvas = memo(function ChartCanvas({
   focusRevision = 0,
   initialVisibleSpan = 120,
   systemMarkers = [],
+  tradePricePoints,
   onCrosshairMove,
   onDoubleClickTime,
   onViewportAnchorChange,
@@ -197,6 +200,7 @@ export const ChartCanvas = memo(function ChartCanvas({
   const seriesRef = useRef<ISeriesApi<'Candlestick'> | null>(null);
   const volumeSeriesRef = useRef<ISeriesApi<'Histogram'> | null>(null);
   const trajectorySeriesRef = useRef<ISeriesApi<'Line'> | null>(null);
+  const tradePricePrimitiveRef = useRef<TradePricePrimitive | null>(null);
   const prevBarsCountRef = useRef<number>(0);
   const prevFirstTimestampRef = useRef<number | null>(null);
   const prevLastTimestampRef = useRef<number | null>(null);
@@ -402,6 +406,9 @@ export const ChartCanvas = memo(function ChartCanvas({
     seriesRef.current = series;
     volumeSeriesRef.current = volumeSeries;
     trajectorySeriesRef.current = trajectorySeries;
+    const tradePricePrimitive = new TradePricePrimitive();
+    series.attachPrimitive(tradePricePrimitive);
+    tradePricePrimitiveRef.current = tradePricePrimitive;
     setChartReady(true);
 
     let pendingCrosshairCandle: Candlestick | null = null;
@@ -583,6 +590,7 @@ export const ChartCanvas = memo(function ChartCanvas({
       seriesRef.current = null;
       volumeSeriesRef.current = null;
       trajectorySeriesRef.current = null;
+      tradePricePrimitiveRef.current = null;
     };
   }, []); // Run once on mount
 
@@ -961,6 +969,10 @@ export const ChartCanvas = memo(function ChartCanvas({
   ]);
 
   // System Markers Update
+  useEffect(() => {
+    tradePricePrimitiveRef.current?.setPoints(tradePricePoints ?? []);
+  }, [tradePricePoints, chartReady]);
+
   useEffect(() => {
     const series = seriesRef.current;
     if (!series) return;
