@@ -301,6 +301,56 @@ class DrawingStorageTests(unittest.TestCase):
         self.assertEqual(repaired["open"], 100.8)
         self.assertEqual(repaired["close"], 101)
 
+    def test_claimed_long_gap_is_repaired_from_bybit_and_venue(self):
+        interval = "15"
+        interval_ms = study_server.INTERVAL_MILLISECONDS[interval]
+        now = 1_787_809_200_000
+        last = study_server.latest_closed_candle_timestamp(interval, now)
+        first = last - interval_ms * 8
+        study_server.MARKET_RANGE_REPAIR_AT.clear()
+        with study_server.database() as connection:
+            for table, prefix in (
+                ("market_candles", ("BTCUSDT", interval)),
+                ("venue_market_candles", ("gate", "SOLUSDT", interval)),
+            ):
+                connection.executemany(
+                    f"INSERT INTO {table} VALUES ({','.join('?' for _ in range(len(prefix) + 6))})",
+                    [(*prefix, stamp, 100, 101, 99, 100, 10) for stamp in (first, last)],
+                )
+            connection.execute(
+                "INSERT INTO market_cache_ranges VALUES (?, ?, ?, ?, ?)",
+                ("BTCUSDT", interval, first, last + interval_ms - 1, "now"),
+            )
+            connection.execute(
+                "INSERT INTO venue_market_cache_ranges VALUES (?, ?, ?, ?, ?, ?)",
+                ("gate", "SOLUSDT", interval, first, last + interval_ms - 1, "now"),
+            )
+
+        def fetched(symbol, interval_name, interval_length, start, end):
+            return [
+                (symbol, interval_name, stamp, 100, 101, 99, 100, 10)
+                for stamp in range(start, end + 1, interval_length)
+            ]
+
+        with mock.patch.object(study_server.time, "time", return_value=now / 1000), \
+            mock.patch.object(study_server, "request_needs_trailing_refresh", return_value=False), \
+            mock.patch.object(study_server, "fetch_market_candles", side_effect=lambda s, i, a, b: fetched(s, i, interval_ms, a, b)) as bybit_fetch, \
+            mock.patch.object(study_server, "_fallback_candle_provider") as venue_provider:
+            venue_provider.return_value.fetch_candles.side_effect = fetched
+            bybit, _, bybit_warning = study_server.load_candle_range(
+                "BTCUSDT", interval, first, last, offline=False
+            )
+            venue, _, venue_warning = study_server.load_venue_candle_range(
+                "gate", "SOLUSDT", interval, first, last
+            )
+
+        self.assertEqual(len(bybit), 9)
+        self.assertEqual(len(venue), 9)
+        self.assertEqual(bybit_warning, "")
+        self.assertEqual(venue_warning, "")
+        bybit_fetch.assert_called_once()
+        venue_provider.return_value.fetch_candles.assert_called_once()
+
     def test_offline_mode_never_fetches_missing_ranges(self):
         original_fetch = study_server.fetch_market_candles
         study_server.fetch_market_candles = lambda *args: self.fail("offline mode used network")

@@ -87,7 +87,6 @@ FLOW_OI_HISTORY_START_MS = 1_577_836_800_000  # 2020-01-01 UTC
 OI_15M_MS = 15 * 60 * 1000
 FLOW_WARMUP_LOCK = threading.Lock()
 FLOW_WARMUP_STATE = {"warming": False}
-MARKET_REFRESHING = set()
 RUN_DIR = ROOT / ".run"
 CREDENTIAL_KEY_FILE = RUN_DIR / "credential-key"
 POSITION_REVIEW_VENUE = "bitget"
@@ -613,7 +612,7 @@ def market_cache_coverage_ranges(interval, start_timestamp, end_timestamp, candl
 
 
 def closed_range_defects(interval, start_timestamp, end_timestamp, candles):
-    """Find small cache holes and frozen partial bars inside a closed window."""
+    """Find cache holes of any length and frozen partial bars in a closed window."""
     interval_ms = INTERVAL_MILLISECONDS[interval]
     last_closed = latest_closed_candle_timestamp(interval)
     lo = int(start_timestamp)
@@ -632,11 +631,8 @@ def closed_range_defects(interval, start_timestamp, end_timestamp, candles):
         delta = curr_ts - prev_ts
         if delta <= 0:
             continue
-        gap_bars = delta // interval_ms - 1
-        if 1 <= gap_bars <= MAX_INTERNAL_HOLE_BARS:
+        if delta > interval_ms:
             defects.append((prev_ts + interval_ms, curr_ts - 1))
-            continue
-        if gap_bars != 0:
             continue
         prev_close = float(previous["close"])
         curr_open = float(current["open"])
@@ -646,6 +642,22 @@ def closed_range_defects(interval, start_timestamp, end_timestamp, candles):
             continue
         defects.append((prev_ts, curr_ts + interval_ms - 1))
     return merge_touching_ranges(defects)
+
+
+def closed_candle_time_gaps(interval, start_timestamp, end_timestamp, candles):
+    """Find missing bars between observed closed candles, regardless of cache claims."""
+    interval_ms = INTERVAL_MILLISECONDS[interval]
+    hi = min(int(end_timestamp), latest_closed_candle_timestamp(interval))
+    timestamps = [
+        int(candle["timestamp"])
+        for candle in candles
+        if int(start_timestamp) <= int(candle["timestamp"]) <= hi
+    ]
+    return [
+        (previous + interval_ms, current - 1)
+        for previous, current in zip(timestamps, timestamps[1:])
+        if current > previous + interval_ms
+    ]
 
 
 def unrepaired_ranges(symbol, interval, ranges):
@@ -1117,70 +1129,6 @@ def warm_up_market_provider():
     warm_up_venue_market_providers()
 
 
-def schedule_candle_refresh(symbol, interval, start_timestamp, end_timestamp):
-    if not historical_missing_cached_ranges(
-        symbol, interval, start_timestamp, end_timestamp
-    ):
-        return
-    fetch_key = (symbol, interval)
-    with MARKET_FETCH_LOCKS_GUARD:
-        if fetch_key in MARKET_REFRESHING:
-            return
-        MARKET_REFRESHING.add(fetch_key)
-
-    def refresh():
-        try:
-            with market_fetch_lock(symbol, interval):
-                if not historical_missing_cached_ranges(
-                    symbol, interval, start_timestamp, end_timestamp
-                ):
-                    return
-                failed_at, failed_message = MARKET_FETCH_FAILURES.get(fetch_key, (0, ""))
-                if failed_message and time.monotonic() - failed_at < FETCH_FAILURE_COOLDOWN_SECONDS:
-                    return
-                try:
-                    for missing_start, missing_end in historical_missing_cached_ranges(
-                        symbol,
-                        interval,
-                        start_timestamp,
-                        end_timestamp,
-                    ):
-                        for chunk_start, chunk_end in market_range_chunks(
-                            interval,
-                            missing_start,
-                            missing_end,
-                        ):
-                            fetched = fetch_market_candles(
-                                symbol,
-                                interval,
-                                chunk_start,
-                                chunk_end,
-                            )
-                            save_candles(
-                                symbol,
-                                interval,
-                                chunk_start,
-                                chunk_end,
-                                fetched,
-                            )
-                    MARKET_FETCH_FAILURES.pop(fetch_key, None)
-                except RuntimeError as error:
-                    MARKET_FETCH_FAILURES[fetch_key] = (time.monotonic(), str(error))
-                    print(
-                        f"[market] background-refresh {symbol} {interval} failed: {error}",
-                        flush=True,
-                    )
-        finally:
-            with MARKET_FETCH_LOCKS_GUARD:
-                MARKET_REFRESHING.discard(fetch_key)
-
-    threading.Thread(
-        target=refresh,
-        name=f"market-refresh-{symbol}-{interval}",
-        daemon=True,
-    ).start()
-
-
 def current_open_candle_timestamp(interval, now_timestamp=None):
     now_timestamp = int(time.time() * 1000) if now_timestamp is None else now_timestamp
     interval_milliseconds = INTERVAL_MILLISECONDS[interval]
@@ -1371,17 +1319,6 @@ def load_candle_range(
             candles,
         )
     )
-    if (
-        not covered
-        and not defects
-        and not offline
-        and candles
-        and not wait_for_refresh
-        and not require_complete
-    ):
-        schedule_candle_refresh(symbol, interval, start_timestamp, end_timestamp)
-        schedule_trailing_refresh(symbol, interval, start_timestamp, end_timestamp)
-        return candles, source, warning
     if (not covered or defects) and not offline:
         fetch_key = (symbol, interval)
         with market_fetch_lock(symbol, interval):
@@ -1480,6 +1417,10 @@ def load_candle_range(
     candles = list_candles(symbol, interval, start_timestamp, end_timestamp)
     if offline and not covered:
         warning = "仅本地模式：该时间范围的缓存不完整"
+    if not offline and closed_candle_time_gaps(
+        interval, start_timestamp, end_timestamp, candles
+    ):
+        warning = warning or "K 线时间范围仍有缺口，请稍后重试"
     if warning and (require_complete or not candles):
         raise RuntimeError(warning)
     return candles, source, warning
@@ -3779,14 +3720,30 @@ def load_venue_candle_range(venue, symbol, interval, start_timestamp, end_timest
     missing_ranges = missing_venue_cached_ranges(
         venue, symbol, interval, start_timestamp, end_timestamp
     )
+    candles = list_venue_candles(
+        venue, symbol, interval, start_timestamp, end_timestamp
+    )
+    defects = closed_candle_time_gaps(
+        interval, start_timestamp, end_timestamp, candles
+    )
     warning = ""
     source = "sqlite"
-    if missing_ranges:
+    if missing_ranges or defects:
         with venue_market_fetch_lock(venue, symbol, interval):
             missing_ranges = missing_venue_cached_ranges(
                 venue, symbol, interval, start_timestamp, end_timestamp
             )
-            if missing_ranges:
+            candles = list_venue_candles(
+                venue, symbol, interval, start_timestamp, end_timestamp
+            )
+            defects = closed_candle_time_gaps(
+                interval, start_timestamp, end_timestamp, candles
+            )
+            repair_ranges = unrepaired_ranges(
+                f"{venue}:{symbol}", interval, defects
+            )
+            fetch_ranges = merge_touching_ranges(missing_ranges + repair_ranges)
+            if fetch_ranges:
                 failed_at, failed_message = VENUE_MARKET_FETCH_FAILURES.get(
                     fetch_key, (0, "")
                 )
@@ -3804,7 +3761,7 @@ def load_venue_candle_range(venue, symbol, interval, start_timestamp, end_timest
                                 BITGET_CANDLE_MAX_RANGE_MS // interval_milliseconds,
                             )
                             chunk_limit = min(200, max_bars)
-                        for missing_start, missing_end in missing_ranges:
+                        for missing_start, missing_end in fetch_ranges:
                             for chunk_start, chunk_end in market_range_chunks(
                                 interval, missing_start, missing_end, limit=chunk_limit
                             ):
@@ -3823,6 +3780,9 @@ def load_venue_candle_range(venue, symbol, interval, start_timestamp, end_timest
                                     chunk_end,
                                     fetched,
                                 )
+                        remember_repaired_ranges(
+                            f"{venue}:{symbol}", interval, repair_ranges
+                        )
                         VENUE_MARKET_FETCH_FAILURES.pop(fetch_key, None)
                         source = venue
                     except (ValueError, RuntimeError) as error:
@@ -3832,6 +3792,8 @@ def load_venue_candle_range(venue, symbol, interval, start_timestamp, end_timest
                         )
                         warning = str(error)
     candles = list_venue_candles(venue, symbol, interval, start_timestamp, end_timestamp)
+    if closed_candle_time_gaps(interval, start_timestamp, end_timestamp, candles):
+        warning = warning or "K 线时间范围仍有缺口，请稍后重试"
     return candles, source, warning
 
 
