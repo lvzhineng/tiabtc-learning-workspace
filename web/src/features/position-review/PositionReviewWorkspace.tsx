@@ -104,6 +104,7 @@ type PositionReviewUiState = {
   showMoreFilters: boolean;
   showUsSessionBands: boolean;
   showWeekendBands: boolean;
+  showOtherPositions: boolean;
   viewMode: 'chart' | 'dashboard';
 };
 
@@ -158,6 +159,7 @@ function loadPositionReviewUiState(): PositionReviewUiState {
     showMoreFilters: storedBoolean(stored.showMoreFilters, false),
     showUsSessionBands: storedBoolean(stored.showUsSessionBands, false),
     showWeekendBands: storedBoolean(stored.showWeekendBands, false),
+    showOtherPositions: storedBoolean(stored.showOtherPositions, true),
     viewMode: storedString(stored.viewMode, 'chart', [
       'chart',
       'dashboard',
@@ -354,6 +356,9 @@ export function PositionReviewWorkspace({
   const [showWeekendBands, setShowWeekendBands] = useState(
     initialUiState.showWeekendBands
   );
+  const [showOtherPositions, setShowOtherPositions] = useState(
+    initialUiState.showOtherPositions
+  );
   const [showDetails, setShowDetails] = useState(false);
   const [viewMode, setViewMode] = useState<'chart' | 'dashboard'>(() => {
     const requestedView = new URLSearchParams(window.location.search).get('view');
@@ -541,6 +546,7 @@ export function PositionReviewWorkspace({
       showMoreFilters,
       showUsSessionBands,
       showWeekendBands,
+      showOtherPositions,
       viewMode,
     });
   }, [
@@ -556,6 +562,7 @@ export function PositionReviewWorkspace({
     showMoreFilters,
     showUsSessionBands,
     showWeekendBands,
+    showOtherPositions,
     side,
     sortField,
     status,
@@ -1012,7 +1019,6 @@ export function PositionReviewWorkspace({
                     ? ` 到 ${formatShanghaiTime(selected.exitTimeMs)}`
                     : ' 持仓中'}
                   {` · 持仓时长 ${formatHoldingDuration(selected.entryTimeMs, selected.exitTimeMs)}`}
-                  {' · 同交易对全部已同步仓位同图显示，当前笔加大标记'}
                 </p>
               </div>
               <div className="posrev-chart-header-actions">
@@ -1068,6 +1074,8 @@ export function PositionReviewWorkspace({
               focusRevision={focusRevision}
               showUsSessionBands={showUsSessionBands}
               showWeekendBands={showWeekendBands}
+              showOtherPositions={showOtherPositions}
+              onToggleOtherPositions={() => setShowOtherPositions((value) => !value)}
             />
             {showDetails && (
               <aside className="posrev-detail-drawer" aria-label="仓位复盘详情">

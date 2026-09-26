@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Copy, GitCommit, RefreshCw } from 'lucide-react';
+import { Copy, Eye, EyeOff, GitCommit, RefreshCw } from 'lucide-react';
 import type { SeriesMarker, UTCTimestamp } from 'lightweight-charts';
 import {
   fetchPositionEarlierCandles,
@@ -48,6 +48,8 @@ export function PositionReviewChart({
   focusRevision,
   showUsSessionBands,
   showWeekendBands,
+  showOtherPositions,
+  onToggleOtherPositions,
 }: {
   position: ReviewPosition;
   positions: ReviewPosition[];
@@ -56,6 +58,8 @@ export function PositionReviewChart({
   focusRevision: number;
   showUsSessionBands: boolean;
   showWeekendBands: boolean;
+  showOtherPositions: boolean;
+  onToggleOtherPositions: () => void;
 }) {
   const [hoveredCandle, setHoveredCandle] = useState<Candlestick | null>(null);
   const [loading, setLoading] = useState(true);
@@ -79,9 +83,24 @@ export function PositionReviewChart({
   const closedExitTimeMs = position.exitTimeMs;
   const symbol = position.chartSymbol;
   const chartContextKey = `${symbol}:${timeframe}:${entryTimeMs}:${closedExitTimeMs ?? 'open'}:${positionKey(position)}`;
+  const [labelViewport, setLabelViewport] = useState({ contextKey: '', zoomed: false });
+  const showOtherMarkerLabels =
+    labelViewport.contextKey === chartContextKey && labelViewport.zoomed;
+  const selectedPositionKey = positionKey(position);
+  const sameVenueSymbolPositions = useMemo(
+    () => positions.filter((item) =>
+      item.chartSymbol === symbol && item.venue === position.venue
+    ),
+    [positions, position.venue, symbol]
+  );
+  const hasOtherPositions = sameVenueSymbolPositions.some(
+    (item) => positionKey(item) !== selectedPositionKey
+  );
   const markerEvents = useMemo(
-    () => buildPositionEvents(positions.filter((item) => item.chartSymbol === symbol)),
-    [positions, symbol]
+    () => buildPositionEvents(sameVenueSymbolPositions.filter(
+      (item) => showOtherPositions || positionKey(item) === selectedPositionKey
+    )),
+    [sameVenueSymbolPositions, selectedPositionKey, showOtherPositions]
   );
   const [candles, setCandles] = useState<Candlestick[]>(EMPTY_CANDLES);
   const {
@@ -360,9 +379,9 @@ export function PositionReviewChart({
   const { markers, pricePoints } = useMemo(
     () =>
       buildPositionMarkers(markerEvents, positionKey(position), !closedExitTimeMs,
-        timeframe, displayedCandles, displayedPricePrecision),
+        timeframe, displayedCandles, displayedPricePrecision, showOtherMarkerLabels),
     [displayedCandles, displayedPricePrecision, position.venue, position.positionId,
-      closedExitTimeMs, markerEvents, timeframe]
+      closedExitTimeMs, markerEvents, showOtherMarkerLabels, timeframe]
   );
   const [showTrajectory, setShowTrajectory] = useState(false);
 
@@ -436,27 +455,41 @@ export function PositionReviewChart({
           onClose={toggleObjectTree}
         />
       )}
-      <button
-        type="button"
-        className="posrev-copy-chart"
-        onClick={copyChart}
-        disabled={copyingChart || displayedCandles.length === 0}
-        title="复制 K 线图到剪贴板"
-      >
-        {copyingChart ? <RefreshCw size={14} className="spin" /> : <Copy size={14} />}
-        <span>{copyingChart ? '复制中' : '复制图表'}</span>
-      </button>
-      {position.fills && position.fills.length >= 2 && (
+      <div className="posrev-chart-controls">
+        {hasOtherPositions && (
+          <button
+            type="button"
+            className={`posrev-copy-chart ${showOtherPositions ? 'active' : ''}`}
+            onClick={onToggleOtherPositions}
+            aria-pressed={showOtherPositions}
+            title={showOtherPositions ? '隐藏同交易所、同交易对其他仓位的成交记录' : '显示同交易所、同交易对其他仓位的成交记录'}
+          >
+            {showOtherPositions ? <Eye size={14} /> : <EyeOff size={14} />}
+            <span>{showOtherPositions ? '隐藏其他仓位' : '显示其他仓位'}</span>
+          </button>
+        )}
+        {position.fills && position.fills.length >= 2 && (
+          <button
+            type="button"
+            className={`posrev-copy-chart posrev-trajectory-btn ${showTrajectory ? 'active' : ''}`}
+            onClick={() => setShowTrajectory((v) => !v)}
+            title="显示/隐藏分批调仓折线轨迹"
+          >
+            <GitCommit size={14} />
+            <span>{showTrajectory ? '隐藏轨迹' : '调仓轨迹'}</span>
+          </button>
+        )}
         <button
           type="button"
-          className={`posrev-copy-chart posrev-trajectory-btn ${showTrajectory ? 'active' : ''}`}
-          onClick={() => setShowTrajectory((v) => !v)}
-          title="显示/隐藏分批调仓折线轨迹"
+          className="posrev-copy-chart"
+          onClick={copyChart}
+          disabled={copyingChart || displayedCandles.length === 0}
+          title="复制 K 线图到剪贴板"
         >
-          <GitCommit size={14} />
-          <span>{showTrajectory ? '隐藏轨迹' : '调仓轨迹'}</span>
+          {copyingChart ? <RefreshCw size={14} className="spin" /> : <Copy size={14} />}
+          <span>{copyingChart ? '复制中' : '复制图表'}</span>
         </button>
-      )}
+      </div>
       <ChartCanvas
         candles={displayedCandles}
         symbol={symbol}
@@ -468,6 +501,14 @@ export function PositionReviewChart({
         trajectoryPoints={trajectoryPoints}
         focusRangeMs={focusRangeMs}
         focusRevision={focusRevision}
+        onViewportAnchorChange={(_, visibleSpan) => {
+          const zoomed = visibleSpan <= 35;
+          setLabelViewport((current) =>
+            current.contextKey === chartContextKey && current.zoomed === zoomed
+              ? current
+              : { contextKey: chartContextKey, zoomed }
+          );
+        }}
         onCrosshairMove={setHoveredCandle}
         onLoadEarlier={loadEarlier}
         isLoadingEarlier={isLoadingEarlier}
@@ -534,6 +575,7 @@ interface PositionMarkerEvent {
   timeMs: number;
   price: number | null;
   label: string;
+  shortLabel: string;
   side: 'buy' | 'sell';
   key: string;
 }
@@ -544,7 +586,9 @@ function buildPositionEvents(positions: ReviewPosition[]): PositionMarkerEvent[]
     const key = positionKey(position);
     const prefix = `${venueLabel(position.venue)} ${position.side === 'long' ? '多' : '空'}`;
     const push = (timeMs: number, price: number | null, label: string, side: 'buy' | 'sell') => {
-      if (Number.isFinite(timeMs)) events.push({ timeMs, price, label: `${prefix} ${label}`, side, key });
+      if (Number.isFinite(timeMs)) events.push({
+        timeMs, price, label: `${prefix} ${label}`, shortLabel: label, side, key,
+      });
     };
     let hasOpen = false;
     let hasClose = false;
@@ -569,7 +613,8 @@ function buildPositionMarkers(
   selectedOpen: boolean,
   timeframe: ReviewTimeframe,
   candles: Candlestick[],
-  displayedPricePrecision: number
+  displayedPricePrecision: number,
+  showOtherMarkerLabels: boolean
 ): { markers: SeriesMarker<UTCTimestamp>[]; pricePoints: TradePricePoint[] } {
   if (!candles.length) return { markers: [], pricePoints: [] };
   const interval = timeframeMs(timeframe);
@@ -617,7 +662,9 @@ function buildPositionMarkers(
       color: isBuy ? '#089981' : '#f23645',
       shape: isBuy ? 'arrowUp' : 'arrowDown',
       size: selected ? 2 : 1,
-      text: `${selected ? '【当前】' : ''}${event.label}${selected ? ` ${formatPrice(event.price, displayedPricePrecision)}` : ''}`,
+      text: selected
+        ? `【当前】${event.label} ${formatPrice(event.price, displayedPricePrecision)}`
+        : showOtherMarkerLabels ? event.shortLabel : '',
     });
   }
   if (selectedOpen && markerTime(Date.now()) != null) {

@@ -552,8 +552,8 @@
 
 .posrev-venue-badge {
   position: absolute;
-  top: 8px;
-  right: 116px;
+  top: 40px;
+  right: 10px;
   z-index: 7;
   padding: 3px 8px;
   border: 1px solid var(--border-color);
@@ -562,6 +562,16 @@
   color: var(--text-muted);
   font-size: 11px;
   pointer-events: none;
+}
+
+.posrev-chart-controls {
+  position: absolute;
+  top: 8px;
+  right: 10px;
+  z-index: 8;
+  display: flex;
+  align-items: center;
+  gap: 6px;
 }
 
 .posrev-copy-chart {
@@ -583,6 +593,10 @@
   cursor: pointer;
 }
 
+.posrev-chart-controls .posrev-copy-chart {
+  position: static;
+}
+
 .posrev-copy-chart:hover:not(:disabled) {
   border-color: var(--accent-blue);
   color: var(--text-primary);
@@ -597,7 +611,7 @@
   right: 98px;
 }
 
-.posrev-trajectory-btn.active {
+.posrev-chart-controls .posrev-copy-chart.active {
   background: color-mix(in srgb, var(--accent-blue) 22%, var(--bg-dark-800));
   border-color: var(--accent-blue);
   color: var(--accent-blue);
@@ -617,6 +631,14 @@
 }
 
 @media (max-width: 1200px) {
+  .posrev-chart-controls {
+    top: 40px;
+  }
+
+  .posrev-venue-badge {
+    top: 72px;
+  }
+
   .posrev-chart-workspace > .bitlang-chart-header > div:first-child {
     flex-basis: 190px;
   }
