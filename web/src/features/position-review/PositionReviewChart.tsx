@@ -1,3 +1,4 @@
+import type { TradingSession } from '@/chart/trading-sessions';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Copy, Eye, EyeOff, GitCommit, RefreshCw } from 'lucide-react';
 import type { SeriesMarker, UTCTimestamp } from 'lightweight-charts';
@@ -47,7 +48,7 @@ export function PositionReviewChart({
   timeframe,
   themeMode,
   focusRevision,
-  showUsSessionBands,
+  sessionBands,
   showWeekendBands,
   showOtherPositions,
   onToggleOtherPositions,
@@ -57,7 +58,7 @@ export function PositionReviewChart({
   timeframe: ReviewTimeframe;
   themeMode: 'dark' | 'light';
   focusRevision: number;
-  showUsSessionBands: boolean;
+  sessionBands: TradingSession[];
   showWeekendBands: boolean;
   showOtherPositions: boolean;
   onToggleOtherPositions: () => void;
@@ -526,7 +527,7 @@ export function PositionReviewChart({
         onToggleLockDrawing={toggleLockDrawing}
         onDrawingComplete={handleDrawingComplete}
         showVolume
-        showUsSessionBands={showUsSessionBands}
+        sessionBands={sessionBands}
         showWeekendBands={showWeekendBands}
       />
       {hoveredCandle && (

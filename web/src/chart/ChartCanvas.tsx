@@ -1,3 +1,4 @@
+import type { TradingSession } from '@/chart/trading-sessions';
 import { memo, useEffect, useRef, useState } from 'react';
 import {
   createChart,
@@ -72,8 +73,8 @@ interface ChartCanvasProps {
   onToggleLockDrawing?: (id: string) => void;
   onDrawingComplete?: () => void;
   showVolume?: boolean;
-  /** Soft vertical bands for US regular session (NYSE 09:30–16:00). */
-  showUsSessionBands?: boolean;
+  /** Reference Asia/Europe/US equity sessions with automatic DST. */
+  sessionBands?: TradingSession[];
   /** Warm vertical bands for the weekend in America/New_York. */
   showWeekendBands?: boolean;
   /** Optional connecting line series for position fills trajectory. */
@@ -191,7 +192,7 @@ export const ChartCanvas = memo(function ChartCanvas({
   onToggleLockDrawing,
   onDrawingComplete = () => {},
   showVolume = false,
-  showUsSessionBands = false,
+  sessionBands = [],
   showWeekendBands = false,
   trajectoryPoints = null,
 }: ChartCanvasProps) {
@@ -1007,13 +1008,13 @@ export const ChartCanvas = memo(function ChartCanvas({
         />
         {chartReady &&
           chartRef.current &&
-          (showUsSessionBands || showWeekendBands) && (
+          (sessionBands.length > 0 || showWeekendBands) && (
             <UsSessionBandsOverlay
               chart={chartRef.current}
               candles={candles}
               interval={interval}
               themeMode={themeMode}
-              showUsSessionBands={showUsSessionBands}
+              sessionBands={sessionBands}
               showWeekendBands={showWeekendBands}
             />
           )}

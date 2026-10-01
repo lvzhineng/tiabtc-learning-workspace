@@ -1,3 +1,4 @@
+import { TradingSessionControl } from '@/chart/TradingSessionControl';
 import {
   useCallback,
   useDeferredValue,
@@ -137,8 +138,8 @@ export function BitlangTradeWorkspace({
   const [showMoreFilters, setShowMoreFilters] = useState(
     initialUiState.showMoreFilters
   );
-  const [showUsSessionBands, setShowUsSessionBands] = useState(
-    initialUiState.showUsSessionBands
+  const [sessionBands, setSessionBands] = useState(
+    initialUiState.sessionBands
   );
   const [showWeekendBands, setShowWeekendBands] = useState(
     initialUiState.showWeekendBands
@@ -366,7 +367,7 @@ export function BitlangTradeWorkspace({
       timeframe,
       autoTimeframe,
       showMoreFilters,
-      showUsSessionBands,
+      sessionBands,
       showWeekendBands,
       page,
       selectedId,
@@ -386,7 +387,7 @@ export function BitlangTradeWorkspace({
     search,
     selectedId,
     showMoreFilters,
-    showUsSessionBands,
+    sessionBands,
     showWeekendBands,
     sortField,
     tagFilter,
@@ -928,14 +929,7 @@ export function BitlangTradeWorkspace({
                         {timeframeLabel(item)}
                       </button>
                     ))}
-                    <button
-                      type="button"
-                      className={showUsSessionBands ? 'active' : ''}
-                      onClick={() => setShowUsSessionBands((value) => !value)}
-                      title="美股常规交易时段（纽约 09:30–16:00）"
-                    >
-                      美盘
-                    </button>
+                    <TradingSessionControl value={sessionBands} onChange={setSessionBands} />
                     <button
                       type="button"
                       className={showWeekendBands ? 'active' : ''}
@@ -954,7 +948,7 @@ export function BitlangTradeWorkspace({
                 timeframe={effectiveTimeframe}
                 themeMode={themeMode}
                 focusRevision={focusRevision}
-                showUsSessionBands={showUsSessionBands}
+                sessionBands={sessionBands}
                 showWeekendBands={showWeekendBands}
               />
 

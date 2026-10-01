@@ -76,6 +76,7 @@ Python 后端是纯 API 服务。禁止恢复项目目录静态文件服务；�
 - 用户界面统一按 `Asia/Shanghai` 显示。
 - 十字线完整时间格式为：`YYYY-MM-DD HH:mm 周X`。
 - 不要通过固定加减 8 小时修正显示，应使用显式时区转换。
+- 「交易时段」使用东京/伦敦/纽约现货常规时段作为亚盘/欧盘/美盘参考，可多选；计算使用 Asia/Tokyo、Europe/London、America/New_York 并适配夏令时。亚盘保留午休，日线/周线不画条带，节假日不做交易日历修正。偏好保存 `sessionBands`，兼容旧 `showUsSessionBands`；各工作台分别记忆。
 
 ### 3.3 图表视口
 

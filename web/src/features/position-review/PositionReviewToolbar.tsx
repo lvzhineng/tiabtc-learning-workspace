@@ -1,3 +1,5 @@
+import { TradingSessionControl } from '@/chart/TradingSessionControl';
+import type { TradingSession } from '@/chart/trading-sessions';
 import { memo } from 'react';
 import {
   ChevronDown,
@@ -59,8 +61,8 @@ interface PositionReviewToolbarProps {
   onTagFilterChange: (tagId: string) => void;
   tags: PositionTag[];
 
-  showUsSessionBands: boolean;
-  onToggleUsSessionBands: () => void;
+  sessionBands: TradingSession[];
+  onSessionBandsChange: (value: TradingSession[]) => void;
   showWeekendBands: boolean;
   onToggleWeekendBands: () => void;
 }
@@ -104,8 +106,8 @@ export const PositionReviewToolbar = memo(function PositionReviewToolbar(
     tagFilter,
     onTagFilterChange,
     tags,
-    showUsSessionBands,
-    onToggleUsSessionBands,
+    sessionBands,
+    onSessionBandsChange,
     showWeekendBands,
     onToggleWeekendBands,
   } = props;
@@ -281,14 +283,7 @@ export const PositionReviewToolbar = memo(function PositionReviewToolbar(
               </option>
             ))}
           </select>
-          <button
-            type="button"
-            className={showUsSessionBands ? 'active' : ''}
-            onClick={onToggleUsSessionBands}
-            title="在图表上显示美股常规交易时段垂直条带"
-          >
-            美股时段
-          </button>
+          <TradingSessionControl value={sessionBands} onChange={onSessionBandsChange} />
           <button
             type="button"
             className={showWeekendBands ? 'active' : ''}

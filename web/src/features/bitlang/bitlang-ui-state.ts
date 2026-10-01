@@ -1,3 +1,4 @@
+import { storedTradingSessions, type TradingSession } from '@/chart/trading-sessions';
 import { REVIEW_TIMEFRAMES, type ReviewTimeframe } from '@/domain/timeframe';
 import {
   readLocalUiState,
@@ -36,7 +37,7 @@ export type BitlangUiState = {
   timeframe: ReviewTimeframe;
   autoTimeframe: boolean;
   showMoreFilters: boolean;
-  showUsSessionBands: boolean;
+  sessionBands: TradingSession[];
   showWeekendBands: boolean;
   page: number;
   selectedId: string;
@@ -93,7 +94,7 @@ export function loadBitlangUiState(): BitlangUiState {
     timeframe: storedString(stored.timeframe, '60', REVIEW_TIMEFRAMES) as ReviewTimeframe,
     autoTimeframe: storedBoolean(stored.autoTimeframe, true),
     showMoreFilters: storedBoolean(stored.showMoreFilters, false),
-    showUsSessionBands: storedBoolean(stored.showUsSessionBands, false),
+    sessionBands: storedTradingSessions(stored),
     showWeekendBands: storedBoolean(stored.showWeekendBands, false),
     page: storedInteger(stored.page, 1, 1),
     selectedId: storedString(stored.selectedId, '', undefined, 128),

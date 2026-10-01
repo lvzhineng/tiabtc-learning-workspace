@@ -1,3 +1,4 @@
+import type { TradingSession } from '@/chart/trading-sessions';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Copy, RefreshCw } from 'lucide-react';
 import type { SeriesMarker, UTCTimestamp } from 'lightweight-charts';
@@ -48,14 +49,14 @@ export function BitlangTradeChart({
   timeframe,
   themeMode,
   focusRevision,
-  showUsSessionBands,
+  sessionBands,
   showWeekendBands,
 }: {
   trade: BitlangTrade;
   timeframe: ReviewTimeframe;
   themeMode: 'dark' | 'light';
   focusRevision: number;
-  showUsSessionBands: boolean;
+  sessionBands: TradingSession[];
   showWeekendBands: boolean;
 }) {
   const [hoveredCandle, setHoveredCandle] = useState<Candlestick | null>(null);
@@ -456,7 +457,7 @@ export function BitlangTradeChart({
         onToggleLockDrawing={toggleLockDrawing}
         onDrawingComplete={handleDrawingComplete}
         showVolume
-        showUsSessionBands={showUsSessionBands}
+        sessionBands={sessionBands}
         showWeekendBands={showWeekendBands}
       />
       {hoveredCandle && (

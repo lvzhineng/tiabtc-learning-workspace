@@ -8,9 +8,9 @@ import {
 } from '@/chart/chart-time';
 import {
   listWeekendSessions,
-  listUsRegularSessions,
   type UsSessionBand,
 } from '@/chart/us-session';
+import { listTradingSessions, type TradingSession } from './trading-sessions';
 
 /** Session bands are only meaningful inside a single day of bars. */
 const SESSION_BAND_TIMEFRAMES = new Set<ReviewTimeframe>([
@@ -26,14 +26,13 @@ type Props = {
   candles: Candlestick[];
   interval: ReviewTimeframe;
   themeMode: 'dark' | 'light';
-  showUsSessionBands: boolean;
+  sessionBands: TradingSession[];
   showWeekendBands: boolean;
 };
 
-function usSessionFillColor(themeMode: 'dark' | 'light'): string {
-  return themeMode === 'light'
-    ? 'rgba(37, 99, 235, 0.07)'
-    : 'rgba(96, 165, 250, 0.11)';
+function sessionFillColor(session: TradingSession, themeMode: 'dark' | 'light'): string {
+  const rgb = session === 'asia' ? '45, 212, 191' : session === 'europe' ? '167, 139, 250' : '96, 165, 250';
+  return `rgba(${rgb}, ${themeMode === 'light' ? 0.10 : 0.11})`;
 }
 
 function weekendFillColor(themeMode: 'dark' | 'light'): string {
@@ -131,21 +130,21 @@ export function UsSessionBandsOverlay({
   candles,
   interval,
   themeMode,
-  showUsSessionBands,
+  sessionBands,
   showWeekendBands,
 }: Props) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const candlesRef = useRef(candles);
   const themeModeRef = useRef(themeMode);
   const intervalRef = useRef(interval);
-  const showUsSessionBandsRef = useRef(showUsSessionBands);
+  const sessionBandsRef = useRef(sessionBands);
   const showWeekendBandsRef = useRef(showWeekendBands);
   const schedulePaintRef = useRef<(() => void) | null>(null);
 
   candlesRef.current = candles;
   themeModeRef.current = themeMode;
   intervalRef.current = interval;
-  showUsSessionBandsRef.current = showUsSessionBands;
+  sessionBandsRef.current = sessionBands;
   showWeekendBandsRef.current = showWeekendBands;
 
   useEffect(() => {
@@ -154,7 +153,7 @@ export function UsSessionBandsOverlay({
 
     let disposed = false;
     let frame: number | null = null;
-    let usSessionBandCache: SessionBandCache | null = null;
+    const sessionBandCaches = new Map<TradingSession, SessionBandCache>();
     let weekendBandCache: SessionBandCache | null = null;
     const timeScale = chart.timeScale();
     const host = canvas.parentElement;
@@ -223,20 +222,22 @@ export function UsSessionBandsOverlay({
         }
       };
 
-      if (showUsSessionBandsRef.current) {
+      for (const session of sessionBandsRef.current) {
+        let sessionBandCache = sessionBandCaches.get(session);
         if (
-          !usSessionBandCache ||
-          visible.fromMs < usSessionBandCache.fromMs ||
-          visible.toMs > usSessionBandCache.toMs
+          !sessionBandCache ||
+          visible.fromMs < sessionBandCache.fromMs ||
+          visible.toMs > sessionBandCache.toMs
         ) {
-          usSessionBandCache = buildSessionBandCache(
+          sessionBandCache = buildSessionBandCache(
             visible,
-            listUsRegularSessions
+            (fromMs, toMs) => listTradingSessions(session, fromMs, toMs)
           );
+          sessionBandCaches.set(session, sessionBandCache);
         }
         paintBands(
-          usSessionBandCache.bands,
-          usSessionFillColor(themeModeRef.current)
+          sessionBandCache.bands,
+          sessionFillColor(session, themeModeRef.current)
         );
       }
 
@@ -294,7 +295,7 @@ export function UsSessionBandsOverlay({
 
   useEffect(() => {
     schedulePaintRef.current?.();
-  }, [candles, themeMode, interval, showUsSessionBands, showWeekendBands]);
+  }, [candles, themeMode, interval, sessionBands, showWeekendBands]);
 
   // Keep the canvas mounted across D/W switches. The paint routine clears it
   // for unsupported intervals, then the same subscriptions can repaint it

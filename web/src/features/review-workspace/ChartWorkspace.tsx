@@ -1,3 +1,5 @@
+import { TradingSessionControl } from '@/chart/TradingSessionControl';
+import { storedTradingSessions, type TradingSession } from '@/chart/trading-sessions';
 import { useEffect, useState, useCallback, useMemo, useRef } from 'react';
 import {
   REVIEW_TIMEFRAMES,
@@ -66,7 +68,7 @@ const MAX_REVIEW_VISIBLE_SPAN = 200;
 type ReviewUiPreferences = {
   symbol: string;
   isLogScale: boolean;
-  showUsSessionBands: boolean;
+  sessionBands: TradingSession[];
   showWeekendBands: boolean;
 };
 
@@ -80,7 +82,7 @@ function loadReviewUiPreferences(market: 'perpetual' | 'cfd'): ReviewUiPreferenc
   return {
     symbol: valid ? symbol : fallback,
     isLogScale: storedBoolean(stored.isLogScale, false),
-    showUsSessionBands: storedBoolean(stored.showUsSessionBands, false),
+    sessionBands: storedTradingSessions(stored),
     showWeekendBands: storedBoolean(stored.showWeekendBands, false),
   };
 }
@@ -200,8 +202,8 @@ export function ChartWorkspace({
   const [isLogScale, setIsLogScale] = useState<boolean>(
     initialUiPreferences.isLogScale
   );
-  const [showUsSessionBands, setShowUsSessionBands] = useState(
-    initialUiPreferences.showUsSessionBands
+  const [sessionBands, setSessionBands] = useState(
+    initialUiPreferences.sessionBands
   );
   const [showWeekendBands, setShowWeekendBands] = useState(
     initialUiPreferences.showWeekendBands
@@ -269,7 +271,7 @@ export function ChartWorkspace({
     writeLocalUiState(isCfd ? 'tiabtc-cfd-ui-v1' : REVIEW_UI_STORAGE_KEY, {
       symbol: initialVideoContext ? initialUiPreferences.symbol : activeSymbol,
       isLogScale,
-      showUsSessionBands,
+      sessionBands,
       showWeekendBands,
     });
   }, [
@@ -277,7 +279,7 @@ export function ChartWorkspace({
     initialUiPreferences.symbol,
     initialVideoContext,
     isLogScale,
-    showUsSessionBands,
+    sessionBands,
     showWeekendBands,
     isCfd,
   ]);
@@ -1071,15 +1073,7 @@ export function ChartWorkspace({
             </span>
           </button>}
 
-          <button
-            type="button"
-            className={`ui-btn ${showUsSessionBands ? 'ui-btn-active' : ''}`}
-            onClick={() => setShowUsSessionBands((enabled) => !enabled)}
-            title="标注美股常规交易时段（纽约 09:30–16:00）"
-            aria-pressed={showUsSessionBands}
-          >
-            美盘时段
-          </button>
+          <TradingSessionControl value={sessionBands} onChange={setSessionBands} />
 
           <button
             type="button"
@@ -1107,16 +1101,6 @@ export function ChartWorkspace({
         readout={readoutInfo}
         showVolume={!isCfd}
       />
-
-      {isCfd && (
-        <div className="review-banner-warning">
-          <span>
-            Gate CFD · {CFD_SYMBOLS.find((item) => item.symbol === activeSymbol)?.name}
-            {' · 报价 '}{CFD_SYMBOLS.find((item) => item.symbol === activeSymbol)?.quote}
-            {' · 数据源未提供成交量；休市不补造 K 线，历史范围以 Gate 可提供数据为准。'}
-          </span>
-        </div>
-      )}
 
       {offlineWarning && (
         <div className="review-banner-warning">
@@ -1189,7 +1173,7 @@ export function ChartWorkspace({
           onToggleLockDrawing={toggleLockDrawing}
           onDrawingComplete={handleDrawingComplete}
           showVolume={!isCfd}
-          showUsSessionBands={showUsSessionBands}
+          sessionBands={sessionBands}
           showWeekendBands={showWeekendBands}
         />
       </div>

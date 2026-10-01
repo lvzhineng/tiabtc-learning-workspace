@@ -1,3 +1,4 @@
+import { storedTradingSessions, type TradingSession } from '@/chart/trading-sessions';
 import { REVIEW_TIMEFRAMES, type ReviewTimeframe } from '@/domain/timeframe';
 import {
   readLocalUiState,
@@ -42,7 +43,7 @@ export type PositionReviewUiState = {
   timeframe: ReviewTimeframe;
   autoTimeframe: boolean;
   showMoreFilters: boolean;
-  showUsSessionBands: boolean;
+  sessionBands: TradingSession[];
   showWeekendBands: boolean;
   showOtherPositions: boolean;
   viewMode: 'chart' | 'dashboard';
@@ -97,7 +98,7 @@ export function loadPositionReviewUiState(): PositionReviewUiState {
     timeframe: storedString(stored.timeframe, '15', REVIEW_TIMEFRAMES) as ReviewTimeframe,
     autoTimeframe: storedBoolean(stored.autoTimeframe, true),
     showMoreFilters: storedBoolean(stored.showMoreFilters, false),
-    showUsSessionBands: storedBoolean(stored.showUsSessionBands, false),
+    sessionBands: storedTradingSessions(stored),
     showWeekendBands: storedBoolean(stored.showWeekendBands, false),
     showOtherPositions: storedBoolean(stored.showOtherPositions, true),
     viewMode: storedString(stored.viewMode, 'chart', [

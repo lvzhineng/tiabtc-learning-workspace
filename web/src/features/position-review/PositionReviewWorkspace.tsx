@@ -1,3 +1,4 @@
+import { TradingSessionControl } from '@/chart/TradingSessionControl';
 import {
   memo,
   useCallback,
@@ -256,8 +257,8 @@ export function PositionReviewWorkspace({
   const [showMoreFilters, setShowMoreFilters] = useState(
     initialUiState.showMoreFilters
   );
-  const [showUsSessionBands, setShowUsSessionBands] = useState(
-    initialUiState.showUsSessionBands
+  const [sessionBands, setSessionBands] = useState(
+    initialUiState.sessionBands
   );
   const [showWeekendBands, setShowWeekendBands] = useState(
     initialUiState.showWeekendBands
@@ -450,7 +451,7 @@ export function PositionReviewWorkspace({
       timeframe,
       autoTimeframe,
       showMoreFilters,
-      showUsSessionBands,
+      sessionBands,
       showWeekendBands,
       showOtherPositions,
       viewMode,
@@ -466,7 +467,7 @@ export function PositionReviewWorkspace({
     search,
     selectedId,
     showMoreFilters,
-    showUsSessionBands,
+    sessionBands,
     showWeekendBands,
     showOtherPositions,
     side,
@@ -780,8 +781,8 @@ export function PositionReviewWorkspace({
           tagFilter={tagFilter}
           onTagFilterChange={setTagFilter}
           tags={tags}
-          showUsSessionBands={showUsSessionBands}
-          onToggleUsSessionBands={() => setShowUsSessionBands((v) => !v)}
+          sessionBands={sessionBands}
+          onSessionBandsChange={setSessionBands}
           showWeekendBands={showWeekendBands}
           onToggleWeekendBands={() => setShowWeekendBands((v) => !v)}
         />
@@ -953,14 +954,7 @@ export function PositionReviewWorkspace({
                       {timeframeLabel(item)}
                     </button>
                   ))}
-                  <button
-                    type="button"
-                    className={showUsSessionBands ? 'active' : ''}
-                    onClick={() => setShowUsSessionBands((value) => !value)}
-                    title="美股常规交易时段（纽约 09:30–16:00）"
-                  >
-                    美盘
-                  </button>
+                  <TradingSessionControl value={sessionBands} onChange={setSessionBands} />
                   <button
                     type="button"
                     className={showWeekendBands ? 'active' : ''}
@@ -978,7 +972,7 @@ export function PositionReviewWorkspace({
               timeframe={effectiveTimeframe}
               themeMode={themeMode}
               focusRevision={focusRevision}
-              showUsSessionBands={showUsSessionBands}
+              sessionBands={sessionBands}
               showWeekendBands={showWeekendBands}
               showOtherPositions={showOtherPositions}
               onToggleOtherPositions={() => setShowOtherPositions((value) => !value)}
