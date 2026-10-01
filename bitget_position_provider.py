@@ -121,44 +121,6 @@ def parse_uta_fill(row):
     }
 
 
-def fill_matches_position(fill, position):
-    if fill.get("chartSymbol") != position.get("chartSymbol"):
-        return False
-    pos_side = position.get("side")
-    trade_side = fill.get("tradeSide")
-    fill_side = fill.get("side")
-    if trade_side == "open":
-        return (pos_side == "long" and fill_side == "buy") or (
-            pos_side == "short" and fill_side == "sell"
-        )
-    if trade_side == "close":
-        return (pos_side == "long" and fill_side == "sell") or (
-            pos_side == "short" and fill_side == "buy"
-        )
-    if pos_side == "long":
-        return fill_side in {"buy", "sell"}
-    if pos_side == "short":
-        return fill_side in {"buy", "sell"}
-    return False
-
-
-def classify_fill_role(fill, position):
-    if not fill_matches_position(fill, position):
-        return None
-    trade_side = fill.get("tradeSide")
-    fill_side = fill.get("side")
-    pos_side = position.get("side")
-    if trade_side == "open":
-        return "open"
-    if trade_side == "close":
-        return "close"
-    if pos_side == "long":
-        return "open" if fill_side == "buy" else "close"
-    if pos_side == "short":
-        return "open" if fill_side == "sell" else "close"
-    return None
-
-
 class BitgetUtaPositionProvider:
     def __init__(self, api_key, secret, password, timeout_milliseconds=20_000):
         if not api_key or not secret or not password:

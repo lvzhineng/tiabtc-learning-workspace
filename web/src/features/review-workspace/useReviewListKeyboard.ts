@@ -1,7 +1,5 @@
 import { useEffect } from 'react';
-import type { ReviewTimeframe } from '@/domain/timeframe';
-
-const TIMEFRAMES: ReviewTimeframe[] = ['1', '5', '15', '60', '240', 'D', 'W'];
+import { REVIEW_TIMEFRAMES, type ReviewTimeframe } from '@/domain/timeframe';
 
 export function useReviewListKeyboard(options: {
   enabled: boolean;
@@ -35,8 +33,8 @@ export function useReviewListKeyboard(options: {
       }
 
       const keyNumber = Number.parseInt(event.key, 10);
-      if (keyNumber >= 1 && keyNumber <= TIMEFRAMES.length) {
-        const nextTimeframe = TIMEFRAMES[keyNumber - 1];
+      if (keyNumber >= 1 && keyNumber <= REVIEW_TIMEFRAMES.length) {
+        const nextTimeframe = REVIEW_TIMEFRAMES[keyNumber - 1];
         if (nextTimeframe) {
           event.preventDefault();
           onTimeframe(nextTimeframe);

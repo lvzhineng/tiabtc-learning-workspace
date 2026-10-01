@@ -1,7 +1,5 @@
 import type { FreeReplayContext, VideoReviewContext, TradeReviewContext } from '@/domain/review-context';
 
-export type ReplayStatus = 'idle' | 'ready' | 'playing' | 'paused' | 'completed';
-
 export type ActiveReplayState = {
   status: 'ready' | 'playing' | 'paused' | 'completed';
   context: VideoReviewContext | FreeReplayContext | TradeReviewContext;

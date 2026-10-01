@@ -19,12 +19,15 @@ from cryptography.fernet import Fernet, InvalidToken
 from bitget_position_provider import (
     BITGET_CANDLE_MAX_RANGE_MS,
     BitgetUtaPositionProvider,
-    classify_fill_role,
 )
 from gate_position_provider import GateUsdtPositionProvider
+from gate_cfd_provider import CFD_SYMBOLS, GateCfdMarketDataProvider
+from cfd_replay_data import CfdReplayData
 from market_data_provider import CcxtBybitMarketDataProvider
+from position_fill_assignment import assign_fills_to_positions
 import video_catalog
 import workspace_config
+from workspace_schema import WORKSPACE_TABLES_SQL
 
 
 ROOT = Path(__file__).resolve().parent
@@ -34,7 +37,7 @@ DATABASE_FILE = DEFAULT_DATABASE_FILE
 SEED_DATABASE_FILE = ROOT / "data" / "tiabtc-review-seed.sqlite"
 HOST = "127.0.0.1"
 PORT = 8765
-API_VERSION = 12
+API_VERSION = 14
 VALID_STATUSES = {"unlearned", "learning", "learned"}
 VALID_SYMBOLS = {"BTCUSDT", "ETHUSDT", "SOLUSDT", "BNBUSDT", "DOGEUSDT", "XRPUSDT"}
 VALID_INTERVALS = {"1", "5", "15", "60", "240", "D", "W"}
@@ -82,17 +85,11 @@ MARKET_TRAILING_REFRESH_BOUNDARY = {}
 MARKET_TRAILING_REFRESHING = set()
 MARKET_RANGE_REPAIR_AT = {}
 MARKET_DATA_PROVIDER = CcxtBybitMarketDataProvider()
-FLOW_WARMUP_SYMBOL = "BTCUSDT"
-FLOW_OI_HISTORY_START_MS = 1_577_836_800_000  # 2020-01-01 UTC
-OI_15M_MS = 15 * 60 * 1000
-FLOW_WARMUP_LOCK = threading.Lock()
-FLOW_WARMUP_STATE = {"warming": False}
 RUN_DIR = ROOT / ".run"
 CREDENTIAL_KEY_FILE = RUN_DIR / "credential-key"
 POSITION_REVIEW_VENUE = "bitget"
 POSITION_REVIEW_VENUES = ("bitget", "gate")
 POSITION_REVIEW_BYBIT_CANDLE_SYMBOLS = frozenset({"BTCUSDT", "ETHUSDT"})
-FILL_MATCH_PAD_MS = 2000
 TAG_COLORS = ("#3b82f6", "#10b981", "#f59e0b", "#ef4444", "#8b5cf6", "#14b8a6")
 BITLANG_TRADE_ID_RE = re.compile(r"^[0-9a-f]{64}$")
 MAX_CANDLES_PER_RESPONSE = 3000
@@ -130,11 +127,6 @@ def _write_state_unlocked(state):
     temporary_file = STATE_FILE.with_suffix(".json.tmp")
     temporary_file.write_text(json.dumps(state, ensure_ascii=False, indent=2), encoding="utf-8")
     os.replace(temporary_file, STATE_FILE)
-
-
-def write_state(state):
-    with STATE_LOCK:
-        _write_state_unlocked(state)
 
 
 def validate_learning_record(value):
@@ -189,249 +181,15 @@ def database():
         connection.close()
 
 
+CFD_REPLAY = CfdReplayData(database, DATABASE_LOCK, GateCfdMarketDataProvider())
+
+
 def initialize_database():
     if DATABASE_FILE == DEFAULT_DATABASE_FILE and not DATABASE_FILE.exists() and SEED_DATABASE_FILE.exists():
         shutil.copy2(SEED_DATABASE_FILE, DATABASE_FILE)
     with DATABASE_LOCK, database() as connection:
         connection.execute("PRAGMA journal_mode=WAL")
-        connection.executescript(
-            """
-            CREATE TABLE IF NOT EXISTS app_settings (
-                key TEXT PRIMARY KEY,
-                value TEXT NOT NULL
-            );
-            CREATE TABLE IF NOT EXISTS market_candles (
-                symbol TEXT NOT NULL,
-                interval TEXT NOT NULL,
-                timestamp INTEGER NOT NULL,
-                open REAL NOT NULL,
-                high REAL NOT NULL,
-                low REAL NOT NULL,
-                close REAL NOT NULL,
-                volume REAL NOT NULL,
-                PRIMARY KEY (symbol, interval, timestamp)
-            );
-            CREATE TABLE IF NOT EXISTS market_cache_ranges (
-                symbol TEXT NOT NULL,
-                interval TEXT NOT NULL,
-                start_timestamp INTEGER NOT NULL,
-                end_timestamp INTEGER NOT NULL,
-                fetched_at TEXT NOT NULL,
-                PRIMARY KEY (symbol, interval, start_timestamp, end_timestamp)
-            );
-            CREATE TABLE IF NOT EXISTS chart_drawings (
-                id TEXT PRIMARY KEY,
-                video_id TEXT NOT NULL,
-                symbol TEXT NOT NULL,
-                interval TEXT NOT NULL,
-                tool_type TEXT NOT NULL,
-                tool_json TEXT NOT NULL,
-                created_at TEXT NOT NULL,
-                updated_at TEXT NOT NULL
-            );
-            CREATE TABLE IF NOT EXISTS custom_symbols (
-                symbol TEXT PRIMARY KEY,
-                name TEXT NOT NULL,
-                added_at TEXT NOT NULL
-            );
-            CREATE TABLE IF NOT EXISTS paper_trades (
-                id TEXT PRIMARY KEY,
-                video_id TEXT NOT NULL,
-                symbol TEXT NOT NULL,
-                interval TEXT NOT NULL,
-                direction TEXT NOT NULL,
-                entry_price REAL NOT NULL,
-                tp_price REAL NOT NULL,
-                sl_price REAL NOT NULL,
-                rr_ratio REAL NOT NULL,
-                status TEXT NOT NULL,
-                pnl_r REAL DEFAULT 0,
-                created_at TEXT NOT NULL,
-                closed_at TEXT
-            );
-            INSERT OR IGNORE INTO app_settings (key, value) VALUES ('offline_mode', 'true');
-            CREATE TABLE IF NOT EXISTS exchange_positions (
-                venue TEXT NOT NULL,
-                position_id TEXT NOT NULL,
-                unified_symbol TEXT NOT NULL,
-                chart_symbol TEXT NOT NULL,
-                side TEXT NOT NULL,
-                status TEXT NOT NULL,
-                entry_price REAL,
-                exit_price REAL,
-                contracts REAL,
-                leverage REAL,
-                margin_mode TEXT,
-                hedged INTEGER NOT NULL DEFAULT 0,
-                realized_pnl REAL,
-                net_pnl REAL,
-                funding REAL,
-                open_fee REAL,
-                close_fee REAL,
-                entry_time_ms INTEGER NOT NULL,
-                exit_time_ms INTEGER,
-                synced_at TEXT NOT NULL,
-                PRIMARY KEY (venue, position_id)
-            );
-            CREATE TABLE IF NOT EXISTS position_notes (
-                venue TEXT NOT NULL,
-                position_id TEXT NOT NULL,
-                note TEXT NOT NULL,
-                updated_at TEXT NOT NULL,
-                PRIMARY KEY (venue, position_id)
-            );
-            CREATE TABLE IF NOT EXISTS position_drawings (
-                venue TEXT NOT NULL,
-                position_id TEXT NOT NULL,
-                id TEXT NOT NULL,
-                symbol TEXT NOT NULL,
-                interval TEXT NOT NULL,
-                tool_type TEXT NOT NULL,
-                tool_json TEXT NOT NULL,
-                created_at TEXT NOT NULL,
-                updated_at TEXT NOT NULL,
-                PRIMARY KEY (venue, position_id, id)
-            );
-            CREATE INDEX IF NOT EXISTS idx_position_drawings_scope
-                ON position_drawings (venue, position_id, created_at);
-            CREATE TABLE IF NOT EXISTS position_tags (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                name TEXT NOT NULL UNIQUE,
-                color TEXT NOT NULL
-            );
-            CREATE TABLE IF NOT EXISTS position_tag_map (
-                venue TEXT NOT NULL,
-                position_id TEXT NOT NULL,
-                tag_id INTEGER NOT NULL,
-                PRIMARY KEY (venue, position_id, tag_id),
-                FOREIGN KEY (tag_id) REFERENCES position_tags(id)
-            );
-            CREATE TABLE IF NOT EXISTS position_fills (
-                venue TEXT NOT NULL,
-                exec_id TEXT NOT NULL,
-                order_id TEXT,
-                chart_symbol TEXT NOT NULL,
-                unified_symbol TEXT,
-                side TEXT NOT NULL,
-                trade_side TEXT,
-                price REAL,
-                quantity REAL,
-                pnl REAL,
-                fee REAL,
-                time_ms INTEGER NOT NULL,
-                synced_at TEXT NOT NULL,
-                PRIMARY KEY (venue, exec_id)
-            );
-            CREATE INDEX IF NOT EXISTS idx_position_fills_symbol_time
-                ON position_fills (venue, chart_symbol, time_ms);
-            CREATE TABLE IF NOT EXISTS venue_market_candles (
-                venue TEXT NOT NULL,
-                symbol TEXT NOT NULL,
-                interval TEXT NOT NULL,
-                timestamp INTEGER NOT NULL,
-                open REAL NOT NULL,
-                high REAL NOT NULL,
-                low REAL NOT NULL,
-                close REAL NOT NULL,
-                volume REAL NOT NULL,
-                PRIMARY KEY (venue, symbol, interval, timestamp)
-            );
-            CREATE TABLE IF NOT EXISTS venue_market_cache_ranges (
-                venue TEXT NOT NULL,
-                symbol TEXT NOT NULL,
-                interval TEXT NOT NULL,
-                start_timestamp INTEGER NOT NULL,
-                end_timestamp INTEGER NOT NULL,
-                fetched_at TEXT NOT NULL,
-                PRIMARY KEY (venue, symbol, interval, start_timestamp, end_timestamp)
-            );
-            CREATE TABLE IF NOT EXISTS market_oi_1h (
-                symbol TEXT NOT NULL,
-                timestamp INTEGER NOT NULL,
-                open_interest REAL NOT NULL,
-                PRIMARY KEY (symbol, timestamp)
-            );
-            CREATE TABLE IF NOT EXISTS market_oi_1h_cache_ranges (
-                symbol TEXT NOT NULL,
-                start_timestamp INTEGER NOT NULL,
-                end_timestamp INTEGER NOT NULL,
-                fetched_at TEXT NOT NULL,
-                PRIMARY KEY (symbol, start_timestamp, end_timestamp)
-            );
-            CREATE TABLE IF NOT EXISTS market_oi_15m (
-                symbol TEXT NOT NULL,
-                timestamp INTEGER NOT NULL,
-                open_interest REAL NOT NULL,
-                PRIMARY KEY (symbol, timestamp)
-            );
-            CREATE TABLE IF NOT EXISTS market_oi_15m_cache_ranges (
-                symbol TEXT NOT NULL,
-                start_timestamp INTEGER NOT NULL,
-                end_timestamp INTEGER NOT NULL,
-                fetched_at TEXT NOT NULL,
-                PRIMARY KEY (symbol, start_timestamp, end_timestamp)
-            );
-            CREATE TABLE IF NOT EXISTS market_oi_5m (
-                symbol TEXT NOT NULL,
-                timestamp INTEGER NOT NULL,
-                open_interest REAL NOT NULL,
-                PRIMARY KEY (symbol, timestamp)
-            );
-            CREATE TABLE IF NOT EXISTS market_oi_cache_ranges (
-                symbol TEXT NOT NULL,
-                start_timestamp INTEGER NOT NULL,
-                end_timestamp INTEGER NOT NULL,
-                fetched_at TEXT NOT NULL,
-                PRIMARY KEY (symbol, start_timestamp, end_timestamp)
-            );
-            CREATE TABLE IF NOT EXISTS market_cvd_5m (
-                symbol TEXT NOT NULL,
-                timestamp INTEGER NOT NULL,
-                buy_volume REAL NOT NULL,
-                sell_volume REAL NOT NULL,
-                delta REAL NOT NULL,
-                PRIMARY KEY (symbol, timestamp)
-            );
-            CREATE TABLE IF NOT EXISTS market_cvd_days (
-                symbol TEXT NOT NULL,
-                day_utc TEXT NOT NULL,
-                status TEXT NOT NULL,
-                fetched_at TEXT NOT NULL,
-                PRIMARY KEY (symbol, day_utc)
-            );
-            CREATE TABLE IF NOT EXISTS bitlang_trade_notes (
-                trade_id TEXT NOT NULL PRIMARY KEY,
-                note TEXT NOT NULL,
-                updated_at TEXT NOT NULL
-            );
-            CREATE TABLE IF NOT EXISTS bitlang_trade_tags (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                name TEXT NOT NULL UNIQUE,
-                color TEXT NOT NULL
-            );
-            CREATE TABLE IF NOT EXISTS bitlang_trade_tag_map (
-                trade_id TEXT NOT NULL,
-                tag_id INTEGER NOT NULL,
-                PRIMARY KEY (trade_id, tag_id),
-                FOREIGN KEY (tag_id) REFERENCES bitlang_trade_tags(id)
-            );
-            CREATE TABLE IF NOT EXISTS bitlang_trade_drawings (
-                trade_id TEXT NOT NULL,
-                id TEXT NOT NULL,
-                symbol TEXT NOT NULL,
-                interval TEXT NOT NULL,
-                tool_type TEXT NOT NULL,
-                tool_json TEXT NOT NULL,
-                created_at TEXT NOT NULL,
-                updated_at TEXT NOT NULL,
-                PRIMARY KEY (trade_id, id)
-            );
-            CREATE INDEX IF NOT EXISTS idx_bitlang_trade_drawings_scope
-                ON bitlang_trade_drawings (trade_id, created_at);
-            CREATE INDEX IF NOT EXISTS idx_exchange_positions_entry
-                ON exchange_positions (entry_time_ms DESC);
-            """
-        )
+        connection.executescript(WORKSPACE_TABLES_SQL)
         fill_columns = {
             row["name"]
             for row in connection.execute("PRAGMA table_info(position_fills)").fetchall()
@@ -492,16 +250,8 @@ def validate_market_scope(symbol, interval):
         raise ValueError("不支持该 K 线周期")
 
 
-def missing_cached_ranges(symbol, interval, start_timestamp, end_timestamp):
-    with DATABASE_LOCK, database() as connection:
-        rows = connection.execute(
-            """SELECT start_timestamp, end_timestamp FROM market_cache_ranges
-               WHERE symbol = ? AND interval = ?
-                 AND end_timestamp >= ? AND start_timestamp <= ?
-               ORDER BY start_timestamp ASC""",
-            (symbol, interval, start_timestamp, end_timestamp),
-        ).fetchall()
-
+def _missing_from_cached_ranges(rows, start_timestamp, end_timestamp):
+    """Subtract ordered cached ranges from an inclusive requested interval."""
     missing = []
     cursor = start_timestamp
     for row in rows:
@@ -517,6 +267,18 @@ def missing_cached_ranges(symbol, interval, start_timestamp, end_timestamp):
     if cursor <= end_timestamp:
         missing.append((cursor, end_timestamp))
     return missing
+
+
+def missing_cached_ranges(symbol, interval, start_timestamp, end_timestamp):
+    with DATABASE_LOCK, database() as connection:
+        rows = connection.execute(
+            """SELECT start_timestamp, end_timestamp FROM market_cache_ranges
+               WHERE symbol = ? AND interval = ?
+                 AND end_timestamp >= ? AND start_timestamp <= ?
+               ORDER BY start_timestamp ASC""",
+            (symbol, interval, start_timestamp, end_timestamp),
+        ).fetchall()
+    return _missing_from_cached_ranges(rows, start_timestamp, end_timestamp)
 
 
 def cached_range_contains(symbol, interval, start_timestamp, end_timestamp):
@@ -812,306 +574,6 @@ def list_candles(symbol, interval, start_timestamp, end_timestamp):
         }
         for row in rows
     ]
-
-
-def missing_oi_cached_ranges(symbol, start_timestamp, end_timestamp):
-    with DATABASE_LOCK, database() as connection:
-        rows = connection.execute(
-            """SELECT start_timestamp, end_timestamp FROM market_oi_15m_cache_ranges
-               WHERE symbol = ?
-                 AND end_timestamp >= ? AND start_timestamp <= ?
-               ORDER BY start_timestamp ASC""",
-            (symbol, start_timestamp, end_timestamp),
-        ).fetchall()
-
-    missing = []
-    cursor = start_timestamp
-    for row in rows:
-        range_start = max(start_timestamp, int(row["start_timestamp"]))
-        range_end = min(end_timestamp, int(row["end_timestamp"]))
-        if range_end < cursor:
-            continue
-        if range_start > cursor:
-            missing.append((cursor, range_start - 1))
-        cursor = max(cursor, range_end + 1)
-        if cursor > end_timestamp:
-            break
-    if cursor <= end_timestamp:
-        missing.append((cursor, end_timestamp))
-    return missing
-
-
-def save_open_interest(symbol, start_timestamp, end_timestamp, rows):
-    fetched_at = datetime.now().astimezone().isoformat()
-    with DATABASE_LOCK, database() as connection:
-        connection.executemany(
-            """INSERT INTO market_oi_15m (symbol, timestamp, open_interest)
-               VALUES (?, ?, ?)
-               ON CONFLICT(symbol, timestamp) DO UPDATE SET
-                 open_interest = excluded.open_interest""",
-            rows,
-        )
-        merged_start = start_timestamp
-        merged_end = end_timestamp
-        while True:
-            overlapping_ranges = connection.execute(
-                """SELECT start_timestamp, end_timestamp
-                   FROM market_oi_15m_cache_ranges
-                   WHERE symbol = ?
-                     AND end_timestamp >= ? AND start_timestamp <= ?""",
-                (symbol, merged_start - 1, merged_end + 1),
-            ).fetchall()
-            expanded_start = min(
-                [merged_start]
-                + [int(row["start_timestamp"]) for row in overlapping_ranges]
-            )
-            expanded_end = max(
-                [merged_end]
-                + [int(row["end_timestamp"]) for row in overlapping_ranges]
-            )
-            if expanded_start == merged_start and expanded_end == merged_end:
-                break
-            merged_start = expanded_start
-            merged_end = expanded_end
-        connection.execute(
-            """DELETE FROM market_oi_15m_cache_ranges
-               WHERE symbol = ?
-                 AND end_timestamp >= ? AND start_timestamp <= ?""",
-            (symbol, merged_start - 1, merged_end + 1),
-        )
-        connection.execute(
-            """INSERT INTO market_oi_15m_cache_ranges
-               (symbol, start_timestamp, end_timestamp, fetched_at)
-               VALUES (?, ?, ?, ?)""",
-            (symbol, merged_start, merged_end, fetched_at),
-        )
-
-
-def list_open_interest(symbol, start_timestamp, end_timestamp):
-    with DATABASE_LOCK, database() as connection:
-        rows = connection.execute(
-            """SELECT timestamp, open_interest
-               FROM market_oi_15m
-               WHERE symbol = ? AND timestamp BETWEEN ? AND ?
-               ORDER BY timestamp ASC""",
-            (symbol, start_timestamp, end_timestamp),
-        ).fetchall()
-    return {int(row[0]): float(row[1]) for row in rows}
-
-
-def warmup_open_interest(symbol, start_timestamp, end_timestamp):
-    for missing_start, missing_end in missing_oi_cached_ranges(
-        symbol,
-        start_timestamp,
-        end_timestamp,
-    ):
-        chunks = list(
-            market_range_chunks("15", missing_start, missing_end, limit=200)
-        )
-        saw_data = False
-        for chunk_start, chunk_end in reversed(chunks):
-            fetched = MARKET_DATA_PROVIDER.fetch_open_interest_15m(
-                symbol,
-                chunk_start,
-                chunk_end,
-            )
-            save_open_interest(symbol, chunk_start, chunk_end, fetched)
-            if fetched:
-                saw_data = True
-                continue
-            older_end = chunk_start - 1
-            if older_end >= missing_start:
-                save_open_interest(symbol, missing_start, older_end, [])
-            break
-        else:
-            if not saw_data:
-                save_open_interest(symbol, missing_start, missing_end, [])
-
-
-def warmup_flow_candles_15m(symbol, start_timestamp, end_timestamp):
-    with market_fetch_lock(symbol, "15"):
-        for missing_start, missing_end in missing_cached_ranges(
-            symbol,
-            "15",
-            start_timestamp,
-            end_timestamp,
-        ):
-            for chunk_start, chunk_end in market_range_chunks(
-                "15",
-                missing_start,
-                missing_end,
-            ):
-                fetched = fetch_market_candles(
-                    symbol,
-                    "15",
-                    chunk_start,
-                    chunk_end,
-                )
-                save_candles(symbol, "15", chunk_start, chunk_end, fetched)
-
-
-def flow_warmup_state():
-    with FLOW_WARMUP_LOCK:
-        return dict(FLOW_WARMUP_STATE)
-
-
-def warm_up_flow_cache():
-    with FLOW_WARMUP_LOCK:
-        if FLOW_WARMUP_STATE["warming"]:
-            return
-        FLOW_WARMUP_STATE["warming"] = True
-    try:
-        symbol = FLOW_WARMUP_SYMBOL
-        flow_end = current_open_candle_timestamp("15")
-        flow_start = FLOW_OI_HISTORY_START_MS // OI_15M_MS * OI_15M_MS
-        print(
-            f"[flow] 开始预热 {symbol} 15m OI 与 15m K 线，自 2020-01-01 至当前，已缓存区间会跳过",
-            flush=True,
-        )
-        try:
-            warmup_flow_candles_15m(symbol, flow_start, flow_end)
-            with DATABASE_LOCK, database() as connection:
-                candle_count = connection.execute(
-                    """SELECT COUNT(*) FROM market_candles
-                       WHERE symbol = ? AND interval = '15'""",
-                    (symbol,),
-                ).fetchone()[0]
-            print(f"[flow] 15m K 线预热完成 {symbol}，共 {candle_count} 行", flush=True)
-        except Exception as error:
-            print(f"[flow] 15m K 线预热失败 {symbol}：{error}", flush=True)
-        try:
-            warmup_open_interest(symbol, flow_start, flow_end)
-            with DATABASE_LOCK, database() as connection:
-                row_count = connection.execute(
-                    "SELECT COUNT(*) FROM market_oi_15m WHERE symbol = ?",
-                    (symbol,),
-                ).fetchone()[0]
-            print(f"[flow] 15m OI 预热完成 {symbol}，共 {row_count} 行", flush=True)
-        except Exception as error:
-            print(f"[flow] 15m OI 预热失败 {symbol}：{error}", flush=True)
-    finally:
-        with FLOW_WARMUP_LOCK:
-            FLOW_WARMUP_STATE["warming"] = False
-
-
-def candle_signed_cvd(candles):
-    points = []
-    cumulative = 0.0
-    for candle in candles:
-        volume = float(candle["volume"])
-        delta = volume if candle["close"] >= candle["open"] else -volume
-        cumulative += delta
-        points.append(
-            {
-                "timestamp": candle["timestamp"],
-                "delta": delta,
-                "cvd": cumulative,
-            }
-        )
-    return points
-
-
-def resample_step_series(interval, start_timestamp, end_timestamp, value_by_ts, source_ms):
-    interval_ms = INTERVAL_MILLISECONDS[interval]
-    first = current_open_candle_timestamp(interval, start_timestamp)
-    last = current_open_candle_timestamp(interval, end_timestamp)
-    output = []
-    timestamp = first
-    while timestamp <= last:
-        if interval_ms <= source_ms:
-            source_ts = timestamp // source_ms * source_ms
-            value = value_by_ts.get(source_ts)
-            if value is not None:
-                output.append({"timestamp": timestamp, "value": value})
-        else:
-            bucket_end = timestamp + interval_ms - 1
-            last_value = None
-            source_ts = timestamp // source_ms * source_ms
-            if source_ts < timestamp:
-                source_ts += source_ms
-            while source_ts <= bucket_end:
-                if source_ts in value_by_ts:
-                    last_value = value_by_ts[source_ts]
-                source_ts += source_ms
-            if last_value is not None:
-                output.append({"timestamp": timestamp, "value": last_value})
-        timestamp += interval_ms
-    return output
-
-
-def resample_cvd_series(interval, start_timestamp, end_timestamp, cvd_points):
-    cvd_by_ts = {int(point["timestamp"]): float(point["cvd"]) for point in cvd_points}
-    delta_by_ts = {int(point["timestamp"]): float(point["delta"]) for point in cvd_points}
-    stepped = resample_step_series(
-        interval,
-        start_timestamp,
-        end_timestamp,
-        cvd_by_ts,
-        OI_15M_MS,
-    )
-    interval_ms = INTERVAL_MILLISECONDS[interval]
-    output = []
-    for point in stepped:
-        timestamp = point["timestamp"]
-        if interval_ms <= OI_15M_MS:
-            source_ts = timestamp // OI_15M_MS * OI_15M_MS
-            delta = delta_by_ts.get(source_ts, 0.0) if timestamp == source_ts else 0.0
-        else:
-            bucket_end = timestamp + interval_ms - 1
-            delta = 0.0
-            source_ts = timestamp // OI_15M_MS * OI_15M_MS
-            if source_ts < timestamp:
-                source_ts += OI_15M_MS
-            while source_ts <= bucket_end:
-                delta += delta_by_ts.get(source_ts, 0.0)
-                source_ts += OI_15M_MS
-        output.append(
-            {
-                "timestamp": timestamp,
-                "delta": delta,
-                "cvd": point["value"],
-            }
-        )
-    return output
-
-
-def load_chart_flow(symbol, interval, start_timestamp, end_timestamp):
-    validate_market_scope(symbol, interval)
-    start_timestamp = int(start_timestamp)
-    end_timestamp = int(end_timestamp)
-    if start_timestamp <= 0 or end_timestamp <= 0 or start_timestamp > end_timestamp:
-        raise ValueError("OI/CVD 时间范围无效")
-    bar_start = start_timestamp // OI_15M_MS * OI_15M_MS
-    bar_end = end_timestamp // OI_15M_MS * OI_15M_MS
-    oi_by_ts = list_open_interest(symbol, bar_start, bar_end)
-    oi_out = resample_step_series(
-        interval,
-        start_timestamp,
-        end_timestamp,
-        oi_by_ts,
-        OI_15M_MS,
-    )
-    cvd_out = resample_cvd_series(
-        interval,
-        start_timestamp,
-        end_timestamp,
-        candle_signed_cvd(list_candles(symbol, "15", bar_start, bar_end)),
-    )
-    warming = bool(flow_warmup_state().get("warming"))
-    warning = ""
-    if warming and symbol == FLOW_WARMUP_SYMBOL and not oi_out:
-        warning = "正在预热 BTCUSDT 15m 持仓量"
-    elif symbol != FLOW_WARMUP_SYMBOL:
-        warning = "OI 仅预热 BTCUSDT；CVD 来自 15m K 线涨跌成交量近似"
-    elif not oi_out:
-        warning = "BTCUSDT 暂无 15m OI 缓存；CVD 来自 15m K 线涨跌成交量近似"
-    return {
-        "interval": interval,
-        "oi": oi_out,
-        "cvd": cvd_out,
-        "warming": warming,
-        "warning": warning,
-    }
 
 
 def market_fetch_lock(symbol, interval):
@@ -2349,10 +1811,6 @@ def save_position_review_credentials(payload):
     raise ValueError("不支持的交易所")
 
 
-def position_review_configured():
-    return bitget_credentials_configured() or gate_credentials_configured()
-
-
 def _later_timestamp(*values):
     latest = None
     for value in values:
@@ -2552,158 +2010,6 @@ def _fill_from_row(row):
     }
 
 
-def _aggregate_fill_operations(items):
-    groups = {}
-    for index, item in enumerate(items):
-        order_id = item.get("orderId")
-        key = (
-            ("order", order_id, item.get("role"))
-            if order_id
-            else ("exec", item.get("execId") or str(index))
-        )
-        groups.setdefault(key, []).append(item)
-
-    operations = []
-    for group in groups.values():
-        first = min(
-            group,
-            key=lambda item: (item.get("timeMs") or 0, item.get("execId") or ""),
-        )
-        last = max(
-            group,
-            key=lambda item: (item.get("timeMs") or 0, item.get("execId") or ""),
-        )
-        quantities = [
-            item.get("quantity") for item in group if item.get("quantity") is not None
-        ]
-        weighted_prices = [
-            (item.get("price"), item.get("quantity"))
-            for item in group
-            if item.get("price") is not None
-            and item.get("quantity") is not None
-            and item.get("quantity") > 0
-        ]
-        total_weight = sum(quantity for _, quantity in weighted_prices)
-        if total_weight > 0:
-            price = sum(price * quantity for price, quantity in weighted_prices) / total_weight
-        else:
-            price = next(
-                (item.get("price") for item in group if item.get("price") is not None),
-                None,
-            )
-        pnl_values = [item.get("pnl") for item in group if item.get("pnl") is not None]
-        fee_values = [item.get("fee") for item in group if item.get("fee") is not None]
-        operations.append(
-            {
-                **first,
-                "quantity": sum(quantities) if quantities else None,
-                "price": price,
-                "pnl": sum(pnl_values) if pnl_values else None,
-                "fee": sum(fee_values) if fee_values else None,
-                "_lastTimeMs": last.get("timeMs") or first.get("timeMs"),
-            }
-        )
-    return sorted(
-        operations,
-        key=lambda item: (item.get("timeMs") or 0, item.get("execId") or ""),
-    )
-
-
-def assign_fills_to_positions(positions, fills):
-    now_ms = int(time.time() * 1000)
-    grouped = {
-        (position.get("venue"), position["positionId"]): [] for position in positions
-    }
-    positions_by_symbol = {}
-    for position in positions:
-        positions_by_symbol.setdefault(position.get("chartSymbol"), []).append(position)
-    for fill in fills or []:
-        candidates = []
-        fill_time = fill.get("timeMs")
-        if fill_time is None:
-            continue
-        for position in positions_by_symbol.get(fill.get("chartSymbol"), []):
-            fill_venue = fill.get("venue")
-            position_venue = position.get("venue")
-            if fill_venue and position_venue and fill_venue != position_venue:
-                continue
-            entry_ms = position.get("entryTimeMs")
-            if entry_ms is None:
-                continue
-            exit_ms = position.get("exitTimeMs") or now_ms
-            if fill_time < entry_ms - FILL_MATCH_PAD_MS:
-                continue
-            if fill_time > exit_ms + FILL_MATCH_PAD_MS:
-                continue
-            role = classify_fill_role(fill, position)
-            if not role:
-                continue
-            strictly_inside = entry_ms <= fill_time <= exit_ms
-            candidates.append((position, role, strictly_inside))
-        strict_candidates = [item for item in candidates if item[2]]
-        eligible = strict_candidates or candidates
-        if not eligible:
-            continue
-        chosen, role, _ = max(eligible, key=lambda item: item[0]["entryTimeMs"])
-        chosen_key = (chosen.get("venue"), chosen["positionId"])
-        if chosen_key in grouped:
-            grouped[chosen_key].append({**fill, "role": role})
-
-    assigned = {}
-    for position in positions:
-        pos_key = (position.get("venue"), position["positionId"])
-        items = sorted(
-            grouped.get(pos_key, []),
-            key=lambda item: (item.get("timeMs") or 0, item.get("execId") or ""),
-        )
-        items = _aggregate_fill_operations(items)
-        close_items = [item for item in items if item.get("role") == "close"]
-        last_close_id = None
-        if position.get("status") == "closed" and close_items:
-            last_close_id = max(
-                close_items,
-                key=lambda item: (
-                    item.get("_lastTimeMs") or item.get("timeMs") or 0,
-                    item.get("execId") or "",
-                ),
-            ).get("execId")
-        seen_open = False
-        annotated = []
-        for item in items:
-            role = item.get("role")
-            if role == "open":
-                kind = "open" if not seen_open else "scaleIn"
-                seen_open = True
-            elif position.get("status") == "closed" and item.get("execId") == last_close_id:
-                kind = "close"
-            else:
-                kind = "reduce"
-            operation_time_ms = (
-                item.get("_lastTimeMs")
-                if kind == "close"
-                else item.get("timeMs")
-            )
-            annotated.append(
-                {
-                    "execId": item.get("execId"),
-                    "timeMs": operation_time_ms,
-                    "side": item.get("side"),
-                    "tradeSide": item.get("tradeSide"),
-                    "kind": kind,
-                    "price": item.get("price"),
-                    "quantity": item.get("quantity"),
-                    "pnl": item.get("pnl"),
-                }
-            )
-        sorted_annotated = sorted(
-            annotated,
-            key=lambda item: (item.get("timeMs") or 0, item.get("execId") or ""),
-        )
-        assigned[pos_key] = sorted_annotated
-        assigned[position["positionId"]] = sorted_annotated
-    return assigned
-
-
 def _delete_unannotated_stale_open_positions(connection, venue, active_position_ids):
     stale_open = connection.execute(
         """SELECT position_id FROM exchange_positions
@@ -2809,10 +2115,6 @@ def save_invite_urls(payload):
     _set_app_setting("invite_gate_url", gate)
     _set_app_setting("invite_bitget_url", bitget)
     return get_workspace_settings()
-
-
-def sync_bitget_positions():
-    return sync_position_review()
 
 
 def _fetch_closed_and_fills(fetch_closed, fetch_fills, now_ms):
@@ -3442,7 +2744,7 @@ def _read_position_review(connection):
     )
     for position in positions:
         pos_key = (position.get("venue"), position["positionId"])
-        position["fills"] = grouped.get(pos_key) or grouped.get(position["positionId"], [])
+        position["fills"] = grouped.get(pos_key, [])
     return positions
 
 
@@ -3547,24 +2849,11 @@ def missing_venue_cached_ranges(venue, symbol, interval, start_timestamp, end_ti
             """SELECT start_timestamp, end_timestamp
                FROM venue_market_cache_ranges
                WHERE venue = ? AND symbol = ? AND interval = ?
+                 AND end_timestamp >= ? AND start_timestamp <= ?
                ORDER BY start_timestamp ASC""",
-            (venue, symbol, interval),
+            (venue, symbol, interval, start_timestamp, end_timestamp),
         ).fetchall()
-    missing = []
-    cursor = start_timestamp
-    for row in rows:
-        range_start = max(start_timestamp, int(row["start_timestamp"]))
-        range_end = min(end_timestamp, int(row["end_timestamp"]))
-        if range_end < cursor:
-            continue
-        if range_start > cursor:
-            missing.append((cursor, range_start - 1))
-        cursor = max(cursor, range_end + 1)
-        if cursor > end_timestamp:
-            break
-    if cursor <= end_timestamp:
-        missing.append((cursor, end_timestamp))
-    return missing
+    return _missing_from_cached_ranges(rows, start_timestamp, end_timestamp)
 
 
 def merge_venue_market_cache_range(
@@ -3797,12 +3086,6 @@ def load_venue_candle_range(venue, symbol, interval, start_timestamp, end_timest
     return candles, source, warning
 
 
-def load_bitget_candle_range(symbol, interval, start_timestamp, end_timestamp):
-    return load_venue_candle_range(
-        "bitget", symbol, interval, start_timestamp, end_timestamp
-    )
-
-
 def load_position_review_candles(
     symbol, interval, entry_timestamp, exit_timestamp, preferred_venue=None
 ):
@@ -3994,6 +3277,7 @@ class StudyHandler(BaseHTTPRequestHandler):
                     "capabilities": [
                         "learning",
                         "marketReplay",
+                        "gateCfdReplay",
                         "bitlangTradeReview",
                         "oneMinuteCandles",
                         "resilientBybitFetch",
@@ -4008,6 +3292,31 @@ class StudyHandler(BaseHTTPRequestHandler):
                     ],
                 },
             )
+        if parsed.path == "/api/cfd/symbols":
+            return self.send_json(HTTPStatus.OK, {"symbols": list(CFD_SYMBOLS.values())})
+        if parsed.path == "/api/cfd/candles":
+            try:
+                def optional_time(name):
+                    value = query.get(name, [""])[0]
+                    return int(value) if value else None
+                payload = CFD_REPLAY.load(
+                    query.get("symbol", [""])[0], query.get("interval", [""])[0],
+                    anchor=optional_time("anchor"), before=optional_time("before"),
+                    after=optional_time("after"), replay_cursor=optional_time("replayCursor"),
+                    cutoff=optional_time("cutoff"), limit=int(query.get("limit", ["500"])[0]),
+                    offline=get_offline_mode(),
+                )
+                return self.send_json(HTTPStatus.OK, payload)
+            except ValueError as error:
+                return self.send_json(HTTPStatus.BAD_REQUEST, {"error": str(error)})
+            except RuntimeError as error:
+                return self.send_json(HTTPStatus.BAD_GATEWAY, {"error": str(error)})
+        if parsed.path == "/api/cfd/drawings":
+            try:
+                drawings = CFD_REPLAY.list_drawings(query.get("symbol", [""])[0], query.get("interval", [""])[0])
+                return self.send_json(HTTPStatus.OK, {"drawings": drawings})
+            except ValueError as error:
+                return self.send_json(HTTPStatus.BAD_REQUEST, {"error": str(error)})
         if parsed.path == "/api/symbols/search":
             try:
                 limit = int(query.get("limit", ["20"])[0])
@@ -4169,6 +3478,8 @@ class StudyHandler(BaseHTTPRequestHandler):
                 return self.send_json(HTTPStatus.OK, save_paper_trade(payload))
             if parsed.path == "/api/chart/drawings":
                 return self.send_json(HTTPStatus.OK, save_drawing(payload))
+            if parsed.path == "/api/cfd/drawings":
+                return self.send_json(HTTPStatus.OK, CFD_REPLAY.save_drawing(payload, _validate_drawing_content))
             if parsed.path == "/api/position-review/drawings":
                 return self.send_json(HTTPStatus.OK, save_position_drawing(payload))
             if parsed.path == "/api/position-review/credentials":
@@ -4190,10 +3501,6 @@ class StudyHandler(BaseHTTPRequestHandler):
                 )
             if parsed.path == "/api/position-review/position-tags":
                 return self.send_json(HTTPStatus.OK, save_position_tag_map(payload))
-            if parsed.path == "/api/position-review/tags/delete":
-                tag_id = payload.get("id") or payload.get("tagId")
-                delete_position_tag(int(tag_id))
-                return self.send_json(HTTPStatus.OK, {"ok": True})
             if parsed.path == "/api/bitlang-review/notes":
                 return self.send_json(HTTPStatus.OK, save_bitlang_note(payload))
             if parsed.path == "/api/bitlang-review/tags":
@@ -4205,10 +3512,6 @@ class StudyHandler(BaseHTTPRequestHandler):
                 return self.send_json(HTTPStatus.OK, save_bitlang_tag_map(payload))
             if parsed.path == "/api/bitlang-review/drawings":
                 return self.send_json(HTTPStatus.OK, save_bitlang_drawing(payload))
-            if parsed.path == "/api/bitlang-review/tags/delete":
-                tag_id = payload.get("id") or payload.get("tagId")
-                delete_bitlang_tag(int(tag_id))
-                return self.send_json(HTTPStatus.OK, {"ok": True})
         except SyncInProgressError as error:
             return self.send_json(HTTPStatus.CONFLICT, {"error": str(error)})
         except (ValueError, TypeError, OverflowError, AttributeError, json.JSONDecodeError) as error:
@@ -4219,6 +3522,12 @@ class StudyHandler(BaseHTTPRequestHandler):
 
     def do_PUT(self):
         path = urlparse(self.path).path
+        if path == "/api/cfd/drawings":
+            try:
+                payload = self.read_json_body()
+                return self.send_json(HTTPStatus.OK, {"drawings": CFD_REPLAY.replace_drawings(payload, _validate_drawing_content)})
+            except (ValueError, TypeError, json.JSONDecodeError, AttributeError) as error:
+                return self.send_json(HTTPStatus.BAD_REQUEST, {"error": str(error)})
         if path == "/api/chart/drawings":
             try:
                 payload = self.read_json_body()
@@ -4273,21 +3582,18 @@ class StudyHandler(BaseHTTPRequestHandler):
         parsed = urlparse(self.path)
         try:
             query = parse_qs(parsed.query)
+            if parsed.path == "/api/cfd/drawings":
+                CFD_REPLAY.delete_drawings(query)
+                return self.send_json(HTTPStatus.OK, {"ok": True})
             if parsed.path == "/api/paper-trades":
                 delete_paper_trades(query.get("id", [None])[0])
                 return self.send_json(HTTPStatus.OK, {"ok": True})
             if parsed.path == "/api/position-review/tags":
                 raw_id = query.get("id", [None])[0]
-                if raw_id is None:
-                    payload = self.read_json_body()
-                    raw_id = payload.get("id") or payload.get("tagId")
                 delete_position_tag(int(raw_id))
                 return self.send_json(HTTPStatus.OK, {"ok": True})
             if parsed.path == "/api/bitlang-review/tags":
                 raw_id = query.get("id", [None])[0]
-                if raw_id is None:
-                    payload = self.read_json_body()
-                    raw_id = payload.get("id") or payload.get("tagId")
                 delete_bitlang_tag(int(raw_id))
                 return self.send_json(HTTPStatus.OK, {"ok": True})
             if parsed.path == "/api/position-review/drawings":

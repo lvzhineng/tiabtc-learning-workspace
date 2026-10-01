@@ -1,5 +1,5 @@
 ﻿param(
-    [ValidateSet("review", "learning", "bitlang", "positions", "dashboard")]
+    [ValidateSet("review", "learning", "cfd", "bitlang", "positions", "dashboard")]
     [string]$Page = "learning",
     [switch]$NoBrowser
 )
@@ -27,6 +27,8 @@ $frontendUrl = if ($Page -eq "review") {
     "${frontendBaseUrl}?tab=review"
 } elseif ($Page -eq "bitlang") {
     "${frontendBaseUrl}?tab=bitlang"
+} elseif ($Page -eq "cfd") {
+    "${frontendBaseUrl}?tab=cfd"
 } elseif ($Page -eq "positions") {
     "${frontendBaseUrl}?tab=positions"
 } elseif ($Page -eq "dashboard") {

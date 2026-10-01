@@ -27,19 +27,18 @@ def sample_drawing(**overrides):
     return drawing
 
 
-class DrawingStorageTests(unittest.TestCase):
+class TemporaryWorkspaceDatabase(unittest.TestCase):
     def setUp(self):
         self.temporary_directory = tempfile.TemporaryDirectory()
-        self.original_database_file = study_server.DATABASE_FILE
-        self.original_state_file = study_server.STATE_FILE
+        self.addCleanup(self.temporary_directory.cleanup)
+        self.addCleanup(setattr, study_server, "DATABASE_FILE", study_server.DATABASE_FILE)
+        self.addCleanup(setattr, study_server, "STATE_FILE", study_server.STATE_FILE)
         study_server.DATABASE_FILE = Path(self.temporary_directory.name) / "review.sqlite"
         study_server.STATE_FILE = Path(self.temporary_directory.name) / "learning-state.json"
         study_server.initialize_database()
 
-    def tearDown(self):
-        study_server.DATABASE_FILE = self.original_database_file
-        study_server.STATE_FILE = self.original_state_file
-        self.temporary_directory.cleanup()
+
+class DrawingStorageTests(TemporaryWorkspaceDatabase):
 
     def test_save_list_update_and_delete_drawing(self):
         saved = study_server.save_drawing(sample_drawing())
@@ -97,6 +96,31 @@ class DrawingStorageTests(unittest.TestCase):
             "videoId": "video-1", "symbol": "BTCUSDT", "interval": "60", "drawings": [],
         })
         self.assertEqual(study_server.list_drawings("video-1", "BTCUSDT", "240"), [])
+
+
+class ChartCacheTests(TemporaryWorkspaceDatabase):
+    def test_retired_flow_tables_are_preserved_but_not_created(self):
+        legacy_tables = (
+            "market_oi_1h", "market_oi_1h_cache_ranges", "market_oi_15m",
+            "market_oi_15m_cache_ranges", "market_oi_5m", "market_oi_cache_ranges",
+            "market_cvd_5m", "market_cvd_days",
+        )
+        with study_server.database() as connection:
+            current = {
+                row["name"] for row in connection.execute(
+                    "SELECT name FROM sqlite_master WHERE type = 'table'"
+                )
+            }
+            self.assertTrue(set(legacy_tables).isdisjoint(current))
+            connection.execute("CREATE TABLE market_oi_15m (value INTEGER)")
+            connection.execute("INSERT INTO market_oi_15m VALUES (42)")
+
+        study_server.initialize_database()
+        with study_server.database() as connection:
+            self.assertEqual(
+                connection.execute("SELECT value FROM market_oi_15m").fetchone()["value"],
+                42,
+            )
 
     def test_contiguous_cache_fragments_cover_a_requested_range(self):
         with study_server.database() as connection:
@@ -628,6 +652,8 @@ class DrawingStorageTests(unittest.TestCase):
             [latest_closed],
         )
 
+
+class WorkspaceValidationTests(TemporaryWorkspaceDatabase):
     def test_rejects_unknown_system_and_wrong_point_count(self):
         invalid_drawings = [
             sample_drawing(toolType="Text"),
@@ -639,7 +665,7 @@ class DrawingStorageTests(unittest.TestCase):
             with self.subTest(drawing=drawing), self.assertRaises(ValueError):
                 study_server.validate_drawing(drawing)
 
-    def test_old_svg_schema_is_rejected_without_data_loss(self):
+    def test_incompatible_drawing_schema_is_rejected_without_data_loss(self):
         with closing(sqlite3.connect(study_server.DATABASE_FILE)) as connection, connection:
             connection.execute("DROP TABLE chart_drawings")
             connection.execute(
@@ -714,14 +740,9 @@ class DrawingStorageTests(unittest.TestCase):
             )
 
 
-class PositionReviewStorageTests(unittest.TestCase):
+class PositionReviewStorageTests(TemporaryWorkspaceDatabase):
     def setUp(self):
-        self.temporary_directory = tempfile.TemporaryDirectory()
-        self.original_database_file = study_server.DATABASE_FILE
-        self.original_state_file = study_server.STATE_FILE
-        study_server.DATABASE_FILE = Path(self.temporary_directory.name) / "review.sqlite"
-        study_server.STATE_FILE = Path(self.temporary_directory.name) / "learning-state.json"
-        study_server.initialize_database()
+        super().setUp()
         with study_server.DATABASE_LOCK, study_server.database() as connection:
             study_server._upsert_exchange_position(
                 connection,
@@ -748,11 +769,6 @@ class PositionReviewStorageTests(unittest.TestCase):
                 },
                 "2026-08-26T12:00:00+08:00",
             )
-
-    def tearDown(self):
-        study_server.DATABASE_FILE = self.original_database_file
-        study_server.STATE_FILE = self.original_state_file
-        self.temporary_directory.cleanup()
 
     def test_create_list_and_delete_tag(self):
         tag1 = study_server.create_position_tag("突破追单")
@@ -1107,6 +1123,8 @@ class PositionReviewStorageTests(unittest.TestCase):
         self.assertEqual(source_note["note"], "保留我")
         self.assertIsNone(target_note)
 
+
+class PositionFillTests(unittest.TestCase):
     def test_assign_fills_open_reduce_close(self):
         positions = [
             {
@@ -1152,7 +1170,7 @@ class PositionReviewStorageTests(unittest.TestCase):
         ]
         assigned = study_server.assign_fills_to_positions(positions, fills)
         self.assertEqual(
-            [item["kind"] for item in assigned["pos-a"]],
+            [item["kind"] for item in assigned[(None, "pos-a")]],
             ["open", "reduce", "close"],
         )
 
@@ -1225,7 +1243,7 @@ class PositionReviewStorageTests(unittest.TestCase):
             },
         ]
 
-        assigned = study_server.assign_fills_to_positions(positions, fills)["pos-a"]
+        assigned = study_server.assign_fills_to_positions(positions, fills)[(None, "pos-a")]
 
         self.assertEqual([item["kind"] for item in assigned], ["open", "reduce", "close"])
         self.assertEqual([item["quantity"] for item in assigned], [1.0, 0.5, 0.5])
@@ -1290,7 +1308,7 @@ class PositionReviewStorageTests(unittest.TestCase):
                 "pnl": 10.0,
             },
         ]
-        assigned = study_server.assign_fills_to_positions(positions, fills)["pos-a"]
+        assigned = study_server.assign_fills_to_positions(positions, fills)[(None, "pos-a")]
         kinds_by_exec = {item["execId"]: item["kind"] for item in assigned}
         self.assertEqual(kinds_by_exec["close-a-1"], "close")
         self.assertEqual(kinds_by_exec["close-b"], "reduce")
@@ -1362,17 +1380,17 @@ class PositionReviewStorageTests(unittest.TestCase):
         ]
         assigned = study_server.assign_fills_to_positions(positions, fills)
         self.assertEqual(
-            [item["execId"] for item in assigned["first"]],
+            [item["execId"] for item in assigned[(None, "first")]],
             ["a-open", "a-close"],
         )
         self.assertEqual(
-            [item["kind"] for item in assigned["first"]], ["open", "close"]
+            [item["kind"] for item in assigned[(None, "first")]], ["open", "close"]
         )
         self.assertEqual(
-            [item["execId"] for item in assigned["second"]],
+            [item["execId"] for item in assigned[(None, "second")]],
             ["b-open", "b-close"],
         )
-        self.assertEqual([item["kind"] for item in assigned["second"]], ["open", "close"])
+        self.assertEqual([item["kind"] for item in assigned[(None, "second")]], ["open", "close"])
 
     def test_parse_uta_fill_from_bitget_sample(self):
         from bitget_position_provider import parse_uta_fill
@@ -1420,21 +1438,8 @@ class PositionReviewStorageTests(unittest.TestCase):
         )
 
 
-class BitlangReviewStorageTests(unittest.TestCase):
+class BitlangReviewStorageTests(TemporaryWorkspaceDatabase):
     SAMPLE_TRADE_ID = "a" * 64
-
-    def setUp(self):
-        self.temporary_directory = tempfile.TemporaryDirectory()
-        self.original_database_file = study_server.DATABASE_FILE
-        self.original_state_file = study_server.STATE_FILE
-        study_server.DATABASE_FILE = Path(self.temporary_directory.name) / "review.sqlite"
-        study_server.STATE_FILE = Path(self.temporary_directory.name) / "learning-state.json"
-        study_server.initialize_database()
-
-    def tearDown(self):
-        study_server.DATABASE_FILE = self.original_database_file
-        study_server.STATE_FILE = self.original_state_file
-        self.temporary_directory.cleanup()
 
     def test_notes_tags_map_and_delete_cascade(self):
         saved = study_server.save_bitlang_note(
@@ -1576,6 +1581,8 @@ class BitlangReviewStorageTests(unittest.TestCase):
                 0,
             )
 
+
+class VenueIsolationTests(unittest.TestCase):
     def test_assign_fills_isolates_venues_with_same_position_id(self):
         positions = [
             {

@@ -993,7 +993,3 @@ def refresh_video_catalog(
     if warning:
         result["warning"] = warning
     return result
-
-
-# Backward-compatible alias used by older refresh callers.
-CHANNEL_ID = TIA_CHANNEL_ID

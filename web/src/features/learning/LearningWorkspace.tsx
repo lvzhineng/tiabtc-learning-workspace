@@ -1,6 +1,7 @@
 import { useEffect, useState, useMemo, useRef } from 'react';
 import type { VideoItem, FilterParams } from './learning-types';
 import { useLearningState } from './useLearningState';
+import { LEARNING_UI_STORAGE_KEY, loadLearningUiState } from './learning-ui-state';
 import { computeLearningStats, filterAndSortVideos } from './learning-filter';
 import { LearningStatsHeader } from './LearningStatsHeader';
 import { LearningFilterBar } from './LearningFilterBar';
@@ -8,18 +9,14 @@ import { VideoTable } from './VideoTable';
 import { RefreshCw } from 'lucide-react';
 import {
   fetchVideoCatalogSource,
+  loadVideos,
   refreshVideoCatalog,
   type VideoCatalogSource,
 } from '@/api/video-api';
 import { TIA_TEMPLATE_URL } from '@/api/workspace-settings-api';
 import { confirmDialog } from '@/ui/feedback/confirm';
 import { toast } from '@/ui/feedback/toast';
-import {
-  readLocalUiState,
-  storedInteger,
-  storedString,
-  writeLocalUiState,
-} from '@/ui/persistence/local-ui-state';
+import { writeLocalUiState } from '@/ui/persistence/local-ui-state';
 import '@/styles/learning.css';
 
 interface Props {
@@ -27,48 +24,6 @@ interface Props {
 }
 
 const PAGE_SIZE = 30;
-const LEARNING_UI_STORAGE_KEY = 'tiabtc-learning-ui-v1';
-let videosRequest: Promise<VideoItem[]> | null = null;
-
-function loadLearningUiState(): { filters: FilterParams; page: number } {
-  const stored = readLocalUiState(LEARNING_UI_STORAGE_KEY);
-  const month = storedString(stored.monthFilter, 'all', undefined, 2);
-  return {
-    filters: {
-      searchQuery: storedString(stored.searchQuery, ''),
-      yearFilter: storedString(stored.yearFilter, 'all', undefined, 4),
-      monthFilter:
-        month === 'all' || /^(?:0?[1-9]|1[0-2])$/.test(month) ? month : 'all',
-      quickFilter: storedString(
-        stored.quickFilter,
-        'all',
-        ['all', 'unfinished', 'learned', 'bookmarked', 'noted']
-      ) as FilterParams['quickFilter'],
-      sortOrder: storedString(stored.sortOrder, 'asc', [
-        'asc',
-        'desc',
-      ]) as FilterParams['sortOrder'],
-    },
-    page: storedInteger(stored.page, 1, 1),
-  };
-}
-
-function loadVideos(force = false): Promise<VideoItem[]> {
-  if (force) videosRequest = null;
-  if (!videosRequest) {
-    const suffix = force ? `?t=${Date.now()}` : '';
-    videosRequest = fetch(`/videos.json${suffix}`)
-      .then((response) => {
-        if (!response.ok) throw new Error(`HTTP ${response.status}`);
-        return response.json() as Promise<VideoItem[]>;
-      })
-      .catch((error) => {
-        videosRequest = null;
-        throw error;
-      });
-  }
-  return videosRequest;
-}
 
 export function LearningWorkspace({
   onOpenVideoReview,

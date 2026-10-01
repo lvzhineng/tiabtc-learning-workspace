@@ -177,18 +177,6 @@ export function IconText(props: IconProps) {
   );
 }
 
-export function IconVolumeProfile(props: IconProps) {
-  return (
-    <DrawingIcon {...props}>
-      <line x1="7" y1="5" x2="7" y2="23" {...stroke} />
-      <line x1="7" y1="7" x2="20" y2="7" {...stroke} />
-      <line x1="7" y1="11" x2="16" y2="11" {...stroke} />
-      <line x1="7" y1="15" x2="22" y2="15" {...stroke} />
-      <line x1="7" y1="19" x2="13" y2="19" {...stroke} />
-    </DrawingIcon>
-  );
-}
-
 export function IconArrowUp(props: IconProps) {
   return (
     <DrawingIcon {...props}>

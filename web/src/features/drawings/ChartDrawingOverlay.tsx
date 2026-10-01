@@ -83,6 +83,12 @@ type DragState = {
   pointIndex: number | null;
 };
 
+type TextEditorState = {
+  point: DrawingPoint;
+  drawing: DrawingToolState | null;
+  value: string;
+};
+
 function drawingId(): string {
   if (typeof crypto !== 'undefined' && 'randomUUID' in crypto) {
     return crypto.randomUUID();
@@ -204,13 +210,25 @@ export function ChartDrawingOverlay({
   onDrawingComplete,
 }: Props) {
   const svgRef = useRef<SVGSVGElement>(null);
+  const textInputRef = useRef<HTMLInputElement>(null);
   const candlesRef = useRef(candles);
   const [draftPoints, setDraftPoints] = useState<DrawingPoint[]>([]);
   const [hoverPoint, setHoverPoint] = useState<DrawingPoint | null>(null);
   const [drag, setDrag] = useState<DragState | null>(null);
+  const [textEditor, setTextEditor] = useState<TextEditorState | null>(null);
   const [viewportRevision, setViewportRevision] = useState(0);
   const redrawFrameRef = useRef<number | null>(null);
   candlesRef.current = candles;
+
+  useEffect(() => {
+    if (!textEditor) return;
+    const frame = window.requestAnimationFrame(() => textInputRef.current?.focus());
+    return () => window.cancelAnimationFrame(frame);
+  }, [textEditor?.point]);
+
+  useEffect(() => {
+    setTextEditor(null);
+  }, [activeTool]);
 
   useEffect(() => {
     let disposed = false;
@@ -362,7 +380,7 @@ export function ChartDrawingOverlay({
     [chart, interval, series, snapPrice]
   );
 
-  const saveNewDrawing = (points: DrawingPoint[]) => {
+  const saveNewDrawing = (points: DrawingPoint[], text?: string) => {
     const savedStyle = getSavedDrawingStyle(activeTool);
     const drawing: DrawingToolState = {
       id: drawingId(),
@@ -371,6 +389,7 @@ export function ChartDrawingOverlay({
       interval,
       toolType: activeTool,
       points,
+      text,
       color: savedStyle.color,
       lineWidth: savedStyle.lineWidth,
       extra: {
@@ -407,6 +426,12 @@ export function ChartDrawingOverlay({
 
     if (isPositionTool(activeTool)) {
       saveNewDrawing(buildPositionPoints(point, activeTool, interval));
+      return;
+    }
+
+    if (activeTool === 'text-annotation') {
+      onSelectDrawing(null);
+      setTextEditor({ point, drawing: null, value: '' });
       return;
     }
 
@@ -589,6 +614,19 @@ export function ChartDrawingOverlay({
     const y = series.priceToCoordinate(point.price);
     return x === null || y === null ? null : { x, y: Number(y) };
   }, [series, toTimeCoordinate]);
+
+  const textEditorCoordinate = textEditor ? toCoordinate(textEditor.point) : null;
+  const saveTextEditor = () => {
+    if (!textEditor) return;
+    const value = textEditor.value.trim();
+    if (!value) return;
+    if (textEditor.drawing) {
+      void onSaveDrawing({ ...textEditor.drawing, text: value });
+    } else {
+      saveNewDrawing([textEditor.point], value);
+    }
+    setTextEditor(null);
+  };
 
   const draftCoordinates = draftPoints
     .map(toCoordinate)
@@ -788,7 +826,45 @@ export function ChartDrawingOverlay({
       </svg>
 
       {/* Floating Quick Action Bar for selected drawing */}
-      {selectedDrawing && quickBarPosition && (
+      {textEditor && textEditorCoordinate && (
+        <form
+          className="chart-text-editor"
+          style={{
+            left: Math.max(8, Math.min(textEditorCoordinate.x, viewportWidth - 288)),
+            top: Math.max(8, textEditorCoordinate.y - 20),
+          }}
+          onSubmit={(event) => {
+            event.preventDefault();
+            saveTextEditor();
+          }}
+          onPointerDown={(event) => event.stopPropagation()}
+          onClick={(event) => event.stopPropagation()}
+        >
+          <input
+            ref={textInputRef}
+            aria-label="画图文字内容"
+            maxLength={200}
+            placeholder="输入图表标注文字"
+            value={textEditor.value}
+            onChange={(event) =>
+              setTextEditor((current) =>
+                current ? { ...current, value: event.target.value } : null
+              )
+            }
+            onKeyDown={(event) => {
+              if (event.key === 'Escape') {
+                event.preventDefault();
+                event.stopPropagation();
+                setTextEditor(null);
+              }
+            }}
+          />
+          <button type="submit" disabled={!textEditor.value.trim()}>保存</button>
+          <button type="button" onClick={() => setTextEditor(null)}>取消</button>
+        </form>
+      )}
+
+      {selectedDrawing && quickBarPosition && !textEditor && (
         <DrawingQuickActionBar
           drawing={selectedDrawing}
           position={quickBarPosition}
@@ -805,6 +881,16 @@ export function ChartDrawingOverlay({
               onToggleLockDrawing(selectedDrawing.id);
             }
           }}
+          onEditText={
+            selectedDrawing.toolType === 'text-annotation'
+              ? () =>
+                  setTextEditor({
+                    point: selectedDrawing.points[0],
+                    drawing: selectedDrawing,
+                    value: selectedDrawing.text || '',
+                  })
+              : undefined
+          }
         />
       )}
     </>

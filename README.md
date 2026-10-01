@@ -4,7 +4,7 @@
 
 一个本地运行的交易学习、行情复盘、实盘交割单分析和仓位复盘工作台。本项目以 **MIT** 许可开源，不锁源、不做功能付费墙。
 
-项目将顺序学习、行情复盘、Bit浪浪交割单分析和仓位复盘整合为一个 React 应用。行情复盘 / Bit浪浪 / 顺序学习进复盘的 K 线通过 CCXT 获取 Bybit USDT 永续合约数据。仓位复盘中 `BTCUSDT` / `ETHUSDT` 走同一套 Bybit 缓存；其余合约走该仓位所属交易所（Bitget 或 Gate），写入独立表 `venue_market_*`，本所失败且 Bybit 目录有该合约时再回退 Bybit。本地使用 SQLite 做行情与仓位缓存。
+项目将顺序学习、行情复盘、CFD、Bit浪浪交割单分析和仓位复盘整合为一个 React 应用，默认入口仍为顺序学习。加密货币行情复盘 / Bit浪浪 / 顺序学习进复盘的 K 线通过 CCXT 获取 Bybit USDT 永续合约数据。CFD 独立读取 Gate 公共 TradFi 行情，提供黄金、纳斯达克100和日经225。仓位复盘中 `BTCUSDT` / `ETHUSDT` 走同一套 Bybit 缓存；其余合约走该仓位所属交易所（Bitget 或 Gate），写入独立表 `venue_market_*`，本所失败且 Bybit 目录有该合约时再回退 Bybit。本地使用 SQLite 做行情与仓位缓存。
 
 ## 支持作者
 
@@ -42,6 +42,19 @@
 - 支持多种画图工具、撤销、重做、锁定和磁吸。
 - 支持持久化画图和模拟交易。
 - 图表向左右边界移动时自动延展历史行情。
+
+### CFD
+
+- 独立顶部「CFD」入口（`?tab=cfd`），与加密永续分开；默认黄金 `XAUUSD`、1h。
+- 可使用 `powershell -File .\start-workspace.ps1 -Page cfd` 直接打开 CFD。
+- 提供黄金 `XAUUSD`（USD 报价）、纳斯达克100 `NAS100`（USD 报价）、日经225 `JPN225`（JPY 报价）。
+- 使用 Gate 公共 `/tradfi/symbols/{symbol}/klines` 接口，无需账户密钥；支持七个周期，5m 优先原生读取，仅在明确不支持时从1m聚合。
+- 支持自由回放、快捷键、持久化画图及复制图表；品种、周期、视口和回放进度独立记忆，刷新后自动播放以暂停状态恢复。
+- Gate 未提供成交量，所以不显示成交量副图或读数；首期不提供模拟交易。休市不补造 K 线，回放推进到下一根实际行情。
+- 后端按最多500根分页，单次响应最多3000根；历史范围以 Gate 实际可提供的数据为准。离线模式只读已有 CFD 缓存。
+- GC 入口及样本自动下载已退役；已有 `gc_candles` 和 GC 画线保留，不迁移成 CFD。
+
+CFD 只增量新增 `cfd_candles`（品种、周期、毫秒时间、OHLC）、`cfd_cache_ranges`（含休市空区间的查询范围及刷新时间）、`cfd_drawings`（按品种隔离、跨周期读取的画图）。不修改已有行情、画图或仓位表。回滚可停用 CFD 入口与接口，备份后单独移除这三张表；其他历史数据不受影响。
 
 ### bit浪浪实盘分析
 
@@ -130,7 +143,7 @@ React/Vite
             └─ 本所失败且 Bybit 目录有该合约时，回退 Bybit 并在 warning 中说明
 ```
 
-行情复盘、Bit浪浪与顺序学习进复盘共用同一套 Bybit K 线缓存（`market_candles`）。仓位复盘仅对 BTC/ETH 使用这套缓存；其它合约写入 `venue_market_candles` / `venue_market_cache_ranges`。各入口的展示窗口和业务标记不同，但相同 Symbol、周期和时间对应的 Bybit 行情来自同一张表。
+加密货币行情复盘、Bit浪浪与顺序学习进复盘共用同一套 Bybit K 线缓存（`market_candles`）。CFD 行情和查询范围分别写入 `cfd_candles` / `cfd_cache_ranges`，画图写入 `cfd_drawings`。旧 `gc_candles` 保留但不再运行时读写。仓位复盘仅对 BTC/ETH 使用 Bybit 缓存；其它合约写入 `venue_market_candles` / `venue_market_cache_ranges`。各入口的展示窗口和业务标记不同，但相同 Symbol、周期和时间对应的 Bybit 行情来自同一张表。
 
 ## 主要数据文件
 

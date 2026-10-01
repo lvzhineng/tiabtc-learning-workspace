@@ -26,6 +26,7 @@ import { ReviewPagination } from '@/ui/navigation/ReviewPagination';
 import { PositionReviewToolbar } from './PositionReviewToolbar';
 import { PositionReviewCredentialsModal } from './PositionReviewCredentialsModal';
 import {
+  REVIEW_TIMEFRAMES,
   TIMEFRAME_DISPLAY_MAP,
   suggestReviewTimeframe,
   type ReviewTimeframe,
@@ -36,13 +37,7 @@ import {
 } from '@/features/review-workspace/useReviewListKeyboard';
 import { PositionDashboardWorkspace } from '@/features/position-dashboard/PositionDashboardWorkspace';
 import { toast } from '@/ui/feedback/toast';
-import {
-  readLocalUiState,
-  storedBoolean,
-  storedInteger,
-  storedString,
-  writeLocalUiState,
-} from '@/ui/persistence/local-ui-state';
+import { writeLocalUiState } from '@/ui/persistence/local-ui-state';
 import type {
   PositionReviewVenues,
   PositionTag,
@@ -53,6 +48,17 @@ import { positionKey, positionPnl, venueLabel } from './position-review-types';
 import { summarizePositions } from './position-stats';
 import { PositionReviewChart } from './PositionReviewChart';
 import { PositionReviewPanel } from './PositionReviewPanel';
+import {
+  DATE_RANGE_MS_MAP,
+  POSITION_REVIEW_UI_STORAGE_KEY,
+  loadPositionReviewUiState,
+  type DateRangeFilter,
+  type ResultFilter,
+  type SideFilter,
+  type SortField,
+  type StatusFilter,
+  type VenueFilter,
+} from './position-review-ui-state';
 import {
   calculatePositionRoi,
   formatHoldingDuration,
@@ -65,107 +71,7 @@ import '@/styles/bitlang.css';
 import '@/styles/position-review.css';
 
 const PAGE_SIZE = 80;
-const POSITION_REVIEW_UI_STORAGE_KEY = 'tiabtc-position-review-ui-v1';
-const TIMEFRAMES: ReviewTimeframe[] = ['1', '5', '15', '60', '240', 'D', 'W'];
 const SYNC_STALE_MS = 24 * 60 * 60 * 1000;
-
-type ResultFilter = 'all' | 'profit' | 'loss';
-type StatusFilter = 'all' | 'open' | 'closed';
-type SideFilter = 'all' | 'long' | 'short';
-type SortField = 'entryTimeMs' | 'netPnl';
-type DateRangeFilter = 'all' | '1d' | '3d' | '7d' | '30d' | '90d';
-type VenueFilter = 'all' | ReviewVenue;
-
-const DATE_RANGE_MS_MAP: Record<Exclude<DateRangeFilter, 'all'>, number> = {
-  '1d': 1 * 24 * 60 * 60 * 1000,
-  '3d': 3 * 24 * 60 * 60 * 1000,
-  '7d': 7 * 24 * 60 * 60 * 1000,
-  '30d': 30 * 24 * 60 * 60 * 1000,
-  '90d': 90 * 24 * 60 * 60 * 1000,
-};
-
-type PositionReviewUiState = {
-  search: string;
-  dateRange: DateRangeFilter;
-  symbolFilter: string;
-  venueFilter: VenueFilter;
-  side: SideFilter;
-  status: StatusFilter;
-  result: ResultFilter;
-  tagFilter: string;
-  noNote: boolean;
-  noTag: boolean;
-  sortField: SortField;
-  descending: boolean;
-  page: number;
-  selectedId: string | null;
-  timeframe: ReviewTimeframe;
-  autoTimeframe: boolean;
-  showMoreFilters: boolean;
-  showUsSessionBands: boolean;
-  showWeekendBands: boolean;
-  showOtherPositions: boolean;
-  viewMode: 'chart' | 'dashboard';
-};
-
-function loadPositionReviewUiState(): PositionReviewUiState {
-  const stored = readLocalUiState(POSITION_REVIEW_UI_STORAGE_KEY);
-  const selectedId = storedString(stored.selectedId, '', undefined, 128);
-  const tagFilter = storedString(stored.tagFilter, 'all', undefined, 32);
-  return {
-    search: storedString(stored.search, ''),
-    dateRange: storedString(stored.dateRange, 'all', [
-      'all',
-      '1d',
-      '3d',
-      '7d',
-      '30d',
-      '90d',
-    ]) as DateRangeFilter,
-    symbolFilter: storedString(stored.symbolFilter, 'all', undefined, 40),
-    venueFilter: storedString(stored.venueFilter, 'all', [
-      'all',
-      'bitget',
-      'gate',
-    ]) as VenueFilter,
-    side: storedString(stored.side, 'all', [
-      'all',
-      'long',
-      'short',
-    ]) as SideFilter,
-    status: storedString(stored.status, 'all', [
-      'all',
-      'open',
-      'closed',
-    ]) as StatusFilter,
-    result: storedString(stored.result, 'all', [
-      'all',
-      'profit',
-      'loss',
-    ]) as ResultFilter,
-    tagFilter:
-      tagFilter === 'all' || /^\d+$/.test(tagFilter) ? tagFilter : 'all',
-    noNote: storedBoolean(stored.noNote, false),
-    noTag: storedBoolean(stored.noTag, false),
-    sortField: storedString(stored.sortField, 'entryTimeMs', [
-      'entryTimeMs',
-      'netPnl',
-    ]) as SortField,
-    descending: storedBoolean(stored.descending, true),
-    page: storedInteger(stored.page, 0, 0),
-    selectedId: selectedId || null,
-    timeframe: storedString(stored.timeframe, '15', TIMEFRAMES) as ReviewTimeframe,
-    autoTimeframe: storedBoolean(stored.autoTimeframe, true),
-    showMoreFilters: storedBoolean(stored.showMoreFilters, false),
-    showUsSessionBands: storedBoolean(stored.showUsSessionBands, false),
-    showWeekendBands: storedBoolean(stored.showWeekendBands, false),
-    showOtherPositions: storedBoolean(stored.showOtherPositions, true),
-    viewMode: storedString(stored.viewMode, 'chart', [
-      'chart',
-      'dashboard',
-    ]) as PositionReviewUiState['viewMode'],
-  };
-}
 
 interface PositionReviewWorkspaceProps {
   themeMode?: 'dark' | 'light';
@@ -1034,7 +940,7 @@ export function PositionReviewWorkspace({
                   >
                     自动
                   </button>
-                  {TIMEFRAMES.map((item) => (
+                  {REVIEW_TIMEFRAMES.map((item) => (
                     <button
                       type="button"
                       key={item}

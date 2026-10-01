@@ -20,8 +20,10 @@ import {
 } from 'lucide-react';
 import type { BitlangTag } from '@/api/bitlang-review-api';
 import { fetchBitlangReviewState } from '@/api/bitlang-review-api';
+import { loadBitlangSnapshot } from '@/api/bitlang-snapshot-api';
 import { ReviewPagination } from '@/ui/navigation/ReviewPagination';
 import {
+  REVIEW_TIMEFRAMES,
   TIMEFRAME_DISPLAY_MAP,
   suggestReviewTimeframe,
   type ReviewTimeframe,
@@ -33,13 +35,15 @@ import {
 import { BitlangDashboardWorkspace } from './BitlangDashboardWorkspace';
 import { BitlangTradeChart } from './BitlangTradeChart';
 import { BitlangTradePanel } from './BitlangTradePanel';
+import { writeLocalUiState } from '@/ui/persistence/local-ui-state';
 import {
-  readLocalUiState,
-  storedBoolean,
-  storedInteger,
-  storedString,
-  writeLocalUiState,
-} from '@/ui/persistence/local-ui-state';
+  BITLANG_UI_STORAGE_KEY,
+  DATE_RANGE_MS_MAP,
+  loadBitlangUiState,
+  type DateRangeFilter,
+  type ResultFilter,
+  type SortField,
+} from './bitlang-ui-state';
 import {
   bybitSymbol,
   formatHoldingMinutes,
@@ -57,119 +61,6 @@ import '@/styles/bitlang.css';
 import '@/styles/position-review.css';
 
 const PAGE_SIZE = 100;
-const BITLANG_UI_STORAGE_KEY = 'tiabtc-bitlang-ui-v1';
-const TIMEFRAMES: ReviewTimeframe[] = ['1', '5', '15', '60', '240', 'D', 'W'];
-type DateRangeFilter = 'all' | '1d' | '3d' | '7d' | '30d' | '90d';
-const DATE_RANGE_MS_MAP: Record<Exclude<DateRangeFilter, 'all'>, number> = {
-  '1d': 1 * 24 * 60 * 60 * 1000,
-  '3d': 3 * 24 * 60 * 60 * 1000,
-  '7d': 7 * 24 * 60 * 60 * 1000,
-  '30d': 30 * 24 * 60 * 60 * 1000,
-  '90d': 90 * 24 * 60 * 60 * 1000,
-};
-let bitlangSnapshotRequest: Promise<BitlangTradeSnapshot> | null = null;
-
-function loadBitlangSnapshot(): Promise<BitlangTradeSnapshot> {
-  if (!bitlangSnapshotRequest) {
-    bitlangSnapshotRequest = fetch('/bitlang-trades.json')
-      .then((response) => {
-        if (!response.ok) throw new Error(`HTTP ${response.status}`);
-        return response.json() as Promise<BitlangTradeSnapshot>;
-      })
-      .catch((error) => {
-        bitlangSnapshotRequest = null;
-        throw error;
-      });
-  }
-  return bitlangSnapshotRequest;
-}
-
-type ResultFilter = 'all' | 'profit' | 'loss';
-type SortField = 'entryTime' | 'profit' | 'returnRate' | 'holdingMinutes';
-
-type BitlangUiState = {
-  search: string;
-  instrument: string;
-  direction: 'all' | BitlangDirection;
-  result: ResultFilter;
-  dateRange: DateRangeFilter;
-  minimumHoldingMinutes: string;
-  tagFilter: string;
-  noNote: boolean;
-  noTag: boolean;
-  sortField: SortField;
-  descending: boolean;
-  timeframe: ReviewTimeframe;
-  autoTimeframe: boolean;
-  showMoreFilters: boolean;
-  showUsSessionBands: boolean;
-  showWeekendBands: boolean;
-  page: number;
-  selectedId: string;
-  viewMode: 'chart' | 'dashboard';
-};
-
-function loadBitlangUiState(): BitlangUiState {
-  const stored = readLocalUiState(BITLANG_UI_STORAGE_KEY);
-  const minimumHoldingMinutes = storedString(
-    stored.minimumHoldingMinutes,
-    '',
-    undefined,
-    16
-  );
-  const tagFilter = storedString(stored.tagFilter, 'all', undefined, 32);
-  return {
-    search: storedString(stored.search, ''),
-    instrument: storedString(stored.instrument, 'all', undefined, 40),
-    direction: storedString(stored.direction, 'all', [
-      'all',
-      '多',
-      '空',
-    ]) as BitlangUiState['direction'],
-    result: storedString(stored.result, 'all', [
-      'all',
-      'profit',
-      'loss',
-    ]) as ResultFilter,
-    dateRange: storedString(stored.dateRange, 'all', [
-      'all',
-      '1d',
-      '3d',
-      '7d',
-      '30d',
-      '90d',
-    ]) as DateRangeFilter,
-    minimumHoldingMinutes:
-      minimumHoldingMinutes === '' ||
-      (Number.isFinite(Number(minimumHoldingMinutes)) &&
-        Number(minimumHoldingMinutes) >= 0)
-        ? minimumHoldingMinutes
-        : '',
-    tagFilter:
-      tagFilter === 'all' || /^\d+$/.test(tagFilter) ? tagFilter : 'all',
-    noNote: storedBoolean(stored.noNote, false),
-    noTag: storedBoolean(stored.noTag, false),
-    sortField: storedString(stored.sortField, 'entryTime', [
-      'entryTime',
-      'profit',
-      'returnRate',
-      'holdingMinutes',
-    ]) as SortField,
-    descending: storedBoolean(stored.descending, true),
-    timeframe: storedString(stored.timeframe, '60', TIMEFRAMES) as ReviewTimeframe,
-    autoTimeframe: storedBoolean(stored.autoTimeframe, true),
-    showMoreFilters: storedBoolean(stored.showMoreFilters, false),
-    showUsSessionBands: storedBoolean(stored.showUsSessionBands, false),
-    showWeekendBands: storedBoolean(stored.showWeekendBands, false),
-    page: storedInteger(stored.page, 1, 1),
-    selectedId: storedString(stored.selectedId, '', undefined, 128),
-    viewMode: storedString(stored.viewMode, 'chart', [
-      'chart',
-      'dashboard',
-    ]) as BitlangUiState['viewMode'],
-  };
-}
-
 interface BitlangTradeWorkspaceProps {
   themeMode?: 'dark' | 'light';
 }
@@ -1024,7 +915,7 @@ export function BitlangTradeWorkspace({
                     >
                       自动
                     </button>
-                    {TIMEFRAMES.map((item) => (
+                    {REVIEW_TIMEFRAMES.map((item) => (
                       <button
                         type="button"
                         key={item}

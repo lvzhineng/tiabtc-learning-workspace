@@ -38,7 +38,8 @@ function replayTimeMs(replayState: ReplayState): number {
 export function usePaperTrading(
   symbol: string,
   timeframe: ReviewTimeframe,
-  replayState: ReplayState
+  replayState: ReplayState,
+  enabled = true
 ): PaperTradingWorkspace {
   const [trades, setTrades] = useState<PaperTrade[]>([]);
   const tradesRef = useRef<PaperTrade[]>([]);
@@ -60,6 +61,7 @@ export function usePaperTrading(
     const workspaceRevision = ++workspaceRevisionRef.current;
     const controller = new AbortController();
     replaceTrades([]);
+    if (!enabled) return;
     void fetchPaperTrades(symbol, controller.signal)
       .then((storedTrades) => {
         if (
@@ -80,7 +82,7 @@ export function usePaperTrading(
         workspaceRevisionRef.current += 1;
       }
     };
-  }, [replaceTrades, symbol]);
+  }, [enabled, replaceTrades, symbol]);
 
   const createTrade = useCallback(
     async (

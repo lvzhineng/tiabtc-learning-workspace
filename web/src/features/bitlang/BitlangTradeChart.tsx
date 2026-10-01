@@ -14,6 +14,7 @@ import {
 } from '@/api/candle-window-cache';
 import { ChartCanvas } from '@/chart/ChartCanvas';
 import { captureChartPng } from '@/chart/capture-chart-png';
+import { mergeCandles } from '@/chart/merge-candles';
 import { formatPrice, pricePrecision } from '@/chart/chart-price';
 import {
   createCandleEdgeLoadGuard,
@@ -37,7 +38,6 @@ import { toast } from '@/ui/feedback/toast';
 import {
   bybitSymbol,
   formatNumber,
-  mergeCandles,
   tradeEntryMs,
   tradeExitMs,
 } from './bitlang-format';

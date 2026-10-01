@@ -39,6 +39,7 @@ import '@/styles/toolbar.css';
 
 interface DraggableDrawingToolbarProps {
   disabled?: boolean;
+  storageKey?: string;
   activeTool: ActiveToolType;
   magnetEnabled: boolean;
   selectedDrawingId: string | null;
@@ -93,6 +94,7 @@ const QUICK_TOOLS: Array<{
 
 export const DraggableDrawingToolbar = memo(function DraggableDrawingToolbar({
   disabled = false,
+  storageKey = STORAGE_KEY,
   activeTool,
   magnetEnabled,
   selectedDrawingId,
@@ -115,7 +117,7 @@ export const DraggableDrawingToolbar = memo(function DraggableDrawingToolbar({
 }: DraggableDrawingToolbarProps) {
   const [position, setPosition] = useState<{ left: number; top: number }>(() => {
     try {
-      const saved = localStorage.getItem(STORAGE_KEY);
+      const saved = localStorage.getItem(storageKey);
       if (saved) {
         const parsed = JSON.parse(saved);
         if (typeof parsed.left === 'number' && typeof parsed.top === 'number') {
@@ -166,7 +168,7 @@ export const DraggableDrawingToolbar = memo(function DraggableDrawingToolbar({
           return current;
         }
         try {
-          localStorage.setItem(STORAGE_KEY, JSON.stringify(clamped));
+          localStorage.setItem(storageKey, JSON.stringify(clamped));
         } catch (_) {
           // ignore
         }
@@ -178,7 +180,7 @@ export const DraggableDrawingToolbar = memo(function DraggableDrawingToolbar({
     observer.observe(parent);
     observer.observe(toolbar);
     return () => observer.disconnect();
-  }, [clampToParent]);
+  }, [clampToParent, storageKey]);
 
   const handlePointerDown = (e: React.PointerEvent) => {
     if (e.button !== 0) return;
@@ -210,7 +212,7 @@ export const DraggableDrawingToolbar = memo(function DraggableDrawingToolbar({
     dragRef.current = null;
     setPosition((current) => {
       try {
-        localStorage.setItem(STORAGE_KEY, JSON.stringify(current));
+        localStorage.setItem(storageKey, JSON.stringify(current));
       } catch (_) {
         // ignore
       }

@@ -118,6 +118,55 @@
 }
 
 /* Quick Action Bar for selected drawing */
+.chart-text-editor {
+  position: absolute;
+  z-index: 25;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  width: min(280px, calc(100% - 16px));
+  padding: 6px;
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-sm);
+  background: var(--bg-dark-800);
+  box-shadow: var(--shadow-main);
+}
+
+.chart-text-editor input {
+  min-width: 0;
+  flex: 1;
+  padding: 5px 7px;
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-sm);
+  outline: none;
+  background: var(--bg-dark-900);
+  color: var(--text-primary);
+  font: inherit;
+  font-size: 12px;
+}
+
+.chart-text-editor input:focus {
+  border-color: var(--accent-blue);
+}
+
+.chart-text-editor button {
+  border: 0;
+  background: transparent;
+  color: var(--text-secondary);
+  font: inherit;
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.chart-text-editor button:hover:not(:disabled) {
+  color: var(--text-primary);
+}
+
+.chart-text-editor button:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
 .drawing-quick-action-bar {
   display: flex;
   align-items: center;

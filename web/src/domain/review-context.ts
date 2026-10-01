@@ -22,8 +22,3 @@ export type TradeReviewContext = {
   entryTimeMs: number;
   exitTimeMs: number;
 };
-
-export type ReviewContext =
-  | VideoReviewContext
-  | FreeReplayContext
-  | TradeReviewContext;

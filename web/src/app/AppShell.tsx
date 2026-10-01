@@ -9,6 +9,7 @@ import {
   Moon,
   Sun,
   Tags,
+  Globe2,
   Keyboard,
   Settings,
 } from 'lucide-react';
@@ -22,7 +23,7 @@ import type { VideoItem } from '@/features/learning/learning-types';
 import type { VideoReviewContext } from '@/domain/review-context';
 import { parseVideoPublishedTimeMs } from '@/chart/chart-time';
 
-type WorkspaceTab = 'learning' | 'review' | 'bitlang' | 'positions';
+type WorkspaceTab = 'learning' | 'review' | 'cfd' | 'bitlang' | 'positions';
 export type ThemeMode = 'dark' | 'light';
 
 function writeWorkspaceUrl(
@@ -50,7 +51,7 @@ function writeWorkspaceUrl(
 function initialWorkspaceTab(): WorkspaceTab {
   const tab = new URLSearchParams(window.location.search).get('tab');
   if (tab === 'dashboard') return 'positions';
-  return tab === 'review' || tab === 'bitlang' || tab === 'positions' ? tab : 'learning';
+  return tab === 'review' || tab === 'cfd' || tab === 'bitlang' || tab === 'positions' ? tab : 'learning';
 }
 
 function initialVideoReviewContext(): VideoReviewContext | null {
@@ -202,6 +203,17 @@ export function AppShell() {
 
             <button
               type="button"
+              className={`app-nav-btn ${activeTab === 'cfd' ? 'active' : ''}`}
+              onClick={() => navigateToTab('cfd')}
+              aria-label="CFD"
+              title="CFD · 黄金、纳斯达克100、日经225"
+            >
+              <Globe2 size={14} />
+              <span>CFD</span>
+            </button>
+
+            <button
+              type="button"
               className={`app-nav-btn ${activeTab === 'bitlang' ? 'active' : ''}`}
               onClick={() => navigateToTab('bitlang')}
             >
@@ -266,7 +278,7 @@ export function AppShell() {
                 ? '后端通信异常'
                 : offlineMode
                 ? '离线缓存模式'
-                : 'Bybit 在线服务'}
+                : activeTab === 'cfd' ? 'Gate CFD 在线服务' : 'Bybit 在线服务'}
             </span>
           </div>
           <button
@@ -290,6 +302,8 @@ export function AppShell() {
             initialVideoContext={videoReviewContext}
             themeMode={themeMode}
           />
+        ) : activeTab === 'cfd' ? (
+          <ChartWorkspace key="cfd" market="cfd" themeMode={themeMode} />
         ) : activeTab === 'positions' ? (
           <PositionReviewWorkspace themeMode={themeMode} />
         ) : (

@@ -21,6 +21,7 @@ async function svgToImage(svg: SVGSVGElement): Promise<HTMLImageElement> {
 export type ChartCaptureLabel = {
   symbol: string;
   timeframe: string;
+  time?: string;
   source?: string;
 };
 
@@ -50,6 +51,9 @@ function drawCaptureLabel(
   context.fillStyle =
     themeMode === 'dark' ? 'rgba(178, 181, 190, 0.95)' : 'rgba(19, 23, 34, 0.78)';
   context.fillText(text, 12, 10, Math.max(80, width - 24));
+  if (label.time) {
+    context.fillText(label.time, 12, 13 + fontSize, Math.max(80, width - 24));
+  }
   context.restore();
 }
 

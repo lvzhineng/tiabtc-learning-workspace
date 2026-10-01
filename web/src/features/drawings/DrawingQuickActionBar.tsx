@@ -1,6 +1,7 @@
 import { memo } from 'react';
 import {
   Lock,
+  Pencil,
   Unlock,
   Trash2,
 } from 'lucide-react';
@@ -13,6 +14,7 @@ interface DrawingQuickActionBarProps {
   onUpdateDrawing: (updated: DrawingToolState) => void;
   onDeleteDrawing: () => void;
   onToggleLock: () => void;
+  onEditText?: () => void;
 }
 
 const PRESET_COLORS = [
@@ -32,6 +34,7 @@ export const DrawingQuickActionBar = memo(function DrawingQuickActionBar({
   onUpdateDrawing,
   onDeleteDrawing,
   onToggleLock,
+  onEditText,
 }: DrawingQuickActionBarProps) {
   const currentColor = drawing.color || '#2962ff';
   const currentWidth = drawing.lineWidth || 2;
@@ -120,6 +123,17 @@ export const DrawingQuickActionBar = memo(function DrawingQuickActionBar({
       </div>
 
       <div className="quick-bar-divider" />
+
+      {onEditText && (
+        <button
+          type="button"
+          className="quick-btn"
+          onClick={onEditText}
+          title="编辑文字"
+        >
+          <Pencil size={13} />
+        </button>
+      )}
 
       <button
         type="button"

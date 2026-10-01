@@ -1,7 +1,10 @@
 import { useEffect, useState, useCallback, useMemo, useRef } from 'react';
-import type { ReviewTimeframe } from '@/domain/timeframe';
-import { TIMEFRAME_DISPLAY_MAP } from '@/domain/timeframe';
-import { timeframeMs } from '@/chart/chart-time';
+import {
+  REVIEW_TIMEFRAMES,
+  TIMEFRAME_DISPLAY_MAP,
+  type ReviewTimeframe,
+} from '@/domain/timeframe';
+import { formatChartTime, timeframeMs } from '@/chart/chart-time';
 import type { Candlestick } from '@/domain/candle';
 import {
   fetchSymbols,
@@ -9,6 +12,8 @@ import {
   type PerpetualSymbolSearchItem,
 } from '@/api/market-api';
 import { ChartCanvas } from '@/chart/ChartCanvas';
+import { CFD_SYMBOLS, fetchCfdSymbols } from '@/api/cfd-api';
+import { captureChartPng } from '@/chart/capture-chart-png';
 import { candlePricePrecision } from '@/chart/chart-price';
 import { computeReadoutInfo, type ReadoutInfo } from '@/chart/candlestick-readout';
 import type { ReplayState } from '@/features/replay/replay-state';
@@ -39,9 +44,11 @@ import {
   storedString,
   writeLocalUiState,
 } from '@/ui/persistence/local-ui-state';
+import { toast } from '@/ui/feedback/toast';
 import {
   AlertCircle,
   ChevronDown,
+  Copy,
   RefreshCw,
   Search,
   Video,
@@ -49,7 +56,6 @@ import {
 } from 'lucide-react';
 import '@/styles/review-workspace.css';
 
-const TIMEFRAMES: ReviewTimeframe[] = ['1', '5', '15', '60', '240', 'D', 'W'];
 const REVIEW_LOCATION_STORAGE_KEY = 'tiabtc-review-location-v1';
 const REVIEW_UI_STORAGE_KEY = 'tiabtc-review-ui-v1';
 const MIN_REVIEW_TIMESTAMP_MS = 1_500_000_000_000;
@@ -64,11 +70,15 @@ type ReviewUiPreferences = {
   showWeekendBands: boolean;
 };
 
-function loadReviewUiPreferences(): ReviewUiPreferences {
-  const stored = readLocalUiState(REVIEW_UI_STORAGE_KEY);
-  const symbol = storedString(stored.symbol, 'BTCUSDT', undefined, 32).toUpperCase();
+function loadReviewUiPreferences(market: 'perpetual' | 'cfd'): ReviewUiPreferences {
+  const stored = readLocalUiState(market === 'cfd' ? 'tiabtc-cfd-ui-v1' : REVIEW_UI_STORAGE_KEY);
+  const fallback = market === 'cfd' ? 'XAUUSD' : 'BTCUSDT';
+  const symbol = storedString(stored.symbol, fallback, undefined, 32).toUpperCase();
+  const valid = market === 'cfd'
+    ? CFD_SYMBOLS.some((item) => item.symbol === symbol)
+    : /^[A-Z0-9]{1,24}USDT$/.test(symbol);
   return {
-    symbol: /^[A-Z0-9]{1,24}USDT$/.test(symbol) ? symbol : 'BTCUSDT',
+    symbol: valid ? symbol : fallback,
     isLogScale: storedBoolean(stored.isLogScale, false),
     showUsSessionBands: storedBoolean(stored.showUsSessionBands, false),
     showWeekendBands: storedBoolean(stored.showWeekendBands, false),
@@ -119,15 +129,17 @@ function normalizeStoredFreeReplay(value: unknown): StoredFreeReplay | null {
   };
 }
 
-function loadStoredReviewLocation(): StoredReviewLocation | null {
+function loadStoredReviewLocation(market: 'perpetual' | 'cfd'): StoredReviewLocation | null {
   try {
-    const raw = JSON.parse(
-      window.localStorage.getItem(REVIEW_LOCATION_STORAGE_KEY) || 'null'
-    ) as Partial<StoredReviewLocation> | null;
+    // Retired GC replay coordinates must not become a BTC replay context.
+    if (market === 'perpetual' && readLocalUiState(REVIEW_UI_STORAGE_KEY).symbol === 'GC') return null;
+    const raw = readLocalUiState(
+      market === 'cfd' ? 'tiabtc-cfd-location-v1' : REVIEW_LOCATION_STORAGE_KEY
+    ) as Partial<StoredReviewLocation>;
     const timeframe = raw?.timeframe;
     const timestampMs = Number(raw?.timestampMs);
     if (
-      !TIMEFRAMES.includes(timeframe as ReviewTimeframe) ||
+      !REVIEW_TIMEFRAMES.includes(timeframe as ReviewTimeframe) ||
       !Number.isFinite(timestampMs) ||
       timestampMs < MIN_REVIEW_TIMESTAMP_MS ||
       timestampMs > Date.now()
@@ -145,30 +157,30 @@ function loadStoredReviewLocation(): StoredReviewLocation | null {
   }
 }
 
-function saveStoredReviewLocation(location: StoredReviewLocation): void {
-  try {
-    window.localStorage.setItem(
-      REVIEW_LOCATION_STORAGE_KEY,
-      JSON.stringify(location)
-    );
-  } catch {
-    // Review still works when browser storage is unavailable.
-  }
+function saveStoredReviewLocation(location: StoredReviewLocation, market: 'perpetual' | 'cfd'): void {
+  writeLocalUiState(market === 'cfd' ? 'tiabtc-cfd-location-v1' : REVIEW_LOCATION_STORAGE_KEY, { ...location });
 }
 
 interface ChartWorkspaceProps {
   initialVideoContext?: VideoReviewContext | null;
   themeMode?: 'dark' | 'light';
+  market?: 'perpetual' | 'cfd';
 }
 
 export function ChartWorkspace({
   initialVideoContext,
   themeMode = 'dark',
+  market = 'perpetual',
 }: ChartWorkspaceProps) {
+  const isCfd = market === 'cfd';
+  const [retiredGc] = useState(() => !isCfd && readLocalUiState(REVIEW_UI_STORAGE_KEY).symbol === 'GC');
   const [initialLocation] = useState<StoredReviewLocation | null>(
-    loadStoredReviewLocation
+    () => loadStoredReviewLocation(market)
   );
-  const [initialUiPreferences] = useState(loadReviewUiPreferences);
+  const [initialUiPreferences] = useState(() => loadReviewUiPreferences(market));
+  useEffect(() => {
+    if (retiredGc) writeLocalUiState(REVIEW_LOCATION_STORAGE_KEY, {});
+  }, [retiredGc]);
   const restoredTimestampMs = initialVideoContext
     ? null
     : initialLocation?.timestampMs ?? null;
@@ -178,7 +190,7 @@ export function ChartWorkspace({
   const restoredFocusTimeMs = restoredFreeReplay && initialLocation
     ? restoredFreeReplay.cursorTimeMs - timeframeMs(initialLocation.timeframe)
     : restoredTimestampMs;
-  const [symbols, setSymbols] = useState<string[]>(['BTCUSDT']);
+  const [symbols, setSymbols] = useState<string[]>(isCfd ? CFD_SYMBOLS.map((item) => item.symbol) : ['BTCUSDT']);
   const [activeSymbol, setActiveSymbol] = useState<string>(
     initialVideoContext?.symbol || initialUiPreferences.symbol
   );
@@ -215,10 +227,10 @@ export function ChartWorkspace({
       persistLocationTimerRef.current = null;
     }
     if (pendingLocationRef.current) {
-      saveStoredReviewLocation(pendingLocationRef.current);
+      saveStoredReviewLocation(pendingLocationRef.current, market);
       pendingLocationRef.current = null;
     }
-  }, []);
+  }, [market]);
 
   const scheduleStoredReviewLocation = useCallback(
     (
@@ -254,7 +266,7 @@ export function ChartWorkspace({
   }, [flushStoredReviewLocation]);
 
   useEffect(() => {
-    writeLocalUiState(REVIEW_UI_STORAGE_KEY, {
+    writeLocalUiState(isCfd ? 'tiabtc-cfd-ui-v1' : REVIEW_UI_STORAGE_KEY, {
       symbol: initialVideoContext ? initialUiPreferences.symbol : activeSymbol,
       isLogScale,
       showUsSessionBands,
@@ -267,9 +279,12 @@ export function ChartWorkspace({
     isLogScale,
     showUsSessionBands,
     showWeekendBands,
+    isCfd,
   ]);
 
   const [hoveredCandle, setHoveredCandle] = useState<Candlestick | null>(null);
+  const [copyingChart, setCopyingChart] = useState(false);
+  const chartAreaRef = useRef<HTMLDivElement | null>(null);
 
   const [showSymbolSearch, setShowSymbolSearch] = useState<boolean>(false);
 
@@ -347,7 +362,8 @@ export function ChartWorkspace({
     activeSymbol,
     activeTimeframe,
     replayState,
-    timeframeSwitchAnchorTimeMs
+    timeframeSwitchAnchorTimeMs,
+    market
   );
 
   // One-shot anchor for the timeframe switch fetch; clear once data arrives so
@@ -410,7 +426,7 @@ export function ChartWorkspace({
     toggleLockSelected: handleToggleLockSelected,
     undo: handleUndo,
     redo: handleRedo,
-  } = useDrawingWorkspace(activeSymbol, activeTimeframe);
+  } = useDrawingWorkspace(activeSymbol, activeTimeframe, isCfd ? 'cfd' : 'server');
   const handleDrawingComplete = useCallback(() => {
     setActiveTool('select');
   }, [setActiveTool]);
@@ -420,7 +436,7 @@ export function ChartWorkspace({
     closeTrade: handleClosePaperTrade,
     removeTrade: handleDeletePaperTrade,
     checkTriggers: checkOpenTradesTriggers,
-  } = usePaperTrading(activeSymbol, activeTimeframe, replayState);
+  } = usePaperTrading(activeSymbol, activeTimeframe, replayState, !isCfd);
   const replayDataContextKey =
     replayState.status === 'idle'
       ? 'live'
@@ -464,6 +480,13 @@ export function ChartWorkspace({
   const handleSymbolChange = useCallback(
     (nextSymbol: string, options?: { resetToLatest?: boolean }) => {
       if (nextSymbol === activeSymbol) return;
+      if (isCfd) {
+        setReplayState((current) => current.status === 'idle' ? current : {
+          ...current,
+          status: 'paused',
+          context: { mode: 'free', symbol: nextSymbol, anchorTimeMs: current.startTimeMs },
+        });
+      }
       const resetToLatest =
         options?.resetToLatest === true && replayState.status === 'idle';
       if (resetToLatest) {
@@ -496,6 +519,7 @@ export function ChartWorkspace({
       chartFocusTimeMs,
       replayState,
       scheduleStoredReviewLocation,
+      isCfd,
     ]
   );
 
@@ -516,7 +540,7 @@ export function ChartWorkspace({
 
   // Load symbol list on mount
   useEffect(() => {
-    fetchSymbols()
+    (isCfd ? fetchCfdSymbols() : fetchSymbols())
       .then((list) => {
         if (list && list.length > 0) {
           setSymbols(list);
@@ -528,7 +552,7 @@ export function ChartWorkspace({
       .catch((err) => {
         console.warn('拉取 Symbol 列表失败:', err);
       });
-  }, []);
+  }, [isCfd]);
 
   useEffect(() => {
     setHoveredCandle(null);
@@ -787,6 +811,7 @@ export function ChartWorkspace({
   useEffect(() => {
     const handleOpenSearchShortcut = (event: KeyboardEvent) => {
       if (
+        isCfd ||
         event.defaultPrevented ||
         document.querySelector('[aria-modal="true"]')
       ) {
@@ -799,7 +824,7 @@ export function ChartWorkspace({
     };
     window.addEventListener('keydown', handleOpenSearchShortcut);
     return () => window.removeEventListener('keydown', handleOpenSearchShortcut);
-  }, []);
+  }, [isCfd]);
 
   // Build System Markers for Video Review
   const videoReplayContext =
@@ -837,6 +862,34 @@ export function ChartWorkspace({
   );
   const displayCandle =
     hoveredCandle || (visibleCandles.length > 0 ? visibleCandles[visibleCandles.length - 1] : null);
+  const copyChart = useCallback(async () => {
+    if (!chartAreaRef.current || copyingChart) return;
+    if (!navigator.clipboard?.write || typeof ClipboardItem === 'undefined') {
+      toast.error('当前浏览器不支持复制图片到剪贴板');
+      return;
+    }
+    const chartTimeMs =
+      hoveredCandle?.timestampMs ??
+      lastPositionTimeMsRef.current ??
+      visibleCandles[visibleCandles.length - 1]?.timestampMs;
+    setCopyingChart(true);
+    try {
+      const png = captureChartPng(chartAreaRef.current, themeMode, {
+        symbol: activeSymbol,
+        time: chartTimeMs === undefined ? undefined : `北京时间 ${formatChartTime(chartTimeMs, activeTimeframe)}`,
+        timeframe: TIMEFRAME_DISPLAY_MAP[activeTimeframe],
+        source: isCfd ? 'Gate CFD' : 'Bybit',
+      });
+      await navigator.clipboard.write([new ClipboardItem({ 'image/png': png })]);
+      toast.success('K 线图已复制到剪贴板');
+    } catch (cause) {
+      toast.error(
+        `复制图表失败: ${cause instanceof Error ? cause.message : '浏览器拒绝了剪贴板操作'}`
+      );
+    } finally {
+      setCopyingChart(false);
+    }
+  }, [activeSymbol, activeTimeframe, copyingChart, hoveredCandle, themeMode, visibleCandles, isCfd]);
   const displayedPricePrecision = useMemo(
     () => candlePricePrecision(visibleCandles),
     [visibleCandles]
@@ -880,18 +933,8 @@ export function ChartWorkspace({
 
   const activeVideoTitle = videoReplayContext?.title || null;
 
-  return (
-    <div className="review-workspace">
-      {showSymbolSearch && (
-        <PerpetualSymbolSearchDialog
-          activeSymbol={activeSymbol}
-          savedSymbols={symbols}
-          onClose={() => setShowSymbolSearch(false)}
-          onSelectSymbol={handleSelectSymbol}
-        />
-      )}
-
-      <DraggableDrawingToolbar
+  const drawingToolbar = <DraggableDrawingToolbar
+        storageKey={isCfd ? 'tiabtc-cfd-drawing-toolbar-pos-v1' : undefined}
         disabled={!drawingReady}
         activeTool={activeTool}
         magnetEnabled={magnetEnabled}
@@ -909,9 +952,21 @@ export function ChartWorkspace({
         onToggleLock={handleToggleLockSelected}
         onDeleteSelected={handleDeleteSelectedDrawing}
         onClearAll={handleClearAllDrawings}
-        onOpenPaperTrading={togglePaperPanel}
-        onCreatePaperTradeFromPosition={handleCreateTradeFromPosition}
-      />
+        onOpenPaperTrading={isCfd ? undefined : togglePaperPanel}
+        onCreatePaperTradeFromPosition={isCfd ? undefined : handleCreateTradeFromPosition}
+      />;
+
+  return (
+    <div className={`review-workspace${isCfd ? ' review-workspace-cfd' : ''}`}>
+      {!isCfd && showSymbolSearch && (
+        <PerpetualSymbolSearchDialog
+          activeSymbol={activeSymbol}
+          savedSymbols={symbols}
+          onClose={() => setShowSymbolSearch(false)}
+          onSelectSymbol={handleSelectSymbol}
+        />
+      )}
+      {!isCfd && drawingToolbar}
 
       {isObjectTreeOpen && (
         <DrawingObjectTreePanel
@@ -927,7 +982,7 @@ export function ChartWorkspace({
         />
       )}
 
-      {showPaperPanel && (
+      {!isCfd && showPaperPanel && (
         <PaperTradingPanel
           symbol={activeSymbol}
           currentPrice={displayCandle?.close || 0}
@@ -949,7 +1004,18 @@ export function ChartWorkspace({
 
       <div className="review-toolbar">
         <div className="review-toolbar-left">
-          <button
+          {isCfd ? (
+            <select
+              className="review-symbol-trigger"
+              aria-label="CFD 品种"
+              value={activeSymbol}
+              onChange={(event) => handleSymbolChange(event.target.value)}
+            >
+              {CFD_SYMBOLS.map((item) => (
+                <option key={item.symbol} value={item.symbol}>{item.name} · {item.symbol}</option>
+              ))}
+            </select>
+          ) : <button
             type="button"
             className="review-symbol-trigger"
             onClick={() => setShowSymbolSearch(true)}
@@ -960,12 +1026,12 @@ export function ChartWorkspace({
             <Search size={14} />
             <span>{activeSymbol}</span>
             <ChevronDown size={13} />
-          </button>
+          </button>}
 
           <div className="ui-divider-v" />
 
           <div className="tf-segment" role="group" aria-label="K线周期">
-            {TIMEFRAMES.map((tf) => (
+            {REVIEW_TIMEFRAMES.map((tf) => (
               <button
                 key={tf}
                 type="button"
@@ -994,7 +1060,7 @@ export function ChartWorkspace({
         </div>
 
         <div className="review-toolbar-right">
-          <button
+          {!isCfd && <button
             type="button"
             className={`ui-btn ${showPaperPanel ? 'ui-btn-active' : ''}`}
             onClick={togglePaperPanel}
@@ -1003,7 +1069,7 @@ export function ChartWorkspace({
             <span>
               模拟交易 {paperTrades.length > 0 && `(${paperTrades.length})`}
             </span>
-          </button>
+          </button>}
 
           <button
             type="button"
@@ -1039,7 +1105,18 @@ export function ChartWorkspace({
         symbol={activeSymbol}
         timeframe={activeTimeframe}
         readout={readoutInfo}
+        showVolume={!isCfd}
       />
+
+      {isCfd && (
+        <div className="review-banner-warning">
+          <span>
+            Gate CFD · {CFD_SYMBOLS.find((item) => item.symbol === activeSymbol)?.name}
+            {' · 报价 '}{CFD_SYMBOLS.find((item) => item.symbol === activeSymbol)?.quote}
+            {' · 数据源未提供成交量；休市不补造 K 线，历史范围以 Gate 可提供数据为准。'}
+          </span>
+        </div>
+      )}
 
       {offlineWarning && (
         <div className="review-banner-warning">
@@ -1058,7 +1135,18 @@ export function ChartWorkspace({
         </div>
       )}
 
-      <div className="review-chart-area">
+      <div ref={chartAreaRef} className="review-chart-area">
+        {isCfd && drawingToolbar}
+        <button
+          type="button"
+          className="ui-btn review-copy-chart"
+          onClick={copyChart}
+          disabled={copyingChart || loading || visibleCandles.length === 0}
+          title="复制当前 K 线图到剪贴板"
+        >
+          {copyingChart ? <RefreshCw size={13} className="spin" /> : <Copy size={13} />}
+          <span>{copyingChart ? '复制中' : '复制图表'}</span>
+        </button>
         {loading && candles.length === 0 && (
           <div className="review-chart-loading">
             <RefreshCw size={20} className="spin" color="var(--accent-blue)" />
@@ -1100,7 +1188,7 @@ export function ChartWorkspace({
           onDeleteDrawing={deleteDrawingById}
           onToggleLockDrawing={toggleLockDrawing}
           onDrawingComplete={handleDrawingComplete}
-          showVolume
+          showVolume={!isCfd}
           showUsSessionBands={showUsSessionBands}
           showWeekendBands={showWeekendBands}
         />

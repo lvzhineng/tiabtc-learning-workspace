@@ -40,6 +40,19 @@
   min-width: 0;
 }
 
+.review-workspace-cfd .review-toolbar {
+  height: auto;
+  min-height: 44px;
+  flex-wrap: wrap;
+  padding-top: 6px;
+  padding-bottom: 6px;
+}
+
+.review-workspace-cfd .review-toolbar-left,
+.review-workspace-cfd .review-toolbar-right {
+  flex-wrap: wrap;
+}
+
 .review-symbol-trigger {
   height: var(--control-height);
   background: var(--bg-dark-700);
@@ -374,6 +387,14 @@
   position: relative;
   overflow: hidden;
   min-height: 0;
+}
+
+.review-copy-chart {
+  position: absolute;
+  top: 10px;
+  right: 12px;
+  z-index: 8;
+  background: color-mix(in srgb, var(--bg-dark-800) 92%, transparent);
 }
 
 .review-chart-loading {

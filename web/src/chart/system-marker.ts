@@ -4,8 +4,6 @@ import { timeframeMs } from './chart-time';
 import type { Candlestick } from '@/domain/candle';
 import type { ReviewTimeframe } from '@/domain/timeframe';
 
-export const SYSTEM_MARKER_ID = '__system__:video-published';
-
 export function buildVideoPublishedMarker(
   publishedTimeMs: number,
   titleOrDate: string,

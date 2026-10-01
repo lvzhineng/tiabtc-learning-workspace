@@ -1,5 +1,9 @@
 export type ReviewTimeframe = '1' | '5' | '15' | '60' | '240' | 'D' | 'W';
 
+export const REVIEW_TIMEFRAMES: readonly ReviewTimeframe[] = [
+  '1', '5', '15', '60', '240', 'D', 'W',
+];
+
 export const TIMEFRAME_DISPLAY_MAP: Record<ReviewTimeframe, string> = {
   '1': '1m',
   '5': '5m',
@@ -19,10 +23,6 @@ export const TIMEFRAME_SECONDS_MAP: Record<ReviewTimeframe, number> = {
   D: 86400,
   W: 604800,
 };
-
-export function timeframeToDisplay(tf: ReviewTimeframe): string {
-  return TIMEFRAME_DISPLAY_MAP[tf] || tf;
-}
 
 /** Pick a review timeframe from holding duration. Never suggests 1m. */
 export function suggestReviewTimeframe(holdingMs: number): ReviewTimeframe {

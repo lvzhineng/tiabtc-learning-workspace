@@ -1,4 +1,24 @@
 import { requestJson } from './http';
+import type { VideoItem } from '@/features/learning/learning-types';
+
+let videosRequest: Promise<VideoItem[]> | null = null;
+
+export function loadVideos(force = false): Promise<VideoItem[]> {
+  if (force) videosRequest = null;
+  if (!videosRequest) {
+    const suffix = force ? `?t=${Date.now()}` : '';
+    videosRequest = fetch(`/videos.json${suffix}`)
+      .then((response) => {
+        if (!response.ok) throw new Error(`HTTP ${response.status}`);
+        return response.json() as Promise<VideoItem[]>;
+      })
+      .catch((error) => {
+        videosRequest = null;
+        throw error;
+      });
+  }
+  return videosRequest;
+}
 
 export type LearningStateRecord = {
   status: 'unlearned' | 'learning' | 'learned';

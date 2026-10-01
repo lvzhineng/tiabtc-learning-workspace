@@ -1,5 +1,6 @@
-import { ApiError, requestJson } from './http';
-import type { Candlestick } from '@/domain/candle';
+import { requestJson } from './http';
+import { parseCandleRows, type RawCandle } from './candle-parser';
+import { toPersistedDrawing, type RawScopedDrawing } from './drawing-response';
 import type { PersistedDrawing } from '@/domain/drawing';
 import { TIMEFRAME_SECONDS_MAP, type ReviewTimeframe } from '@/domain/timeframe';
 import {
@@ -26,15 +27,6 @@ export type {
 
 export { positionPnl };
 
-type RawCandle = {
-  timestamp: number;
-  open: number;
-  high: number;
-  low: number;
-  close: number;
-  volume: number;
-};
-
 type RawCandleResponse = {
   candles: RawCandle[];
   source?: string;
@@ -42,54 +34,6 @@ type RawCandleResponse = {
   warning?: string;
   truncated?: boolean;
 };
-
-function parseCandles(
-  response: RawCandleResponse,
-  symbol: string,
-  interval: ReviewTimeframe
-): Candlestick[] {
-  const rawList = response.candles;
-  if (!rawList || !Array.isArray(rawList)) return [];
-  const result = new Map<number, Candlestick>();
-  for (const raw of rawList) {
-    if (!raw) continue;
-    const timestampMs = Number(raw.timestamp);
-    const open = Number(raw.open);
-    const high = Number(raw.high);
-    const low = Number(raw.low);
-    const close = Number(raw.close);
-    const volume = Number(raw.volume);
-    if (
-      !Number.isFinite(timestampMs) ||
-      !Number.isFinite(open) ||
-      !Number.isFinite(high) ||
-      !Number.isFinite(low) ||
-      !Number.isFinite(close) ||
-      !Number.isFinite(volume) ||
-      timestampMs <= 0 ||
-      open <= 0 ||
-      high <= 0 ||
-      low <= 0 ||
-      close <= 0 ||
-      volume < 0
-    ) {
-      continue;
-    }
-    result.set(timestampMs, {
-      symbol,
-      interval,
-      timestampMs,
-      open,
-      high,
-      low,
-      close,
-      volume,
-    });
-  }
-  return [...result.values()].sort(
-    (left, right) => left.timestampMs - right.timestampMs
-  );
-}
 
 export async function fetchPositionReviewState(): Promise<PositionReviewState> {
   return requestJson<PositionReviewState>('/api/position-review');
@@ -133,14 +77,6 @@ export async function savePositionReviewCredentials(payload: {
   });
 }
 
-export async function saveBitgetCredentials(payload: {
-  apiKey: string;
-  secret: string;
-  passphrase: string;
-}): Promise<{ configured: boolean; venue: string }> {
-  return savePositionReviewCredentials({ venue: 'bitget', ...payload });
-}
-
 export async function syncPositionReview(): Promise<PositionReviewState> {
   return requestJson('/api/position-review/sync', {
     method: 'POST',
@@ -174,19 +110,9 @@ export async function createPositionTag(name: string): Promise<PositionTag> {
 }
 
 export async function deletePositionTag(tagId: number): Promise<{ ok: boolean }> {
-  try {
-    return await requestJson(`/api/position-review/tags?id=${encodeURIComponent(tagId)}`, {
-      method: 'DELETE',
-    });
-  } catch (cause) {
-    if (!(cause instanceof ApiError) || ![404, 405].includes(cause.status)) {
-      throw cause;
-    }
-    return await requestJson('/api/position-review/tags/delete', {
-      method: 'POST',
-      body: JSON.stringify({ id: tagId }),
-    });
-  }
+  return requestJson(`/api/position-review/tags?id=${encodeURIComponent(tagId)}`, {
+    method: 'DELETE',
+  });
 }
 
 export async function savePositionTagMap(payload: {
@@ -205,31 +131,6 @@ export type PositionDrawingScope = {
   positionId: string;
 };
 
-type PositionDrawingResponse = {
-  id: string;
-  toolType: string;
-  points: Array<{ timestamp: number; price: number }>;
-  options: Record<string, unknown>;
-  interval?: ReviewTimeframe;
-};
-
-function toPositionDrawing(
-  raw: PositionDrawingResponse,
-  positionId: string,
-  symbol: string,
-  interval: ReviewTimeframe
-): PersistedDrawing {
-  return {
-    id: raw.id,
-    videoId: positionId,
-    symbol,
-    interval: raw.interval || interval,
-    toolType: raw.toolType,
-    points: raw.points || [],
-    options: raw.options || {},
-  };
-}
-
 export async function fetchPositionDrawings(
   scope: PositionDrawingScope,
   symbol: string,
@@ -242,12 +143,12 @@ export async function fetchPositionDrawings(
     symbol,
     interval,
   });
-  const data = await requestJson<{ drawings: PositionDrawingResponse[] }>(
+  const data = await requestJson<{ drawings: RawScopedDrawing[] }>(
     `/api/position-review/drawings?${params}`,
     { signal }
   );
   return (data.drawings || []).map((raw) =>
-    toPositionDrawing(raw, scope.positionId, symbol, interval)
+    toPersistedDrawing(raw, scope.positionId, symbol, interval)
   );
 }
 
@@ -255,7 +156,7 @@ export async function savePositionDrawing(
   scope: PositionDrawingScope,
   drawing: PersistedDrawing
 ): Promise<PersistedDrawing> {
-  const saved = await requestJson<PositionDrawingResponse>(
+  const saved = await requestJson<RawScopedDrawing>(
     '/api/position-review/drawings',
     {
       method: 'POST',
@@ -271,7 +172,7 @@ export async function savePositionDrawing(
       }),
     }
   );
-  return toPositionDrawing(
+  return toPersistedDrawing(
     saved,
     scope.positionId,
     drawing.symbol,
@@ -285,7 +186,7 @@ export async function replacePositionDrawings(
   interval: ReviewTimeframe,
   drawings: PersistedDrawing[]
 ): Promise<PersistedDrawing[]> {
-  const data = await requestJson<{ drawings: PositionDrawingResponse[] }>(
+  const data = await requestJson<{ drawings: RawScopedDrawing[] }>(
     '/api/position-review/drawings',
     {
       method: 'PUT',
@@ -305,7 +206,7 @@ export async function replacePositionDrawings(
     }
   );
   return (data.drawings || []).map((raw) =>
-    toPositionDrawing(raw, scope.positionId, symbol, interval)
+    toPersistedDrawing(raw, scope.positionId, symbol, interval)
   );
 }
 
@@ -341,7 +242,7 @@ async function requestPositionCandles(
   const truncated = Boolean(data.truncated);
   const rawWarning = (data.warning || '').trim() || null;
   const candleVenue = data.candleVenue || 'bybit';
-  const candles = parseCandles(data, symbol, interval);
+  const candles = parseCandleRows(data.candles, symbol, interval);
   if (!rawWarning) {
     rememberCandleWindow(
       'position',

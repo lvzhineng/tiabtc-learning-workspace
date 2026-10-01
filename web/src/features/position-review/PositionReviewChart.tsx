@@ -9,6 +9,7 @@ import {
 import { ChartCanvas, findNearestCandle } from '@/chart/ChartCanvas';
 import type { TradePricePoint } from '@/chart/TradePricePrimitive';
 import { captureChartPng } from '@/chart/capture-chart-png';
+import { mergeCandles } from '@/chart/merge-candles';
 import { formatPrice, pricePrecision } from '@/chart/chart-price';
 import {
   createCandleEdgeLoadGuard,
@@ -34,7 +35,7 @@ import { DraggableDrawingToolbar } from '@/features/drawings/DraggableDrawingToo
 import { DrawingObjectTreePanel } from '@/features/drawings/DrawingObjectTreePanel';
 import { useDrawingWorkspace } from '@/features/review-workspace/useDrawingWorkspace';
 import { toast } from '@/ui/feedback/toast';
-import { FILL_KIND_LABEL, formatNumber, mergeCandles } from './position-review-format';
+import { FILL_KIND_LABEL, formatNumber } from './position-review-format';
 import type { ReviewPosition } from './position-review-types';
 import { positionKey, venueLabel } from './position-review-types';
 

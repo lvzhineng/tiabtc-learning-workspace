@@ -11,12 +11,14 @@ type Props = {
   symbol: string;
   timeframe: ReviewTimeframe;
   readout: ReadoutInfo | null;
+  showVolume?: boolean;
 };
 
 export const ChartReadoutBar = memo(function ChartReadoutBar({
   symbol,
   timeframe,
   readout,
+  showVolume = true,
 }: Props) {
   return (
     <div
@@ -91,10 +93,10 @@ export const ChartReadoutBar = memo(function ChartReadoutBar({
               {readout.formattedChange}
             </span>
           </div>
-          <div>
+          {showVolume && <div>
             <span style={{ color: 'var(--text-muted)' }}>Vol: </span>
             <span>{readout.formattedVolume}</span>
-          </div>
+          </div>}
         </>
       ) : (
         <div style={{ color: 'var(--text-muted)' }}>

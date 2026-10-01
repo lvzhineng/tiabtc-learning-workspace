@@ -1,6 +1,7 @@
-import { ApiError, requestJson } from './http';
+import { requestJson } from './http';
 import type { PersistedDrawing } from '@/domain/drawing';
 import type { ReviewTimeframe } from '@/domain/timeframe';
+import { toPersistedDrawing, type RawScopedDrawing } from './drawing-response';
 
 export type BitlangTag = {
   id: number;
@@ -36,20 +37,9 @@ export async function createBitlangTag(name: string): Promise<BitlangTag> {
 }
 
 export async function deleteBitlangTag(tagId: number): Promise<{ ok: boolean }> {
-  try {
-    return await requestJson(
-      `/api/bitlang-review/tags?id=${encodeURIComponent(tagId)}`,
-      { method: 'DELETE' }
-    );
-  } catch (cause) {
-    if (!(cause instanceof ApiError) || ![404, 405].includes(cause.status)) {
-      throw cause;
-    }
-    return await requestJson('/api/bitlang-review/tags/delete', {
-      method: 'POST',
-      body: JSON.stringify({ id: tagId }),
-    });
-  }
+  return requestJson(`/api/bitlang-review/tags?id=${encodeURIComponent(tagId)}`, {
+    method: 'DELETE',
+  });
 }
 
 export async function saveBitlangTagMap(payload: {
@@ -66,31 +56,6 @@ export type BitlangDrawingScope = {
   tradeId: string;
 };
 
-type BitlangDrawingResponse = {
-  id: string;
-  toolType: string;
-  points: Array<{ timestamp: number; price: number }>;
-  options: Record<string, unknown>;
-  interval?: ReviewTimeframe;
-};
-
-function toBitlangDrawing(
-  raw: BitlangDrawingResponse,
-  tradeId: string,
-  symbol: string,
-  interval: ReviewTimeframe
-): PersistedDrawing {
-  return {
-    id: raw.id,
-    videoId: tradeId,
-    symbol,
-    interval: raw.interval || interval,
-    toolType: raw.toolType,
-    points: raw.points || [],
-    options: raw.options || {},
-  };
-}
-
 export async function fetchBitlangDrawings(
   scope: BitlangDrawingScope,
   symbol: string,
@@ -102,12 +67,12 @@ export async function fetchBitlangDrawings(
     symbol,
     interval,
   });
-  const data = await requestJson<{ drawings: BitlangDrawingResponse[] }>(
+  const data = await requestJson<{ drawings: RawScopedDrawing[] }>(
     `/api/bitlang-review/drawings?${params}`,
     { signal }
   );
   return (data.drawings || []).map((raw) =>
-    toBitlangDrawing(raw, scope.tradeId, symbol, interval)
+    toPersistedDrawing(raw, scope.tradeId, symbol, interval)
   );
 }
 
@@ -115,7 +80,7 @@ export async function saveBitlangDrawing(
   scope: BitlangDrawingScope,
   drawing: PersistedDrawing
 ): Promise<PersistedDrawing> {
-  const saved = await requestJson<BitlangDrawingResponse>(
+  const saved = await requestJson<RawScopedDrawing>(
     '/api/bitlang-review/drawings',
     {
       method: 'POST',
@@ -130,7 +95,7 @@ export async function saveBitlangDrawing(
       }),
     }
   );
-  return toBitlangDrawing(
+  return toPersistedDrawing(
     saved,
     scope.tradeId,
     drawing.symbol,
@@ -144,7 +109,7 @@ export async function replaceBitlangDrawings(
   interval: ReviewTimeframe,
   drawings: PersistedDrawing[]
 ): Promise<PersistedDrawing[]> {
-  const data = await requestJson<{ drawings: BitlangDrawingResponse[] }>(
+  const data = await requestJson<{ drawings: RawScopedDrawing[] }>(
     '/api/bitlang-review/drawings',
     {
       method: 'PUT',
@@ -163,7 +128,7 @@ export async function replaceBitlangDrawings(
     }
   );
   return (data.drawings || []).map((raw) =>
-    toBitlangDrawing(raw, scope.tradeId, symbol, interval)
+    toPersistedDrawing(raw, scope.tradeId, symbol, interval)
   );
 }
 

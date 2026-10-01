@@ -7,13 +7,8 @@ import {
   type Dispatch,
   type SetStateAction,
 } from 'react';
-import {
-  clearAllDrawingsForSymbol,
-  deleteDrawing,
-  fetchDrawings,
-  replaceDrawings,
-  saveDrawing,
-} from '@/api/drawing-api';
+import * as serverDrawingApi from '@/api/drawing-api';
+import * as cfdDrawingApi from '@/api/cfd-drawing-api';
 import {
   deleteBitlangDrawing,
   fetchBitlangDrawings,
@@ -74,7 +69,7 @@ type DrawingWorkspace = {
 const DRAWING_SCOPE = '__global__';
 const DRAWING_UI_STORAGE_KEY = 'tiabtc-drawing-ui-v1';
 const MAX_HISTORY_ENTRIES = 100;
-type DrawingPersistence = 'server' | 'memory' | 'position' | 'bitlang';
+type DrawingPersistence = 'server' | 'memory' | 'position' | 'bitlang' | 'cfd';
 type ExtraDrawingScope = PositionDrawingScope | BitlangDrawingScope;
 
 export function useDrawingWorkspace(
@@ -83,6 +78,8 @@ export function useDrawingWorkspace(
   persistence: DrawingPersistence = 'server',
   extraScope?: ExtraDrawingScope
 ): DrawingWorkspace {
+  const { clearAllDrawingsForSymbol, deleteDrawing, fetchDrawings, replaceDrawings, saveDrawing } =
+    persistence === 'cfd' ? cfdDrawingApi : serverDrawingApi;
   const positionVenue =
     extraScope && 'venue' in extraScope ? extraScope.venue : '';
   const positionId =

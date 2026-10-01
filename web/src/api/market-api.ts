@@ -1,5 +1,6 @@
 import { requestJson } from './http';
 import type { Candlestick } from '@/domain/candle';
+import { parseCandleRows, type RawCandle } from './candle-parser';
 import {
   TIMEFRAME_SECONDS_MAP,
   type ReviewTimeframe,
@@ -11,18 +12,10 @@ import {
   TRUNCATED_WINDOW_HINT,
 } from './candle-window-cache';
 
-type RawCandle = {
-  timestamp: number;
-  open: number;
-  high: number;
-  low: number;
-  close: number;
-  volume: number;
-};
-
 type RawCandleResponse = {
   candles: RawCandle[];
   source?: 'sqlite' | 'bybit';
+  coverage?: { first: number | null; last: number | null; count: number };
   warning?: string;
   error?: string;
   truncated?: boolean;
@@ -54,6 +47,7 @@ export type CandleBatch = {
   candles: Candlestick[];
   warning: string | null;
   truncated?: boolean;
+  coverage?: { first: number | null; last: number | null; count: number };
 };
 
 type ConfigResponse = {
@@ -68,96 +62,6 @@ type CandleCacheEntry = {
 };
 const candleCache = new Map<string, CandleCacheEntry>();
 const candleRequests = new Map<string, Promise<CandleBatch>>();
-
-function parseRawCandles(
-  response: RawCandleResponse,
-  symbol: string,
-  interval: ReviewTimeframe
-): Candlestick[] {
-  const rawList = response.candles;
-  if (!rawList || !Array.isArray(rawList)) {
-    return [];
-  }
-
-  const result: Candlestick[] = [];
-  let prevTimestamp = -1;
-  let needsSort = false;
-
-  for (let i = 0; i < rawList.length; i++) {
-    const raw = rawList[i];
-    if (!raw) continue;
-
-    const timestampMs = Number(raw.timestamp);
-    const open = Number(raw.open);
-    const high = Number(raw.high);
-    const low = Number(raw.low);
-    const close = Number(raw.close);
-    const volume = Number(raw.volume);
-
-    if (
-      Number.isFinite(timestampMs) &&
-      Number.isFinite(open) &&
-      Number.isFinite(high) &&
-      Number.isFinite(low) &&
-      Number.isFinite(close) &&
-      Number.isFinite(volume) &&
-      timestampMs > 0 &&
-      open > 0 &&
-      high > 0 &&
-      low > 0 &&
-      close > 0 &&
-      volume >= 0
-    ) {
-      if (timestampMs === prevTimestamp) {
-        // Overwrite duplicate timestamp with later entry
-        result[result.length - 1] = {
-          symbol,
-          interval,
-          timestampMs,
-          open,
-          high,
-          low,
-          close,
-          volume,
-        };
-      } else {
-        if (timestampMs < prevTimestamp) {
-          needsSort = true;
-        }
-        result.push({
-          symbol,
-          interval,
-          timestampMs,
-          open,
-          high,
-          low,
-          close,
-          volume,
-        });
-        prevTimestamp = timestampMs;
-      }
-    }
-  }
-
-  if (needsSort) {
-    result.sort((left, right) => left.timestampMs - right.timestampMs);
-    let writeIndex = 0;
-    for (const candle of result) {
-      if (
-        writeIndex > 0 &&
-        result[writeIndex - 1].timestampMs === candle.timestampMs
-      ) {
-        result[writeIndex - 1] = candle;
-      } else {
-        result[writeIndex] = candle;
-        writeIndex += 1;
-      }
-    }
-    result.length = writeIndex;
-  }
-
-  return result;
-}
 
 function rememberCandles(key: string, batch: CandleBatch): void {
   // An empty response can mean offline cache miss or that the next live bar is
@@ -220,9 +124,10 @@ function requestCandles(
             ? data.warning.trim()
             : null;
         const batch = {
-          candles: parseRawCandles(data, symbol, interval),
+          candles: parseCandleRows(data.candles, symbol, interval),
           warning,
           truncated,
+          coverage: data.coverage,
         } satisfies CandleBatch;
         rememberCandles(path, batch);
         return batch;
@@ -265,13 +170,6 @@ export async function searchPerpetualSymbols(
 
 export async function fetchChartConfig(): Promise<ConfigResponse> {
   return requestJson<ConfigResponse>('/api/chart/config');
-}
-
-export async function updateChartConfig(config: { offlineMode: boolean }): Promise<ConfigResponse> {
-  return requestJson<ConfigResponse>('/api/chart/config', {
-    method: 'PUT',
-    body: JSON.stringify(config),
-  });
 }
 
 export async function fetchChartCandles(

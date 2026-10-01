@@ -1,10 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import {
-  fetchChartCandles,
-  fetchEarlierCandles,
-  fetchLaterCandles,
-  fetchReplayCandles,
-} from '@/api/market-api';
+import * as marketApi from '@/api/market-api';
+import * as cfdApi from '@/api/cfd-api';
 import {
   TIMEFRAME_DISPLAY_MAP,
   TIMEFRAME_SECONDS_MAP,
@@ -23,6 +19,7 @@ import {
 
 type CandleWorkspaceData = {
   candles: Candlestick[];
+  coverage: { first: number | null; last: number | null; count: number } | null;
   loading: boolean;
   isLoadingEarlier: boolean;
   isLoadingLater: boolean;
@@ -67,9 +64,13 @@ export function useCandleWorkspaceData(
   symbol: string,
   timeframe: ReviewTimeframe,
   replayState: ReplayState,
-  idleAnchorTimeMs: number | null = null
+  idleAnchorTimeMs: number | null = null,
+  market: 'perpetual' | 'cfd' = 'perpetual'
 ): CandleWorkspaceData {
+  const { fetchChartCandles, fetchEarlierCandles, fetchLaterCandles, fetchReplayCandles } =
+    market === 'cfd' ? cfdApi : marketApi;
   const [candles, setCandles] = useState<Candlestick[]>([]);
+  const [coverage, setCoverage] = useState<CandleWorkspaceData['coverage']>(null);
   const [loading, setLoading] = useState(true);
   const [isLoadingEarlier, setIsLoadingEarlier] = useState(false);
   const [isLoadingLater, setIsLoadingLater] = useState(false);
@@ -96,8 +97,8 @@ export function useCandleWorkspaceData(
   // Idle switch anchors are one-shot fetch hints and must not stay in the
   // context key, otherwise live mode remains pinned to a historical window.
   const contextKey = useMemo(
-    () => `${symbol}:${timeframe}:${replayMode}:${replayAnchorTimeMs}`,
-    [replayAnchorTimeMs, replayMode, symbol, timeframe]
+    () => `${market}:${symbol}:${timeframe}:${replayMode}:${replayAnchorTimeMs}`,
+    [market, replayAnchorTimeMs, replayMode, symbol, timeframe]
   );
 
   useEffect(() => {
@@ -118,6 +119,7 @@ export function useCandleWorkspaceData(
     // Do not briefly render the previous interval's candles under the new
     // interval. That would make the chart retain an unrelated logical range.
     setCandles([]);
+    setCoverage(null);
     setLoading(true);
     setIsLoadingEarlier(false);
     setIsLoadingLater(false);
@@ -154,10 +156,13 @@ export function useCandleWorkspaceData(
           return;
         }
         setCandles(batch.candles);
+        setCoverage(batch.coverage ?? null);
         setOfflineWarning(
           batch.warning ||
             (batch.candles.length === 0
-              ? `符号 ${symbol} (${TIMEFRAME_DISPLAY_MAP[timeframe]}) 当前时段没有 K 线。已尝试从 Bybit 拉取，可切换到 1h 或拖到更近的时间后重试。`
+              ? market === 'cfd'
+                ? 'Gate CFD 当前时段没有行情，可能处于休市或超出数据源历史范围，请调整复盘时间。'
+                : `符号 ${symbol} (${TIMEFRAME_DISPLAY_MAP[timeframe]}) 当前时段没有 K 线。已尝试从 Bybit 拉取，可切换到 1h 或拖到更近的时间后重试。`
               : null)
         );
       })
@@ -256,7 +261,7 @@ export function useCandleWorkspaceData(
           setIsLoadingEarlier(false);
         }
       });
-  }, [candles, isLoadingEarlier, loading, symbol, timeframe]);
+  }, [candles, isLoadingEarlier, loading, symbol, timeframe, fetchEarlierCandles]);
 
   const loadLater = useCallback(() => {
     if (
@@ -324,7 +329,7 @@ export function useCandleWorkspaceData(
           setIsLoadingLater(false);
         }
       });
-  }, [candles, isLoadingLater, loading, symbol, timeframe]);
+  }, [candles, isLoadingLater, loading, symbol, timeframe, fetchLaterCandles]);
 
   const retryLoad = useCallback(() => {
     const kind = failedEdgeRef.current;
@@ -368,6 +373,7 @@ export function useCandleWorkspaceData(
         const firstLaterCandle = batch.candles[0];
         const maxAllowedGapMs = TIMEFRAME_SECONDS_MAP[timeframe] * 8_000;
         if (
+          market !== 'cfd' &&
           firstLaterCandle &&
           firstLaterCandle.timestampMs - latestTimestamp > maxAllowedGapMs
         ) {
@@ -409,10 +415,11 @@ export function useCandleWorkspaceData(
 
     futurePrefetchRef.current = request;
     return request;
-  }, [candles, symbol, timeframe]);
+  }, [candles, symbol, timeframe, market, fetchLaterCandles]);
 
   return {
     candles,
+    coverage,
     loading,
     isLoadingEarlier,
     isLoadingLater,

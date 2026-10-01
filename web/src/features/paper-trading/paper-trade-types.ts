@@ -2,8 +2,6 @@ import type { PaperTrade } from '@/domain/paper-trade';
 
 export type TradeType = 'LONG' | 'SHORT';
 
-export type TradeStatus = 'OPEN' | 'WIN' | 'LOSS';
-
 export type PaperTradeItem = PaperTrade;
 
 export type PositionToolParams = {
