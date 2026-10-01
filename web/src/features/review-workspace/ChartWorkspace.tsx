@@ -1009,7 +1009,7 @@ export function ChartWorkspace({
           {isCfd ? (
             <select
               className="review-symbol-trigger"
-              aria-label="CFD 品种"
+              aria-label="全球市场品种"
               value={activeSymbol}
               onChange={(event) => handleSymbolChange(event.target.value)}
             >

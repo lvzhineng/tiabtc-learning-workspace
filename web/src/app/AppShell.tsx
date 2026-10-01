@@ -205,11 +205,11 @@ export function AppShell() {
               type="button"
               className={`app-nav-btn ${activeTab === 'cfd' ? 'active' : ''}`}
               onClick={() => navigateToTab('cfd')}
-              aria-label="CFD"
-              title="CFD · 黄金、纳斯达克100、日经225"
+              aria-label="全球市场"
+              title="全球市场 · 黄金、纳斯达克100、日经225"
             >
               <Globe2 size={14} />
-              <span>CFD</span>
+              <span>全球市场</span>
             </button>
 
             <button
