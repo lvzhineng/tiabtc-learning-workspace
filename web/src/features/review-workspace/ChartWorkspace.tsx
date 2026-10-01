@@ -1,5 +1,4 @@
 import { TradingSessionControl } from '@/chart/TradingSessionControl';
-import { storedTradingSessions, type TradingSession } from '@/chart/trading-sessions';
 import { useEffect, useState, useCallback, useMemo, useRef } from 'react';
 import {
   REVIEW_TIMEFRAMES,
@@ -23,10 +22,10 @@ import {
   filterVisibleCandles,
   findCandleCompletingAt,
   getNextCursorTimeMs,
-  getPrevCursorTimeMs,
   shouldPrefetchFuture,
 } from '@/features/replay/free-replay-logic';
 import { FreeReplayPanel } from '@/features/replay/FreeReplayPanel';
+import { ReplayBookmarks } from '@/features/replay/ReplayBookmarks';
 import { DraggableDrawingToolbar } from '@/features/drawings/DraggableDrawingToolbar';
 import { DrawingObjectTreePanel } from '@/features/drawings/DrawingObjectTreePanel';
 import type { VideoReviewContext } from '@/domain/review-context';
@@ -42,8 +41,6 @@ import { ChartReadoutBar } from './ChartReadoutBar';
 import { PerpetualSymbolSearchDialog } from './PerpetualSymbolSearchDialog';
 import {
   readLocalUiState,
-  storedBoolean,
-  storedString,
   writeLocalUiState,
 } from '@/ui/persistence/local-ui-state';
 import { toast } from '@/ui/feedback/toast';
@@ -58,110 +55,11 @@ import {
 } from 'lucide-react';
 import '@/styles/review-workspace.css';
 
-const REVIEW_LOCATION_STORAGE_KEY = 'tiabtc-review-location-v1';
-const REVIEW_UI_STORAGE_KEY = 'tiabtc-review-ui-v1';
-const MIN_REVIEW_TIMESTAMP_MS = 1_500_000_000_000;
-const DEFAULT_REVIEW_VISIBLE_SPAN = 120;
-const MIN_REVIEW_VISIBLE_SPAN = 30;
-const MAX_REVIEW_VISIBLE_SPAN = 200;
-
-type ReviewUiPreferences = {
-  symbol: string;
-  isLogScale: boolean;
-  sessionBands: TradingSession[];
-  showWeekendBands: boolean;
-};
-
-function loadReviewUiPreferences(market: 'perpetual' | 'cfd'): ReviewUiPreferences {
-  const stored = readLocalUiState(market === 'cfd' ? 'tiabtc-cfd-ui-v1' : REVIEW_UI_STORAGE_KEY);
-  const fallback = market === 'cfd' ? 'XAUUSD' : 'BTCUSDT';
-  const symbol = storedString(stored.symbol, fallback, undefined, 32).toUpperCase();
-  const valid = market === 'cfd'
-    ? CFD_SYMBOLS.some((item) => item.symbol === symbol)
-    : /^[A-Z0-9]{1,24}USDT$/.test(symbol);
-  return {
-    symbol: valid ? symbol : fallback,
-    isLogScale: storedBoolean(stored.isLogScale, false),
-    sessionBands: storedTradingSessions(stored),
-    showWeekendBands: storedBoolean(stored.showWeekendBands, false),
-  };
-}
-
-type StoredReviewLocation = {
-  timeframe: ReviewTimeframe;
-  timestampMs: number;
-  visibleSpan: number;
-  replay: StoredFreeReplay | null;
-};
-
-type StoredFreeReplay = {
-  startTimeMs: number;
-  cursorTimeMs: number;
-  speed: number;
-};
-
-function normalizeReviewVisibleSpan(value: unknown): number {
-  const visibleSpan = Number(value);
-  if (!Number.isFinite(visibleSpan)) return DEFAULT_REVIEW_VISIBLE_SPAN;
-  return Math.min(
-    MAX_REVIEW_VISIBLE_SPAN,
-    Math.max(MIN_REVIEW_VISIBLE_SPAN, visibleSpan)
-  );
-}
-
-function normalizeStoredFreeReplay(value: unknown): StoredFreeReplay | null {
-  if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
-  const raw = value as Partial<StoredFreeReplay>;
-  const startTimeMs = Number(raw.startTimeMs);
-  const cursorTimeMs = Number(raw.cursorTimeMs);
-  const speed = Number(raw.speed);
-  if (
-    !Number.isFinite(startTimeMs) ||
-    !Number.isFinite(cursorTimeMs) ||
-    startTimeMs < MIN_REVIEW_TIMESTAMP_MS ||
-    cursorTimeMs < startTimeMs ||
-    cursorTimeMs > Date.now()
-  ) {
-    return null;
-  }
-  return {
-    startTimeMs: Math.round(startTimeMs),
-    cursorTimeMs: Math.round(cursorTimeMs),
-    speed: [1, 2, 5, 10].includes(speed) ? speed : 1,
-  };
-}
-
-function loadStoredReviewLocation(market: 'perpetual' | 'cfd'): StoredReviewLocation | null {
-  try {
-    // Retired GC replay coordinates must not become a BTC replay context.
-    if (market === 'perpetual' && readLocalUiState(REVIEW_UI_STORAGE_KEY).symbol === 'GC') return null;
-    const raw = readLocalUiState(
-      market === 'cfd' ? 'tiabtc-cfd-location-v1' : REVIEW_LOCATION_STORAGE_KEY
-    ) as Partial<StoredReviewLocation>;
-    const timeframe = raw?.timeframe;
-    const timestampMs = Number(raw?.timestampMs);
-    if (
-      !REVIEW_TIMEFRAMES.includes(timeframe as ReviewTimeframe) ||
-      !Number.isFinite(timestampMs) ||
-      timestampMs < MIN_REVIEW_TIMESTAMP_MS ||
-      timestampMs > Date.now()
-    ) {
-      return null;
-    }
-    return {
-      timeframe: timeframe as ReviewTimeframe,
-      timestampMs: Math.round(timestampMs),
-      visibleSpan: normalizeReviewVisibleSpan(raw?.visibleSpan),
-      replay: normalizeStoredFreeReplay(raw?.replay),
-    };
-  } catch {
-    return null;
-  }
-}
-
-function saveStoredReviewLocation(location: StoredReviewLocation, market: 'perpetual' | 'cfd'): void {
-  writeLocalUiState(market === 'cfd' ? 'tiabtc-cfd-location-v1' : REVIEW_LOCATION_STORAGE_KEY, { ...location });
-}
+import {
+  REVIEW_UI_STORAGE_KEY, REVIEW_LOCATION_STORAGE_KEY, DEFAULT_REVIEW_VISIBLE_SPAN,
+  normalizeReviewVisibleSpan, loadReviewUiPreferences, loadStoredReviewLocation,
+  saveStoredReviewLocation, type StoredFreeReplay, type StoredReviewLocation,
+} from './review-ui-state';
 
 interface ChartWorkspaceProps {
   initialVideoContext?: VideoReviewContext | null;
@@ -360,6 +258,7 @@ export function ChartWorkspace({
     loadLater: handleLoadLater,
     retryLoad: handleRetryLoad,
     prefetchFuture: prefetchFutureCandles,
+    previousReplayCursor,
   } = useCandleWorkspaceData(
     activeSymbol,
     activeTimeframe,
@@ -385,7 +284,7 @@ export function ChartWorkspace({
   // chart. If the loaded bars all start after that cursor, drop the stale
   // focus so the live tip is visible.
   useEffect(() => {
-    if (loading || candles.length === 0 || chartFocusTimeMs === null) {
+    if (replayState.status !== 'idle' || loading || candles.length === 0 || chartFocusTimeMs === null) {
       return;
     }
     if (chartFocusTimeMs >= candles[0].timestampMs) {
@@ -402,6 +301,7 @@ export function ChartWorkspace({
     chartFocusTimeMs,
     loading,
     scheduleStoredReviewLocation,
+    replayState.status,
   ]);
 
   const {
@@ -741,21 +641,15 @@ export function ChartWorkspace({
 
   const handlePrevBar = useCallback(() => {
     if (replayState.status === 'idle') return;
-    const prevCursorMs = getPrevCursorTimeMs(
-      candles,
-      replayState.cursorTimeMs,
-      replayState.startTimeMs,
-      activeTimeframe
-    );
-    setReplayState((prev) => {
-      if (prev.status === 'idle') return prev;
-      return {
-        ...prev,
-        status: prev.status === 'completed' ? 'paused' : prev.status,
-        cursorTimeMs: prevCursorMs,
-      };
+    const cursor = replayState.cursorTimeMs;
+    const start = replayState.startTimeMs;
+    setReplayState((prev) => prev.status === 'idle' ? prev : { ...prev, status: 'paused' });
+    void previousReplayCursor().then((previous) => {
+      if (previous === null) return;
+      setReplayState((prev) => prev.status === 'idle' || prev.cursorTimeMs !== cursor || prev.startTimeMs !== start
+        ? prev : { ...prev, status: 'paused', cursorTimeMs: previous });
     });
-  }, [activeTimeframe, candles, replayState]);
+  }, [previousReplayCursor, replayState]);
 
   const handleTogglePlay = useCallback(() => {
     setReplayState((prev) => {
@@ -1059,6 +953,14 @@ export function ChartWorkspace({
             onTogglePlay={handleTogglePlay}
             onSetSpeed={handleSetSpeed}
           />
+          <ReplayBookmarks market={market} symbol={activeSymbol} timeframe={activeTimeframe}
+            timestampMs={loading ? null : replayState.status === 'idle'
+              ? hoveredCandle?.timestampMs ?? lastPositionTimeMsRef.current ?? candles[candles.length - 1]?.timestampMs ?? null
+              : replayState.cursorTimeMs}
+            onJump={(bookmark) => {
+              setActiveTimeframe(bookmark.timeframe);
+              handleStartReplay(bookmark.symbol, bookmark.timestampMs);
+            }} />
         </div>
 
         <div className="review-toolbar-right">

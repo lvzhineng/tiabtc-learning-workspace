@@ -6,6 +6,7 @@ import {
   summarizePositions,
 } from '@/features/position-review/position-stats';
 import { CommonDashboardLayout } from '@/features/position-dashboard/CommonDashboardLayout';
+import { PeriodComparison } from '@/features/position-dashboard/PeriodComparison';
 import {
   readLocalUiState,
   storedString,
@@ -144,6 +145,12 @@ export function BitlangDashboardWorkspace({
     });
   }, [dateRange, sideFilter, snapshotEndMs, symbolFilter, tagFilter, trades]);
 
+  const comparisonPositions = useMemo(() => trades.filter((trade) =>
+    (symbolFilter === 'all' || bybitSymbol(trade.instrument) === symbolFilter)
+    && (sideFilter === 'all' || (sideFilter === 'long' ? trade.direction === '多' : trade.direction === '空'))
+    && (tagFilter === 'all' || trade.tagIds.includes(Number(tagFilter)))
+  ).map(toDashboardPosition), [trades, symbolFilter, sideFilter, tagFilter]);
+
   const journalTrades = useMemo(
     () =>
       [...filteredTrades].sort(
@@ -185,6 +192,7 @@ export function BitlangDashboardWorkspace({
 
   return (
     <CommonDashboardLayout
+      comparisonSlot={<PeriodComparison positions={comparisonPositions} dateRange={dateRange} endMs={snapshotEndMs} useEntryTime />}
       title="bit浪浪 · 交割单看板"
       subtitle={
         <>

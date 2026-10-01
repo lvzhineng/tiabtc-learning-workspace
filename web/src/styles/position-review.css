@@ -32,6 +32,9 @@
 .posrev-credentials {
   display: flex;
   flex-direction: column;
+  flex-shrink: 0;
+  max-height: min(280px, 25vh);
+  overflow-y: auto;
   gap: 6px;
   padding: 8px;
   border: 1px solid var(--border-color);
@@ -574,6 +577,8 @@
   gap: 6px;
 }
 
+.posrev-credentials > * { flex-shrink: 0; }
+
 .posrev-copy-chart {
   position: absolute;
   top: 8px;
@@ -889,3 +894,4 @@
 .posrev-fill-pnl.loss {
   color: #f23645;
 }
+.posrev-copy-chart.posrev-export-card { right: 130px; }

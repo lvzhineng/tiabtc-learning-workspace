@@ -1068,3 +1068,7 @@
 .posrev-loss {
   color: #f43f5e !important;
 }
+.period-comparison { padding: 16px; margin-bottom: 12px; }
+.period-comparison table { width: 100%; text-align: left; font-size: 12px; }
+.period-comparison th, .period-comparison td { padding: 6px; }
+.period-comparison p { color: var(--text-muted); font-size: 12px; }

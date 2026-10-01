@@ -5,6 +5,7 @@ import {
   type ReviewPosition,
 } from '@/api/position-review-api';
 import { CommonDashboardLayout } from './CommonDashboardLayout';
+import { PeriodComparison } from './PeriodComparison';
 import { TradeJournalStream } from './TradeJournalStream';
 import { toast } from '@/ui/feedback/toast';
 import {
@@ -102,6 +103,12 @@ export function PositionDashboardWorkspace({
     return [...new Set(positions.map((p) => p.chartSymbol))].sort();
   }, [positions]);
 
+  const comparisonPositions = useMemo(() => positions.filter((position) =>
+    (symbolFilter === 'all' || position.chartSymbol === symbolFilter)
+    && (sideFilter === 'all' || position.side === sideFilter)
+    && (tagFilter === 'all' || position.tagIds.includes(Number(tagFilter)))
+  ), [positions, symbolFilter, sideFilter, tagFilter]);
+
   useEffect(() => {
     if (positions.length === 0) return;
     if (symbolFilter !== 'all' && !symbols.includes(symbolFilter)) {
@@ -176,6 +183,7 @@ export function PositionDashboardWorkspace({
 
   return (
     <CommonDashboardLayout
+      comparisonSlot={<PeriodComparison positions={comparisonPositions} dateRange={dateRange} endMs={Date.now()} />}
       title="仓位看盘 · 账户数据大屏"
       subtitle={
         <>

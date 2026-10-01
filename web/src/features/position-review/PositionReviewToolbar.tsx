@@ -1,6 +1,7 @@
 import { TradingSessionControl } from '@/chart/TradingSessionControl';
 import type { TradingSession } from '@/chart/trading-sessions';
 import { memo } from 'react';
+import { ReviewQueueButton } from '@/features/review-workspace/ReviewQueueButton';
 import {
   ChevronDown,
   ChevronUp,
@@ -151,6 +152,9 @@ export const PositionReviewToolbar = memo(function PositionReviewToolbar(
       </label>
 
       <div className="review-filter-chips">
+        <ReviewQueueButton noNote={noNote} noTag={noTag} onChange={(enabled) => {
+          onNoNoteChange(enabled); onNoTagChange(enabled);
+        }} />
         <button
           type="button"
           className={side === 'long' ? 'active' : ''}

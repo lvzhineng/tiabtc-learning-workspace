@@ -967,6 +967,7 @@ export function PositionReviewWorkspace({
               </div>
             </header>
             <PositionReviewChart
+              tagNames={selected.tagIds.map((id) => tags.find((tag) => tag.id === id)?.name || '').filter(Boolean)}
               position={selected}
               positions={positions}
               timeframe={effectiveTimeframe}

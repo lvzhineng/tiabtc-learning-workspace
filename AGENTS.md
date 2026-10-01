@@ -61,6 +61,7 @@ Python 后端是纯 API 服务。禁止恢复项目目录静态文件服务；�
   - 其余合约走该仓位所属交易所（Bitget 或 Gate），写入独立表 `venue_market_candles` / `venue_market_cache_ranges`，禁止与 Bybit 缓存混写；
   - 本所拉取失败且 Bybit 目录确认有该合约时，再回退 Bybit 并在响应 `warning` 中说明；前端窗口缓存 key 必须带 candle venue，避免 Bitget/Gate 同名合约混写。
 - 单次 K 线响应上限约 **3000** 根（`MAX_CANDLES_PER_RESPONSE`）。过长仓位/交易窗口截在开仓附近，响应带 `truncated`；前端窗口缓存走 `web/src/api/candle-window-cache.ts` 分片 LRU。不要为了「一次看完全程」去掉该上限。
+- 活动图表最多保留 **12000** 根，统一通过 `web/src/chart/candle-retention.ts` 合并和裁切；延展后按时间恢复视口，未来预取保留回放游标，回退到淘汰边界先补历史。不要恢复无限累加数组。
 - SQLite 是本地行情缓存，不是独立行情源。
 - 请求时应优先读取 SQLite，只下载缺失区间，并合并相邻缓存范围。
 - 支持周期：`1`、`5`、`15`、`60`、`240`、`D`、`W`。
@@ -178,6 +179,8 @@ Python 后端是纯 API 服务。禁止恢复项目目录静态文件服务；�
 | `study_server.py` | API、数据库初始化、行情缓存、画图、模拟交易与仓位复盘持久化 |
 | `workspace_schema.py` | 当前功能所需的 SQLite 建表定义；不新建退役 OI/CVD 表 |
 | `position_fill_assignment.py` | 跨交易所仓位成交归属与聚合 |
+| `position_review_reader.py` | 同一只读快照中的仓位摘要与按交易所 / 合约 / 时间范围读取成交 |
+| `performance_metrics.py` | 后端最多 200 条的内存性能记录，不保存载荷或密钥 |
 | `market_data_provider.py` | CCXT Bybit 行情适配、代理、限频与永续目录 |
 | `gate_cfd_provider.py` | Gate 公共 CFD 行情适配、限频与原生周期/5m备用聚合 |
 | `cfd_replay_data.py` | CFD 独立行情范围缓存、历史分页与按品种持久化画图 |
@@ -203,6 +206,10 @@ Python 后端是纯 API 服务。禁止恢复项目目录静态文件服务；�
 | `web/src/api/position-review-api.ts` | 仓位复盘 API 封装 |
 | `web/src/api/bitlang-review-api.ts` | bit浪浪本机备注/标签/画图 API 封装 |
 | `web/src/api/candle-window-cache.ts` | 窗口 K 线分片 LRU |
+| `web/src/chart/candle-retention.ts` | 活动图表 K 线数量边界与裁切后的视口时间映射 |
+| `web/src/chart/useChartExport.ts` | 两套交易图表的复制与离线复盘卡片导出 |
+| `web/src/features/review-workspace/review-ui-state.ts` | 行情 / CFD 工作台的偏好和回放坐标校验 |
+| `web/tests/` / `scripts/benchmark_review.py` | 前端夹具回归与不访问生产库的合成性能基准 |
 | `web/src/ui/persistence/local-ui-state.ts` | 非敏感界面偏好的 localStorage 容错读写与类型校验 |
 | `web/src/ui/feedback/GlobalConfirmDialog.tsx` | 全局确认框 |
 | `web/src/features/learning/LearningWorkspace.tsx` | 视频列表、通用 YouTube 导入、Tia 示例模板和学习状态 |

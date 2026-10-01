@@ -7,6 +7,7 @@ import {
   type InviteSettings,
 } from '@/api/workspace-settings-api';
 import { toast } from '@/ui/feedback/toast';
+import { PerformancePanel } from './PerformancePanel';
 import '@/styles/shortcut-modal.css';
 import '@/styles/settings-modal.css';
 
@@ -146,6 +147,7 @@ export function SettingsModal({ isOpen, onClose }: SettingsModalProps) {
               </p>
             ) : null}
           </section>
+          <PerformancePanel />
         </div>
 
         <footer className="shortcut-modal-footer">

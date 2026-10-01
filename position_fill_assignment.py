@@ -1,6 +1,7 @@
 """Match and aggregate exchange fills for review positions."""
 
 import time
+import heapq
 
 
 FILL_MATCH_PAD_MS = 2000
@@ -107,38 +108,46 @@ def assign_fills_to_positions(positions, fills):
         (position.get("venue"), position["positionId"]): [] for position in positions
     }
     positions_by_symbol = {}
-    for position in positions:
-        positions_by_symbol.setdefault(position.get("chartSymbol"), []).append(position)
+    for index, position in enumerate(positions):
+        if position.get("entryTimeMs") is not None:
+            positions_by_symbol.setdefault(position.get("chartSymbol"), []).append((index, position))
+    fills_by_symbol = {}
     for fill in fills or []:
-        candidates = []
-        fill_time = fill.get("timeMs")
-        if fill_time is None:
-            continue
-        for position in positions_by_symbol.get(fill.get("chartSymbol"), []):
-            fill_venue = fill.get("venue")
-            position_venue = position.get("venue")
-            if fill_venue and position_venue and fill_venue != position_venue:
+        if fill.get("timeMs") is not None:
+            fills_by_symbol.setdefault(fill.get("chartSymbol"), []).append(fill)
+    for symbol, symbol_fills in fills_by_symbol.items():
+        intervals = sorted(positions_by_symbol.get(symbol, []), key=lambda item: item[1]["entryTimeMs"])
+        active = {}
+        exits = []
+        next_interval = 0
+        for fill in sorted(symbol_fills, key=lambda item: item["timeMs"]):
+            fill_time = fill["timeMs"]
+            while next_interval < len(intervals) and intervals[next_interval][1]["entryTimeMs"] - FILL_MATCH_PAD_MS <= fill_time:
+                index, position = intervals[next_interval]
+                exit_ms = position.get("exitTimeMs") or now_ms
+                active[index] = position
+                heapq.heappush(exits, (exit_ms + FILL_MATCH_PAD_MS, index))
+                next_interval += 1
+            while exits and exits[0][0] < fill_time:
+                _, index = heapq.heappop(exits)
+                active.pop(index, None)
+            candidates = []
+            for index, position in active.items():
+                fill_venue = fill.get("venue")
+                position_venue = position.get("venue")
+                if fill_venue and position_venue and fill_venue != position_venue:
+                    continue
+                role = classify_fill_role(fill, position)
+                if role:
+                    strictly_inside = position["entryTimeMs"] <= fill_time <= (position.get("exitTimeMs") or now_ms)
+                    candidates.append((position, role, strictly_inside, index))
+            strict_candidates = [item for item in candidates if item[2]]
+            eligible = strict_candidates or candidates
+            if not eligible:
                 continue
-            entry_ms = position.get("entryTimeMs")
-            if entry_ms is None:
-                continue
-            exit_ms = position.get("exitTimeMs") or now_ms
-            if fill_time < entry_ms - FILL_MATCH_PAD_MS:
-                continue
-            if fill_time > exit_ms + FILL_MATCH_PAD_MS:
-                continue
-            role = classify_fill_role(fill, position)
-            if not role:
-                continue
-            strictly_inside = entry_ms <= fill_time <= exit_ms
-            candidates.append((position, role, strictly_inside))
-        strict_candidates = [item for item in candidates if item[2]]
-        eligible = strict_candidates or candidates
-        if not eligible:
-            continue
-        chosen, role, _ = max(eligible, key=lambda item: item[0]["entryTimeMs"])
-        chosen_key = (chosen.get("venue"), chosen["positionId"])
-        if chosen_key in grouped:
+            # Preserve the old latest-entry rule and original-order tie break.
+            chosen, role, _, _ = max(eligible, key=lambda item: (item[0]["entryTimeMs"], -item[3]))
+            chosen_key = (chosen.get("venue"), chosen["positionId"])
             grouped[chosen_key].append({**fill, "role": role})
 
     assigned = {}

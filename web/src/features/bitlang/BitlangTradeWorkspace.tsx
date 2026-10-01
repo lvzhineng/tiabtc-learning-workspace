@@ -36,6 +36,7 @@ import {
 import { BitlangDashboardWorkspace } from './BitlangDashboardWorkspace';
 import { BitlangTradeChart } from './BitlangTradeChart';
 import { BitlangTradePanel } from './BitlangTradePanel';
+import { ReviewQueueButton } from '@/features/review-workspace/ReviewQueueButton';
 import { writeLocalUiState } from '@/ui/persistence/local-ui-state';
 import {
   BITLANG_UI_STORAGE_KEY,
@@ -588,6 +589,9 @@ export function BitlangTradeWorkspace({
             />
           </label>
           <div className="review-filter-chips">
+            <ReviewQueueButton noNote={noNote} noTag={noTag} onChange={(enabled) => {
+              setNoNote(enabled); setNoTag(enabled);
+            }} />
             <button
               type="button"
               className={direction === '多' ? 'active' : ''}
@@ -943,6 +947,7 @@ export function BitlangTradeWorkspace({
               </header>
 
               <BitlangTradeChart
+                tagNames={selectedTrade.tagIds.map((id) => tags.find((tag) => tag.id === id)?.name || '').filter(Boolean)}
                 key={`${selectedTrade.id}:${bybitSymbol(selectedTrade.instrument)}:${effectiveTimeframe}`}
                 trade={selectedTrade}
                 timeframe={effectiveTimeframe}

@@ -8,6 +8,8 @@ import {
 } from '@/domain/timeframe';
 import type { Candlestick } from '@/domain/candle';
 import type { ReplayState } from '@/features/replay/replay-state';
+import { mergeCandleWindow } from '@/chart/candle-retention';
+import { getPrevCursorTimeMs } from '@/features/replay/free-replay-logic';
 import {
   createCandleEdgeLoadGuard,
   recordEarlierCandleLoad,
@@ -29,36 +31,8 @@ type CandleWorkspaceData = {
   loadLater: () => void;
   retryLoad: () => void;
   prefetchFuture: () => Promise<number>;
+  previousReplayCursor: () => Promise<number | null>;
 };
-
-function mergeCandles(
-  current: Candlestick[],
-  incoming: Candlestick[],
-  direction: 'before' | 'after'
-): Candlestick[] {
-  if (incoming.length === 0) return current;
-  if (current.length === 0) return incoming;
-  const currentFirst = current[0].timestampMs;
-  const currentLast = current[current.length - 1].timestampMs;
-  const incomingFirst = incoming[0].timestampMs;
-  const incomingLast = incoming[incoming.length - 1].timestampMs;
-  if (direction === 'after' && incomingFirst > currentLast) {
-    return [...current, ...incoming];
-  }
-  if (direction === 'before' && incomingLast < currentFirst) {
-    return [...incoming, ...current];
-  }
-  const existingTimestamps = new Set(
-    current.map((candle) => candle.timestampMs)
-  );
-  const fresh = incoming.filter(
-    (candle) => !existingTimestamps.has(candle.timestampMs)
-  );
-  if (fresh.length === 0) return current;
-  return direction === 'before'
-    ? [...fresh, ...current]
-    : [...current, ...fresh];
-}
 
 export function useCandleWorkspaceData(
   symbol: string,
@@ -87,6 +61,8 @@ export function useCandleWorkspaceData(
   const edgeLoadGuardRef = useRef(createCandleEdgeLoadGuard());
   const contextKeyRef = useRef('');
   const contextRevisionRef = useRef(0);
+  const replayStateRef = useRef(replayState);
+  replayStateRef.current = replayState;
 
   const replayMode =
     replayState.status === 'idle' ? 'live' : replayState.context.mode;
@@ -240,7 +216,7 @@ export function useCandleWorkspaceData(
           batch.candles,
           Boolean(batch.warning)
         );
-        setCandles((current) => mergeCandles(current, batch.candles, 'before'));
+        setCandles((current) => mergeCandleWindow(current, batch.candles, 'before'));
         if (batch.warning) setOfflineWarning(batch.warning);
         setError(null);
       })
@@ -308,7 +284,7 @@ export function useCandleWorkspaceData(
           batch.candles,
           Boolean(batch.warning)
         );
-        setCandles((current) => mergeCandles(current, batch.candles, 'after'));
+        setCandles((current) => mergeCandleWindow(current, batch.candles, 'after'));
         if (batch.warning) setOfflineWarning(batch.warning);
         setError(null);
       })
@@ -388,7 +364,8 @@ export function useCandleWorkspaceData(
           return -2;
         }
         setCandles((current) =>
-          mergeCandles(current, batch.candles, 'after')
+          mergeCandleWindow(current, batch.candles, 'after',
+            replayStateRef.current.status === 'idle' ? null : replayStateRef.current.cursorTimeMs)
         );
         if (batch.warning) setOfflineWarning(batch.warning);
         setError(null);
@@ -417,6 +394,38 @@ export function useCandleWorkspaceData(
     return request;
   }, [candles, symbol, timeframe, market, fetchLaterCandles]);
 
+  const previousReplayCursor = useCallback(async (): Promise<number | null> => {
+    const replay = replayStateRef.current;
+    if (loading || replay.status === 'idle' || !candles.length) return null;
+    const firstCompletion = candles[0].timestampMs + TIMEFRAME_SECONDS_MAP[timeframe] * 1000;
+    if (replay.cursorTimeMs > firstCompletion || replay.cursorTimeMs <= replay.startTimeMs) {
+      return getPrevCursorTimeMs(candles, replay.cursorTimeMs, replay.startTimeMs, timeframe);
+    }
+    // Rewind at an evicted edge must reload history instead of jumping to start.
+    if (earlierRequestRef.current) return null;
+    const controller = new AbortController();
+    const revision = contextRevisionRef.current;
+    earlierRequestRef.current = controller;
+    setIsLoadingEarlier(true);
+    try {
+      const batch = await fetchEarlierCandles(symbol, timeframe, candles[0].timestampMs, 1000, controller.signal);
+      if (controller.signal.aborted || contextRevisionRef.current !== revision || !batch.candles.length) return null;
+      const merged = mergeCandleWindow(candles, batch.candles, 'before', replay.cursorTimeMs);
+      setCandles((current) => mergeCandleWindow(current, batch.candles, 'before', replayStateRef.current.status === 'idle' ? null : replayStateRef.current.cursorTimeMs));
+      if (batch.warning) setOfflineWarning(batch.warning);
+      setError(null);
+      return getPrevCursorTimeMs(merged, replay.cursorTimeMs, replay.startTimeMs, timeframe);
+    } catch (cause) {
+      if (!controller.signal.aborted) setError(cause instanceof Error ? cause.message : '加载回放历史失败');
+      return null;
+    } finally {
+      if (earlierRequestRef.current === controller) {
+        earlierRequestRef.current = null;
+        setIsLoadingEarlier(false);
+      }
+    }
+  }, [candles, fetchEarlierCandles, loading, symbol, timeframe]);
+
   return {
     candles,
     coverage,
@@ -429,5 +438,6 @@ export function useCandleWorkspaceData(
     loadLater,
     retryLoad,
     prefetchFuture,
+    previousReplayCursor,
   };
 }

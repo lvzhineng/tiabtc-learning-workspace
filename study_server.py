@@ -25,6 +25,8 @@ from gate_cfd_provider import CFD_SYMBOLS, GateCfdMarketDataProvider
 from cfd_replay_data import CfdReplayData
 from market_data_provider import CcxtBybitMarketDataProvider
 from position_fill_assignment import assign_fills_to_positions
+from position_review_reader import read_positions
+from performance_metrics import performance_snapshot
 import video_catalog
 import workspace_config
 from workspace_schema import WORKSPACE_TABLES_SQL
@@ -1993,23 +1995,6 @@ def _upsert_position_fill(connection, fill, synced_at):
     )
 
 
-def _fill_from_row(row):
-    return {
-        "venue": row["venue"] if "venue" in row.keys() else None,
-        "execId": row["exec_id"],
-        "orderId": row["order_id"],
-        "chartSymbol": row["chart_symbol"],
-        "unifiedSymbol": row["unified_symbol"],
-        "side": row["side"],
-        "tradeSide": row["trade_side"],
-        "price": row["price"],
-        "quantity": row["quantity"],
-        "pnl": row["pnl"],
-        "fee": row["fee"],
-        "timeMs": row["time_ms"],
-    }
-
-
 def _delete_unannotated_stale_open_positions(connection, venue, active_position_ids):
     stale_open = connection.execute(
         """SELECT position_id FROM exchange_positions
@@ -2691,70 +2676,18 @@ def delete_bitlang_drawings(query):
 
 
 def _read_position_review(connection):
-    rows = connection.execute(
-        """SELECT p.*, n.note,
-                  GROUP_CONCAT(m.tag_id) AS tag_ids
-           FROM exchange_positions p
-           LEFT JOIN position_notes n
-             ON n.venue = p.venue AND n.position_id = p.position_id
-           LEFT JOIN position_tag_map m
-             ON m.venue = p.venue AND m.position_id = p.position_id
-           WHERE p.status <> 'stale'
-           GROUP BY p.venue, p.position_id
-           ORDER BY COALESCE(p.exit_time_ms, p.entry_time_ms) DESC"""
-    ).fetchall()
-    fill_rows = connection.execute(
-        """SELECT venue, exec_id, order_id, chart_symbol, unified_symbol, side, trade_side,
-                  price, quantity, pnl, fee, time_ms
-           FROM position_fills
-           ORDER BY time_ms ASC"""
-    ).fetchall()
-    positions = []
-    for row in rows:
-        tag_ids = []
-        if row["tag_ids"]:
-            tag_ids = [int(item) for item in str(row["tag_ids"]).split(",") if item]
-        positions.append(
-            {
-                "venue": row["venue"],
-                "positionId": row["position_id"],
-                "unifiedSymbol": row["unified_symbol"],
-                "chartSymbol": row["chart_symbol"],
-                "side": row["side"],
-                "status": row["status"],
-                "entryPrice": row["entry_price"],
-                "exitPrice": row["exit_price"],
-                "contracts": row["contracts"],
-                "leverage": row["leverage"],
-                "marginMode": row["margin_mode"],
-                "hedged": bool(row["hedged"]),
-                "realizedPnl": row["realized_pnl"],
-                "netPnl": row["net_pnl"],
-                "funding": row["funding"],
-                "openFee": row["open_fee"],
-                "closeFee": row["close_fee"],
-                "entryTimeMs": row["entry_time_ms"],
-                "exitTimeMs": row["exit_time_ms"],
-                "note": row["note"] or "",
-                "tagIds": tag_ids,
-            }
-        )
-    grouped = assign_fills_to_positions(
-        positions, [_fill_from_row(row) for row in fill_rows]
-    )
-    for position in positions:
-        pos_key = (position.get("venue"), position["positionId"])
-        position["fills"] = grouped.get(pos_key, [])
-    return positions
+    return read_positions(connection)
 
 
 def list_position_review():
     with DATABASE_LOCK, database() as connection:
+        connection.execute("BEGIN")
         return _read_position_review(connection)
 
 
 def get_position_review_state():
     with DATABASE_LOCK, database() as connection:
+        connection.execute("BEGIN")
         settings = {
             row["key"]: row["value"]
             for row in connection.execute(
@@ -3263,6 +3196,8 @@ class StudyHandler(BaseHTTPRequestHandler):
     def do_GET(self):
         parsed = urlparse(self.path)
         query = parse_qs(parsed.query)
+        if parsed.path == "/api/performance":
+            return self.send_json(HTTPStatus.OK, performance_snapshot())
         if parsed.path == "/":
             self.send_response(HTTPStatus.TEMPORARY_REDIRECT)
             self.send_header("Location", "http://127.0.0.1:3000/")

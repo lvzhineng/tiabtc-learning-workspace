@@ -21,13 +21,15 @@
 }
 
 .review-toolbar {
-  height: 44px;
+  height: auto;
+  min-height: 44px;
+  flex-wrap: wrap;
   background: var(--bg-dark-800);
   border-bottom: 1px solid var(--border-color);
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 0 12px;
+  padding: 6px 12px;
   gap: 12px;
   flex-shrink: 0;
 }
@@ -38,6 +40,7 @@
   align-items: center;
   gap: 8px;
   min-width: 0;
+  flex-wrap: wrap;
 }
 
 .review-workspace-cfd .review-toolbar {
@@ -425,3 +428,5 @@
   font-size: 12px;
   pointer-events: none;
 }
+.replay-bookmarks { display: flex; align-items: center; gap: 5px; flex-wrap: wrap; }
+.replay-bookmarks select { max-width: 270px; }

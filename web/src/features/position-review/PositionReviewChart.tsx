@@ -9,8 +9,8 @@ import {
 } from '@/api/position-review-api';
 import { ChartCanvas, findNearestCandle } from '@/chart/ChartCanvas';
 import type { TradePricePoint } from '@/chart/TradePricePrimitive';
-import { captureChartPng } from '@/chart/capture-chart-png';
-import { mergeCandles } from '@/chart/merge-candles';
+import { useChartExport } from '@/chart/useChartExport';
+import { mergeCandleWindow } from '@/chart/candle-retention';
 import { formatPrice, pricePrecision } from '@/chart/chart-price';
 import {
   createCandleEdgeLoadGuard,
@@ -35,7 +35,6 @@ import {
 import { DraggableDrawingToolbar } from '@/features/drawings/DraggableDrawingToolbar';
 import { DrawingObjectTreePanel } from '@/features/drawings/DrawingObjectTreePanel';
 import { useDrawingWorkspace } from '@/features/review-workspace/useDrawingWorkspace';
-import { toast } from '@/ui/feedback/toast';
 import { FILL_KIND_LABEL, formatNumber } from './position-review-format';
 import type { ReviewPosition } from './position-review-types';
 import { positionKey, venueLabel } from './position-review-types';
@@ -52,6 +51,7 @@ export function PositionReviewChart({
   showWeekendBands,
   showOtherPositions,
   onToggleOtherPositions,
+  tagNames,
 }: {
   position: ReviewPosition;
   positions: ReviewPosition[];
@@ -62,6 +62,7 @@ export function PositionReviewChart({
   showWeekendBands: boolean;
   showOtherPositions: boolean;
   onToggleOtherPositions: () => void;
+  tagNames: string[];
 }) {
   const [hoveredCandle, setHoveredCandle] = useState<Candlestick | null>(null);
   const [loading, setLoading] = useState(true);
@@ -74,7 +75,6 @@ export function PositionReviewChart({
     positionCandleCacheVenue(position.chartSymbol, position.venue)
   );
   const [reloadToken, setReloadToken] = useState(0);
-  const [copyingChart, setCopyingChart] = useState(false);
   const chartRootRef = useRef<HTMLDivElement | null>(null);
   const failedEdgeRef = useRef<'main' | 'earlier' | 'later' | null>(null);
   const earlierRequestRef = useRef<AbortController | null>(null);
@@ -137,36 +137,15 @@ export function PositionReviewChart({
     (drawing) => drawing.id === selectedDrawingId
   );
 
-  const copyChart = useCallback(async () => {
-    if (!chartRootRef.current || copyingChart) return;
-    if (!navigator.clipboard?.write || typeof ClipboardItem === 'undefined') {
-      toast.error('当前浏览器不支持复制图片到剪贴板');
-      return;
-    }
-    setCopyingChart(true);
-    try {
-      const png = captureChartPng(chartRootRef.current, themeMode, {
-        symbol,
-        timeframe: TIMEFRAME_DISPLAY_MAP[timeframe],
-        source:
-          candleVenue === 'bitget'
-            ? 'Bitget'
-            : candleVenue === 'gate'
-              ? 'Gate'
-              : 'Bybit',
-      });
-      await navigator.clipboard.write([
-        new ClipboardItem({ 'image/png': png }),
-      ]);
-      toast.success('K 线图已复制到剪贴板');
-    } catch (cause) {
-      toast.error(
-        `复制图表失败: ${cause instanceof Error ? cause.message : '浏览器拒绝了剪贴板操作'}`
-      );
-    } finally {
-      setCopyingChart(false);
-    }
-  }, [candleVenue, copyingChart, symbol, themeMode, timeframe]);
+  const { copyingChart, exportingCard, copyChart, exportCard } = useChartExport(chartRootRef, themeMode, {
+    symbol, timeframe: TIMEFRAME_DISPLAY_MAP[timeframe],
+    source: candleVenue === 'bitget' ? 'Bitget' : candleVenue === 'gate' ? 'Gate' : 'Bybit',
+  }, {
+    title: `${venueLabel(position.venue)} ${symbol} 仓位复盘`,
+    details: [position.side === 'long' ? '多' : '空', `开仓 ${formatChartTime(entryTimeMs, timeframe)}`,
+      closedExitTimeMs ? `平仓 ${formatChartTime(closedExitTimeMs, timeframe)}` : '持仓中'],
+    note: position.note, tags: tagNames,
+  });
 
   useEffect(() => {
     earlierRequestRef.current?.abort();
@@ -269,7 +248,7 @@ export function PositionReviewChart({
             batch.candles,
             Boolean(batch.warning)
           );
-          setCandles((current) => mergeCandles(current, batch.candles));
+          setCandles((current) => mergeCandleWindow(current, batch.candles, 'before'));
           if (batch.warning) setWarning(batch.warning);
           setError(null);
           failedEdgeRef.current = null;
@@ -318,7 +297,7 @@ export function PositionReviewChart({
             batch.candles,
             Boolean(batch.warning)
           );
-          setCandles((current) => mergeCandles(current, batch.candles));
+          setCandles((current) => mergeCandleWindow(current, batch.candles, 'after'));
           if (batch.warning) setWarning(batch.warning);
           setError(null);
           failedEdgeRef.current = null;
@@ -490,6 +469,10 @@ export function PositionReviewChart({
         >
           {copyingChart ? <RefreshCw size={14} className="spin" /> : <Copy size={14} />}
           <span>{copyingChart ? '复制中' : '复制图表'}</span>
+        </button>
+        <button type="button" className="posrev-copy-chart posrev-export-card" onClick={() => void exportCard()}
+          disabled={exportingCard || copyingChart || displayedCandles.length === 0}>
+          {exportingCard ? '导出中…' : '导出复盘卡片'}
         </button>
       </div>
       <ChartCanvas

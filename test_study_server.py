@@ -741,6 +741,25 @@ class WorkspaceValidationTests(TemporaryWorkspaceDatabase):
 
 
 class PositionReviewStorageTests(TemporaryWorkspaceDatabase):
+    def test_reader_only_fetches_fills_in_active_venue_symbol_time_scopes(self):
+        import position_review_reader
+        with study_server.database() as connection:
+            for exec_id, venue, symbol, timestamp in [
+                ("inside", "bitget", "BTCUSDT", 1700000000000),
+                ("wrong-venue", "gate", "BTCUSDT", 1700000000000),
+                ("wrong-symbol", "bitget", "ETHUSDT", 1700000000000),
+                ("too-old", "bitget", "BTCUSDT", 1600000000000),
+            ]:
+                study_server._upsert_position_fill(connection, {
+                    "venue": venue, "execId": exec_id, "chartSymbol": symbol,
+                    "side": "buy", "tradeSide": "open", "price": 60000,
+                    "quantity": 1, "timeMs": timestamp,
+                }, "2026-08-26T12:00:00+08:00")
+        with mock.patch.object(position_review_reader, "assign_fills_to_positions", wraps=study_server.assign_fills_to_positions) as assignment:
+            state = study_server.get_position_review_state()
+        self.assertEqual([fill["execId"] for fill in assignment.call_args.args[1]], ["inside"])
+        self.assertEqual(state["positions"][0]["fills"][0]["execId"], "inside")
+
     def setUp(self):
         super().setUp()
         with study_server.DATABASE_LOCK, study_server.database() as connection:
@@ -1125,6 +1144,18 @@ class PositionReviewStorageTests(TemporaryWorkspaceDatabase):
 
 
 class PositionFillTests(unittest.TestCase):
+    def test_sweep_only_classifies_time_overlaps_for_long_history(self):
+        import position_fill_assignment
+        positions = [{"venue": "gate", "positionId": str(index), "chartSymbol": "BTCUSDT",
+                      "side": "long", "status": "closed", "entryTimeMs": index * 10000,
+                      "exitTimeMs": index * 10000 + 5000} for index in range(3000)]
+        fills = [{"venue": "gate", "execId": str(index), "chartSymbol": "BTCUSDT", "side": "buy",
+                  "tradeSide": "open", "timeMs": index * 10000 + 1000} for index in range(3000)]
+        with mock.patch.object(position_fill_assignment, "classify_fill_role", wraps=position_fill_assignment.classify_fill_role) as classify:
+            assigned = study_server.assign_fills_to_positions(positions, list(reversed(fills)))
+        self.assertEqual(classify.call_count, len(fills))
+        self.assertTrue(all(len(items) == 1 for items in assigned.values()))
+
     def test_assign_fills_open_reduce_close(self):
         positions = [
             {

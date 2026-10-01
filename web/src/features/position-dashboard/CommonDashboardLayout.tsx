@@ -53,6 +53,7 @@ export interface CommonDashboardLayoutProps {
   anchorEndMs?: number;
 
   extraHeader?: ReactNode;
+  comparisonSlot?: ReactNode;
 
   journalSlot: ReactNode;
   journalTitle?: string;
@@ -82,6 +83,7 @@ export function CommonDashboardLayout(props: CommonDashboardLayoutProps) {
     onSelectCalendarDate,
     anchorEndMs,
     extraHeader,
+    comparisonSlot,
     journalSlot,
     journalTitle = '交易反思日记流 (Trading Journal Stream)',
     journalSubtitle = '入场依据与心得沉淀',
@@ -168,6 +170,7 @@ export function CommonDashboardLayout(props: CommonDashboardLayoutProps) {
           {extraHeader}
         </div>
       </header>
+      {comparisonSlot}
 
       {/* 1. 顶部 KPI 卡片指标网格 */}
       <section className="posdash-kpi-grid">

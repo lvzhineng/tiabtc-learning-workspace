@@ -36,6 +36,7 @@ import type {
 import { ChartDrawingOverlay } from '@/features/drawings/ChartDrawingOverlay';
 import { UsSessionBandsOverlay } from '@/chart/UsSessionBandsOverlay';
 import { candlePriceFormat, formatPrice } from './chart-price';
+import { preserveCandleViewport } from './candle-retention';
 import { TradePricePrimitive, type TradePricePoint } from './TradePricePrimitive';
 
 interface ChartCanvasProps {
@@ -830,11 +831,6 @@ export const ChartCanvas = memo(function ChartCanvas({
 
     const prevLogicalRange = chart.timeScale().getVisibleLogicalRange();
     const firstTimestamp = firstCandle.timestampMs;
-    const isPrepended =
-      prevFirstTimestampRef.current !== null &&
-      firstTimestamp < prevFirstTimestampRef.current &&
-      sortedData.length > prevBarsCountRef.current;
-    const addedCount = sortedData.length - prevBarsCountRef.current;
 
     // Lightweight Charts briefly exposes an auto-fitted range during setData.
     // It is not a user viewport change and must not trigger edge loading or
@@ -863,17 +859,9 @@ export const ChartCanvas = memo(function ChartCanvas({
       } else {
         applyRightAlignedViewport(sortedData.length);
       }
-    } else if (isPrepended && prevLogicalRange && addedCount > 0) {
-      // If prepended earlier candles, adjust logical range so view doesn't jump
-      setProgrammaticVisibleLogicalRange(chart, {
-        from: prevLogicalRange.from + addedCount,
-        to: prevLogicalRange.to + addedCount,
-      });
     } else if (prevLogicalRange) {
-      // A trailing refresh can revise several already-cached D/W/4h bars
-      // without changing the time range. Full setData is required for those
-      // historical bars, but the user's viewport should not move.
-      setProgrammaticVisibleLogicalRange(chart, prevLogicalRange);
+      setProgrammaticVisibleLogicalRange(chart,
+        preserveCandleViewport(previousCandles, candles, prevLogicalRange));
     }
 
     prevBarsCountRef.current = sortedData.length;

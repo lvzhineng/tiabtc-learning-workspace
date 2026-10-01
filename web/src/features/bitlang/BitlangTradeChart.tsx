@@ -14,8 +14,8 @@ import {
   sliceCachedCandleWindow,
 } from '@/api/candle-window-cache';
 import { ChartCanvas } from '@/chart/ChartCanvas';
-import { captureChartPng } from '@/chart/capture-chart-png';
-import { mergeCandles } from '@/chart/merge-candles';
+import { useChartExport } from '@/chart/useChartExport';
+import { mergeCandleWindow } from '@/chart/candle-retention';
 import { formatPrice, pricePrecision } from '@/chart/chart-price';
 import {
   createCandleEdgeLoadGuard,
@@ -35,14 +35,13 @@ import { TIMEFRAME_DISPLAY_MAP, type ReviewTimeframe } from '@/domain/timeframe'
 import { DraggableDrawingToolbar } from '@/features/drawings/DraggableDrawingToolbar';
 import { DrawingObjectTreePanel } from '@/features/drawings/DrawingObjectTreePanel';
 import { useDrawingWorkspace } from '@/features/review-workspace/useDrawingWorkspace';
-import { toast } from '@/ui/feedback/toast';
 import {
   bybitSymbol,
   formatNumber,
   tradeEntryMs,
   tradeExitMs,
 } from './bitlang-format';
-import type { BitlangTrade } from './bitlang-types';
+import type { AnnotatedBitlangTrade, BitlangTrade } from './bitlang-types';
 
 export function BitlangTradeChart({
   trade,
@@ -51,13 +50,15 @@ export function BitlangTradeChart({
   focusRevision,
   sessionBands,
   showWeekendBands,
+  tagNames,
 }: {
-  trade: BitlangTrade;
+  trade: AnnotatedBitlangTrade;
   timeframe: ReviewTimeframe;
   themeMode: 'dark' | 'light';
   focusRevision: number;
   sessionBands: TradingSession[];
   showWeekendBands: boolean;
+  tagNames: string[];
 }) {
   const [hoveredCandle, setHoveredCandle] = useState<Candlestick | null>(null);
   const [loading, setLoading] = useState(true);
@@ -67,7 +68,6 @@ export function BitlangTradeChart({
   const [error, setError] = useState<string | null>(null);
   const [warning, setWarning] = useState<string | null>(null);
   const [reloadToken, setReloadToken] = useState(0);
-  const [copyingChart, setCopyingChart] = useState(false);
   const chartRootRef = useRef<HTMLDivElement | null>(null);
   const failedEdgeRef = useRef<'main' | 'earlier' | 'later' | null>(null);
   const earlierRequestRef = useRef<AbortController | null>(null);
@@ -120,31 +120,13 @@ export function BitlangTradeChart({
     (drawing) => drawing.id === selectedDrawingId
   );
 
-  const copyChart = useCallback(async () => {
-    if (!chartRootRef.current || copyingChart) return;
-    if (!navigator.clipboard?.write || typeof ClipboardItem === 'undefined') {
-      toast.error('当前浏览器不支持复制图片到剪贴板');
-      return;
-    }
-    setCopyingChart(true);
-    try {
-      const png = captureChartPng(chartRootRef.current, themeMode, {
-        symbol,
-        timeframe: TIMEFRAME_DISPLAY_MAP[timeframe],
-        source: 'Bybit',
-      });
-      await navigator.clipboard.write([
-        new ClipboardItem({ 'image/png': png }),
-      ]);
-      toast.success('K 线图已复制到剪贴板');
-    } catch (cause) {
-      toast.error(
-        `复制图表失败: ${cause instanceof Error ? cause.message : '浏览器拒绝了剪贴板操作'}`
-      );
-    } finally {
-      setCopyingChart(false);
-    }
-  }, [copyingChart, symbol, themeMode, timeframe]);
+  const { copyingChart, exportingCard, copyChart, exportCard } = useChartExport(chartRootRef, themeMode, {
+    symbol, timeframe: TIMEFRAME_DISPLAY_MAP[timeframe], source: 'Bybit',
+  }, {
+    title: `bit浪浪 ${symbol} 第 ${trade.sequence} 笔交易复盘`,
+    details: [trade.direction, `开仓 ${formatChartTime(entryTimeMs, timeframe)}`, `平仓 ${formatChartTime(exitTimeMs, timeframe)}`],
+    note: trade.note, tags: tagNames, sourceNote: trade.sourceNote,
+  });
 
   useEffect(() => {
     earlierRequestRef.current?.abort();
@@ -258,7 +240,7 @@ export function BitlangTradeChart({
             batch.candles,
             Boolean(batch.warning)
           );
-          setCandles((current) => mergeCandles(current, batch.candles));
+          setCandles((current) => mergeCandleWindow(current, batch.candles, 'before'));
           if (batch.warning) setWarning(batch.warning);
           setError(null);
           failedEdgeRef.current = null;
@@ -316,7 +298,7 @@ export function BitlangTradeChart({
             batch.candles,
             Boolean(batch.warning)
           );
-          setCandles((current) => mergeCandles(current, batch.candles));
+          setCandles((current) => mergeCandleWindow(current, batch.candles, 'after'));
           if (batch.warning) setWarning(batch.warning);
           setError(null);
           failedEdgeRef.current = null;
@@ -427,6 +409,10 @@ export function BitlangTradeChart({
       >
         {copyingChart ? <RefreshCw size={14} className="spin" /> : <Copy size={14} />}
         <span>{copyingChart ? '复制中' : '复制图表'}</span>
+      </button>
+      <button type="button" className="posrev-copy-chart posrev-export-card" onClick={() => void exportCard()}
+        disabled={exportingCard || copyingChart || displayedCandles.length === 0}>
+        {exportingCard ? '导出中…' : '导出复盘卡片'}
       </button>
       <ChartCanvas
         candles={displayedCandles}
