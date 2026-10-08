@@ -16,6 +16,7 @@ interface Point {
 }
 
 interface Props {
+  currency?: 'USDT' | 'USD';
   positions: ReviewPosition[];
 }
 
@@ -85,7 +86,7 @@ function formatShortDate(timestampMs: number): string {
   }).format(d).replace(/\//g, '-');
 }
 
-export function EquityCurveChart({ positions }: Props) {
+export function EquityCurveChart({ positions, currency = 'USDT' }: Props) {
   const [hoveredPoint, setHoveredPoint] = useState<Point | null>(null);
 
   const { points, maxAth, maxDrawdown, totalPnl, sampleCount, minVal, maxVal, yTicks } = useMemo(() => {
@@ -419,7 +420,7 @@ export function EquityCurveChart({ positions }: Props) {
               }`}
             >
               {hoveredPoint.pnl >= 0 ? '+' : ''}
-              {hoveredPoint.pnl.toFixed(2)} USDT
+              {hoveredPoint.pnl.toFixed(2)} {currency}
             </span>
           </div>
 
@@ -431,7 +432,7 @@ export function EquityCurveChart({ positions }: Props) {
               }`}
             >
               {hoveredPoint.cumulative >= 0 ? '+' : ''}
-              {hoveredPoint.cumulative.toFixed(2)} USDT
+              {hoveredPoint.cumulative.toFixed(2)} {currency}
             </span>
           </div>
         </div>
@@ -446,7 +447,7 @@ export function EquityCurveChart({ positions }: Props) {
           <span className="posdash-summary-val cyan-accent">
             <TrendingUp size={13} />
             {maxAth >= 0 ? '+' : ''}
-            {maxAth.toFixed(2)} USDT
+            {maxAth.toFixed(2)} {currency}
           </span>
         </div>
 
@@ -459,7 +460,7 @@ export function EquityCurveChart({ positions }: Props) {
           </span>
           <span className="posdash-summary-val loss">
             <TrendingDown size={13} />
-            -{maxDrawdown.toFixed(2)} USDT
+            -{maxDrawdown.toFixed(2)} {currency}
           </span>
         </div>
 
@@ -468,7 +469,7 @@ export function EquityCurveChart({ positions }: Props) {
             当前净值
           </span>
           <span className={`posdash-summary-val ${totalPnl >= 0 ? 'cyan-accent' : 'loss'}`}>
-            {totalPnl >= 0 ? '+' : ''}{totalPnl.toFixed(2)} USDT
+            {totalPnl >= 0 ? '+' : ''}{totalPnl.toFixed(2)} {currency}
           </span>
         </div>
 

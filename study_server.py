@@ -21,7 +21,8 @@ from bitget_position_provider import (
     BitgetUtaPositionProvider,
 )
 from gate_position_provider import GateUsdtPositionProvider
-from gate_cfd_provider import CFD_SYMBOLS, GateCfdMarketDataProvider
+from gate_cfd_provider import CFD_SYMBOLS, GateCfdMarketDataProvider, validate_cfd_position_scope
+from gate_cfd_position_provider import GateCfdPositionProvider
 from cfd_replay_data import CfdReplayData
 from market_data_provider import CcxtBybitMarketDataProvider
 from position_fill_assignment import assign_fills_to_positions
@@ -39,7 +40,7 @@ DATABASE_FILE = DEFAULT_DATABASE_FILE
 SEED_DATABASE_FILE = ROOT / "data" / "tiabtc-review-seed.sqlite"
 HOST = "127.0.0.1"
 PORT = 8765
-API_VERSION = 14
+API_VERSION = 15
 VALID_STATUSES = {"unlearned", "learning", "learned"}
 VALID_SYMBOLS = {"BTCUSDT", "ETHUSDT", "SOLUSDT", "BNBUSDT", "DOGEUSDT", "XRPUSDT"}
 VALID_INTERVALS = {"1", "5", "15", "60", "240", "D", "W"}
@@ -1479,7 +1480,9 @@ def _validate_position_drawing_scope(venue, position_id, symbol, interval):
         raise ValueError("交易所无效")
     if not cleaned_position_id or len(cleaned_position_id) > 80:
         raise ValueError("仓位 ID 无效")
-    if not re.match(r"^[A-Z0-9]{3,20}USDT$", cleaned_symbol):
+    if cleaned_venue == "gate-cfd":
+        validate_cfd_position_scope(cleaned_symbol, cleaned_interval)
+    elif not re.match(r"^[A-Z0-9]{3,20}USDT$", cleaned_symbol):
         raise ValueError("仓位合约格式无效")
     if cleaned_interval not in VALID_INTERVALS:
         raise ValueError("不支持该 K 线周期")
@@ -1754,15 +1757,17 @@ def load_bitget_credentials():
     }
 
 
-def gate_credentials_configured():
+def gate_credentials_configured(venue="gate"):
     return bool(
-        _app_setting("gate_api_key_enc") and _app_setting("gate_api_secret_enc")
+        _app_setting(f"{venue}_api_key_enc") and _app_setting(f"{venue}_api_secret_enc")
     )
 
 
-def save_gate_credentials(payload):
+def save_gate_credentials(payload, venue="gate"):
     if not isinstance(payload, dict):
         raise ValueError("密钥格式无效")
+    if venue == "gate-cfd" and payload.get("reuseGateCredentials") is True:
+        payload = load_gate_credentials("gate")
     api_key = str(payload.get("apiKey") or "").strip()
     secret = str(payload.get("secret") or "").strip()
     if not api_key or not secret:
@@ -1770,8 +1775,8 @@ def save_gate_credentials(payload):
     if len(api_key) > 200 or len(secret) > 200:
         raise ValueError("密钥长度超出限制")
     encrypted = (
-        ("gate_api_key_enc", _encrypt_secret(api_key)),
-        ("gate_api_secret_enc", _encrypt_secret(secret)),
+        (f"{venue}_api_key_enc", _encrypt_secret(api_key)),
+        (f"{venue}_api_secret_enc", _encrypt_secret(secret)),
     )
     with CREDENTIAL_LOCK, DATABASE_LOCK, database() as connection:
         connection.executemany(
@@ -1779,19 +1784,19 @@ def save_gate_credentials(payload):
             "ON CONFLICT(key) DO UPDATE SET value = excluded.value",
             encrypted,
         )
-    _invalidate_venue_provider("gate")
-    return {"configured": True, "venue": "gate"}
+    _invalidate_venue_provider(venue)
+    return {"configured": True, "venue": venue}
 
 
-def load_gate_credentials():
+def load_gate_credentials(venue="gate"):
     with DATABASE_LOCK, database() as connection:
         rows = connection.execute(
             "SELECT key, value FROM app_settings WHERE key IN (?, ?)",
-            ("gate_api_key_enc", "gate_api_secret_enc"),
+            (f"{venue}_api_key_enc", f"{venue}_api_secret_enc"),
         ).fetchall()
     values = {row["key"]: row["value"] for row in rows}
-    api_key = values.get("gate_api_key_enc")
-    secret = values.get("gate_api_secret_enc")
+    api_key = values.get(f"{venue}_api_key_enc")
+    secret = values.get(f"{venue}_api_secret_enc")
     if not api_key or not secret:
         raise ValueError("尚未配置 Gate 只读 API")
     return {
@@ -1810,6 +1815,8 @@ def save_position_review_credentials(payload):
         return result
     if venue == "gate":
         return save_gate_credentials(payload)
+    if venue == "gate-cfd":
+        return save_gate_credentials(payload, venue)
     raise ValueError("不支持的交易所")
 
 
@@ -2130,7 +2137,9 @@ def _fetch_closed_and_fills(fetch_closed, fetch_fills, now_ms):
 def _persist_venue_sync(connection, venue, closed, opened, fills, fills_ok, synced_at, balance_key, balance_total):
     open_ids = {item["positionId"] for item in opened}
     for position in closed:
-        _migrate_open_annotations(connection, position, closed)
+        # CFD uses stable broker IDs; time matching could merge distinct MT5 positions.
+        if venue != "gate-cfd":
+            _migrate_open_annotations(connection, position, closed)
         _upsert_exchange_position(connection, position, synced_at)
     _delete_unannotated_stale_open_positions(connection, venue, open_ids)
     for position in opened:
@@ -2175,7 +2184,8 @@ def _sync_gate_snapshot(now_ms):
 def _sync_position_review():
     bitget_ready = bitget_credentials_configured()
     gate_ready = gate_credentials_configured()
-    if not bitget_ready and not gate_ready:
+    cfd_ready = gate_credentials_configured("gate-cfd")
+    if not bitget_ready and not gate_ready and not cfd_ready:
         raise ValueError("尚未配置只读 API")
     now_ms = int(time.time() * 1000)
     snapshots = []
@@ -2214,6 +2224,19 @@ def _sync_position_review():
         except RuntimeError as error:
             sync_errors.append(f"Gate: {error}")
             print(f"[position-review] Gate 同步失败：{error}", flush=True)
+    if cfd_ready:
+        try:
+            provider = GateCfdPositionProvider(load_gate_credentials("gate-cfd"))
+            closed = provider.fetch_closed_positions(now_ms)
+            opened = provider.fetch_open_positions()
+            balance = provider.fetch_balance()
+            snapshots.append({
+                "venue": "gate-cfd", "closed": closed, "opened": opened,
+                "fills": [], "fillsOk": False, "balance": balance,
+                "balanceKey": "gate-cfd_usd_total",
+            })
+        except RuntimeError as error:
+            sync_errors.append(f"Gate CFD: {error}")
     if not snapshots and sync_errors:
         raise RuntimeError("；".join(sync_errors))
     synced_at = datetime.now().astimezone().isoformat()
@@ -2240,18 +2263,10 @@ def _sync_position_review():
         )
     warning = "；".join(sync_errors) if sync_errors else None
     return {
-        "configured": True,
-        "syncedAt": synced_at,
+        **get_position_review_state(),
         "closedCount": closed_count,
         "openCount": open_count,
-        "balance": _combined_balance([item["balance"] for item in snapshots]),
-        "venues": {
-            "bitget": bitget_ready,
-            "gate": gate_ready,
-        },
         "warning": warning,
-        "positions": list_position_review(),
-        "tags": list_position_tags(),
     }
 
 
@@ -2692,7 +2707,7 @@ def get_position_review_state():
             row["key"]: row["value"]
             for row in connection.execute(
                 """SELECT key, value FROM app_settings
-                   WHERE key IN (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                   WHERE key IN (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                 (
                     "bitget_api_key_enc",
                     "bitget_api_secret_enc",
@@ -2704,6 +2719,10 @@ def get_position_review_state():
                     "gate_last_synced_at",
                     "gate_usdt_total",
                     "position_review_last_synced_at",
+                    "gate-cfd_api_key_enc",
+                    "gate-cfd_api_secret_enc",
+                    "gate-cfd_last_synced_at",
+                    "gate-cfd_usd_total",
                 ),
             ).fetchall()
         }
@@ -2728,6 +2747,8 @@ def get_position_review_state():
     )
     bitget_total = _parse_usdt(settings.get("bitget_usdt_total"))
     gate_total = _parse_usdt(settings.get("gate_usdt_total"))
+    cfd_configured = bool(settings.get("gate-cfd_api_key_enc") and settings.get("gate-cfd_api_secret_enc"))
+    cfd_total = _parse_usdt(settings.get("gate-cfd_usd_total"))
     combined = _combined_balance(
         [
             {"total": bitget_total} if bitget_total is not None else {},
@@ -2735,20 +2756,23 @@ def get_position_review_state():
         ]
     )
     return {
-        "configured": bitget_configured or gate_configured,
+        "configured": bitget_configured or gate_configured or cfd_configured,
         "venues": {
             "bitget": bitget_configured,
             "gate": gate_configured,
+            "gate-cfd": cfd_configured,
         },
         "syncedAt": _later_timestamp(
             settings.get("position_review_last_synced_at"),
             settings.get("bitget_last_synced_at"),
             settings.get("gate_last_synced_at"),
+            settings.get("gate-cfd_last_synced_at"),
         ),
         "balance": combined,
         "balances": {
             "bitget": {"total": bitget_total} if bitget_total is not None else None,
             "gate": {"total": gate_total} if gate_total is not None else None,
+            "gate-cfd": {"total": cfd_total, "currency": "USD"} if cfd_total is not None else None,
         },
         "positions": positions,
         "tags": tags,
@@ -2760,6 +2784,8 @@ def resolve_position_candle_venue(symbol, preferred_venue=None):
     # 未带 venue 时仍按 Bybit 目录决定，避免把主流合约误送到本所。
     compact = str(symbol or "").strip().upper()
     preferred = str(preferred_venue or "").strip().lower()
+    if preferred == "gate-cfd":
+        return preferred
     if compact in POSITION_REVIEW_BYBIT_CANDLE_SYMBOLS:
         return "bybit"
     if preferred in POSITION_REVIEW_VENUES:
@@ -3022,7 +3048,15 @@ def load_venue_candle_range(venue, symbol, interval, start_timestamp, end_timest
 def load_position_review_candles(
     symbol, interval, entry_timestamp, exit_timestamp, preferred_venue=None
 ):
-    if not isinstance(symbol, str) or not re.fullmatch(r"[A-Z0-9]{3,20}USDT", symbol):
+    is_cfd = str(preferred_venue or "").strip().lower() == "gate-cfd"
+    if is_cfd:
+        validate_cfd_position_scope(symbol, interval)
+        with DATABASE_LOCK, database() as connection:
+            if not connection.execute(
+                "SELECT 1 FROM exchange_positions WHERE venue='gate-cfd' AND chart_symbol=? LIMIT 1", (symbol,)
+            ).fetchone():
+                raise ValueError("请先同步该 Gate CFD 品种的仓位")
+    elif not isinstance(symbol, str) or not re.fullmatch(r"[A-Z0-9]{3,20}USDT", symbol):
         raise ValueError("仓位交易对无法映射为 USDT 永续合约")
     if interval not in VALID_INTERVALS:
         raise ValueError("不支持该 K 线周期")
@@ -3037,6 +3071,11 @@ def load_position_review_candles(
     start_timestamp, end_timestamp, truncated = trade_candle_window(
         entry_timestamp, exit_timestamp, interval, now_timestamp
     )
+    if is_cfd:
+        return {
+            **CFD_REPLAY.load_position_window(symbol, interval, start_timestamp, end_timestamp, offline=get_offline_mode()),
+            "truncated": truncated, "entry": entry_timestamp, "exit": exit_timestamp,
+        }
     candle_venue = resolve_position_candle_venue(symbol, preferred_venue)
     print(
         f"[market] position-review {symbol} {interval} venue={candle_venue}",
@@ -3222,6 +3261,7 @@ class StudyHandler(BaseHTTPRequestHandler):
                         "warmCcxtMarkets",
                         "perpetualSymbolSearch",
                         "positionReview",
+                        "gateCfdPositionReview",
                         "affiliateInvites",
                         "genericVideoImport",
                     ],
@@ -3326,6 +3366,21 @@ class StudyHandler(BaseHTTPRequestHandler):
                 entry = int(query.get("entry", ["0"])[0])
                 exit_timestamp = int(query.get("exit", ["0"])[0])
                 preferred_venue = query.get("venue", [""])[0]
+                if preferred_venue == "gate-cfd" and ("before" in query or "after" in query):
+                    validate_cfd_position_scope(symbol, interval)
+                    with DATABASE_LOCK, database() as connection:
+                        if not connection.execute(
+                            "SELECT 1 FROM exchange_positions WHERE venue='gate-cfd' AND chart_symbol=? LIMIT 1", (symbol,)
+                        ).fetchone():
+                            raise ValueError("请先同步该 Gate CFD 品种的仓位")
+                    batch = CFD_REPLAY.load(
+                        symbol, interval,
+                        before=int(query["before"][0]) if "before" in query else None,
+                        after=int(query["after"][0]) if "after" in query else None,
+                        limit=int(query.get("limit", ["500"])[0]),
+                        offline=get_offline_mode(), position_symbol=True,
+                    )
+                    return self.send_json(HTTPStatus.OK, {**batch, "candleVenue": "gate-cfd"})
                 return self.send_json(
                     HTTPStatus.OK,
                     load_position_review_candles(

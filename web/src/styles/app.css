@@ -23,6 +23,45 @@ body {
   width: 100%;
 }
 
+button,
+input,
+select,
+textarea {
+  font-family: inherit;
+}
+
+/* Native controls keep their keyboard behavior and share the workspace theme. */
+select:not([multiple]):not([size]) {
+  appearance: none;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%238a95aa' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 9px center;
+  background-size: 12px;
+  padding-right: 28px;
+  text-overflow: ellipsis;
+}
+
+select option {
+  background: var(--bg-dark-800);
+  color: var(--text-primary);
+}
+
+input::placeholder,
+textarea::placeholder {
+  color: var(--text-muted);
+  opacity: 1;
+}
+
+:is(button, a, input, textarea, select, summary, [tabindex]):focus-visible {
+  outline: 2px solid var(--accent-blue);
+  outline-offset: 2px;
+}
+
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--border-active) transparent;
+}
+
 .app-shell {
   display: flex;
   flex-direction: column;
@@ -43,6 +82,7 @@ body {
 
 .app-header {
   height: var(--header-height);
+  flex-shrink: 0;
   background-color: color-mix(in srgb, var(--bg-dark-800) 88%, transparent);
   backdrop-filter: blur(10px);
   border-bottom: 1px solid var(--border-color);
@@ -90,6 +130,7 @@ body {
   border-radius: var(--radius-md);
   background: var(--bg-dark-700);
   border: 1px solid var(--border-color);
+  min-width: 0;
 }
 
 .app-nav-btn {
@@ -107,6 +148,7 @@ body {
   font-family: inherit;
   cursor: pointer;
   white-space: nowrap;
+  flex-shrink: 0;
   transition: background 0.15s ease, color 0.15s ease;
 }
 
@@ -385,7 +427,47 @@ body {
   animation: spin 0.9s linear infinite;
 }
 
-@media (max-width: 900px) {
+@media (max-width: 1100px) {
+  .app-header {
+    min-height: var(--header-height);
+    padding: 0 12px;
+    gap: 12px;
+  }
+
+  .app-title {
+    flex: 1;
+  }
+
+  .app-title-text {
+    display: none;
+  }
+
+  .app-nav {
+    flex: 1;
+    margin-left: 8px;
+    overflow-x: auto;
+  }
+
+  .app-header-actions {
+    margin-left: auto;
+    gap: 8px;
+  }
+}
+
+@media (max-width: 960px) {
+  .app-header {
+    height: auto;
+    flex-wrap: wrap;
+    padding: 8px 12px;
+    gap: 8px;
+  }
+
+  .app-title {
+    flex-basis: 100%;
+  }
+}
+
+@media (max-width: 640px) {
   .app-title-text {
     display: none;
   }
@@ -394,8 +476,8 @@ body {
     margin-left: 8px;
   }
 
-  .app-nav-btn span {
-    display: none;
+  .app-nav-btn {
+    padding: 0 9px;
   }
 
   .app-status-badge span:last-child {
@@ -403,5 +485,15 @@ body {
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
   }
 }

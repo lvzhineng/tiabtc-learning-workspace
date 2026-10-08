@@ -139,7 +139,7 @@ export function PositionReviewChart({
 
   const { copyingChart, exportingCard, copyChart, exportCard } = useChartExport(chartRootRef, themeMode, {
     symbol, timeframe: TIMEFRAME_DISPLAY_MAP[timeframe],
-    source: candleVenue === 'bitget' ? 'Bitget' : candleVenue === 'gate' ? 'Gate' : 'Bybit',
+    source: candleVenue === 'gate-cfd' ? 'Gate CFD' : candleVenue === 'bitget' ? 'Bitget' : candleVenue === 'gate' ? 'Gate' : 'Bybit',
   }, {
     title: `${venueLabel(position.venue)} ${symbol} 仓位复盘`,
     details: [position.side === 'long' ? '多' : '空', `开仓 ${formatChartTime(entryTimeMs, timeframe)}`,
@@ -476,6 +476,7 @@ export function PositionReviewChart({
         </button>
       </div>
       <ChartCanvas
+        key={position.venue === 'gate-cfd' ? 'cfd' : 'perpetual'}
         candles={displayedCandles}
         symbol={symbol}
         interval={timeframe}
@@ -509,7 +510,7 @@ export function PositionReviewChart({
         onDeleteDrawing={deleteDrawingById}
         onToggleLockDrawing={toggleLockDrawing}
         onDrawingComplete={handleDrawingComplete}
-        showVolume
+        showVolume={position.venue !== 'gate-cfd'}
         sessionBands={sessionBands}
         showWeekendBands={showWeekendBands}
       />
@@ -520,7 +521,7 @@ export function PositionReviewChart({
           <span>高 {formatPrice(hoveredCandle.high, displayedPricePrecision)}</span>
           <span>低 {formatPrice(hoveredCandle.low, displayedPricePrecision)}</span>
           <span>收 {formatPrice(hoveredCandle.close, displayedPricePrecision)}</span>
-          <span>量 {formatNumber(hoveredCandle.volume)}</span>
+          {position.venue !== 'gate-cfd' && <span>量 {formatNumber(hoveredCandle.volume)}</span>}
         </div>
       )}
       {((chartLoading && displayedCandles.length === 0) || chartError) && (

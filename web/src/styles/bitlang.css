@@ -4,7 +4,7 @@
   height: 100%;
   min-height: 0;
   display: grid;
-  grid-template-columns: 350px minmax(0, 1fr);
+  grid-template-columns: 330px minmax(0, 1fr);
   background: var(--bg-dark-900);
   color: var(--text-primary);
   position: relative;
@@ -85,18 +85,37 @@
 }
 
 .bitlang-sidebar-title {
-  height: 52px;
-  display: flex;
+  min-height: 64px;
+  height: auto;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
   align-items: center;
   padding: 8px 14px;
+  gap: 4px 8px;
   border-bottom: 1px solid var(--border-color);
   background: color-mix(in srgb, var(--bg-dark-800) 92%, var(--accent-blue) 8%);
+  flex-shrink: 0;
 }
 
 .bitlang-sidebar-title > div:first-child {
-  display: flex;
-  flex-direction: column;
+  display: contents;
   min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.bitlang-sidebar-title > div:first-child > strong {
+  grid-column: 1;
+  grid-row: 1;
+}
+
+.bitlang-sidebar-title > div:first-child > span {
+  grid-column: 1 / -1;
+  grid-row: 2;
+}
+
+.bitlang-sidebar-title > .posrev-view-switch {
+  grid-column: 2;
+  grid-row: 1;
 }
 
 .bitlang-sidebar-title strong {
@@ -115,9 +134,12 @@
 .bitlang-sidebar-filters {
   display: flex;
   flex-direction: column;
-  gap: 7px;
-  padding: 9px;
+  gap: 8px;
+  padding: 10px;
   border-bottom: 1px solid var(--border-color);
+  flex-shrink: 0;
+  max-height: 58%;
+  overflow-y: auto;
 }
 
 .bitlang-search {
@@ -129,6 +151,11 @@
   border: 1px solid var(--border-color);
   border-radius: var(--radius-sm);
   color: var(--text-muted);
+}
+
+.bitlang-search:focus-within {
+  border-color: var(--accent-blue);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent-blue) 12%, transparent);
 }
 
 .bitlang-search input,
@@ -197,6 +224,7 @@
   gap: 6px;
   padding: 6px 10px;
   border-bottom: 1px solid var(--border-color);
+  flex-shrink: 0;
 }
 
 .bitlang-progress strong {
@@ -227,6 +255,10 @@
 }
 
 .bitlang-trade-row:hover,
+.bitlang-trade-row:focus-visible {
+  outline-offset: -2px;
+}
+
 .bitlang-trade-row.active {
   background: var(--bg-dark-700);
 }
@@ -348,8 +380,8 @@
 
 .bitlang-venue-badge {
   position: absolute;
-  top: 8px;
-  right: 116px;
+  top: 40px;
+  right: 10px;
   z-index: 7;
   max-width: 46%;
   padding: 3px 8px;
@@ -525,7 +557,7 @@
   left: 10px;
   z-index: 7;
   display: flex;
-  gap: 10px;
+  gap: 4px 10px;
   padding: 5px 8px;
   border-radius: var(--radius-sm);
   background: color-mix(in srgb, var(--bg-dark-800) 88%, transparent);
@@ -533,6 +565,8 @@
   font-family: var(--font-mono);
   font-size: 11px;
   pointer-events: none;
+  max-width: calc(100% - 20px);
+  flex-wrap: wrap;
 }
 
 .bitlang-chart-status.error {
@@ -609,7 +643,7 @@
 
 @media (max-width: 1000px) {
   .bitlang-review-shell {
-    grid-template-columns: 300px minmax(0, 1fr);
+    grid-template-columns: 280px minmax(0, 1fr);
   }
 
   .bitlang-metrics {
@@ -618,5 +652,11 @@
 
   .bitlang-review-panel {
     grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 720px) {
+  .bitlang-review-shell {
+    grid-template-columns: 240px minmax(0, 1fr);
   }
 }

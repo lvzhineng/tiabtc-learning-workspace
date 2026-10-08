@@ -25,6 +25,7 @@ import {
   shouldPrefetchFuture,
 } from '@/features/replay/free-replay-logic';
 import { FreeReplayPanel } from '@/features/replay/FreeReplayPanel';
+import { RandomReplayControl } from '@/features/replay/RandomReplayControl';
 import { ReplayBookmarks } from '@/features/replay/ReplayBookmarks';
 import { DraggableDrawingToolbar } from '@/features/drawings/DraggableDrawingToolbar';
 import { DrawingObjectTreePanel } from '@/features/drawings/DrawingObjectTreePanel';
@@ -489,6 +490,8 @@ export function ChartWorkspace({
   // Replay Actions
   const handleStartReplay = (symbol: string, startTimeMs: number) => {
     setActiveSymbol(symbol);
+    setTimeframeSwitchAnchorTimeMs(null);
+    lastPositionTimeMsRef.current = startTimeMs;
     setChartFocusTimeMs(startTimeMs);
     setReplayState({
       status: 'ready',
@@ -862,34 +865,6 @@ export function ChartWorkspace({
           onSelectSymbol={handleSelectSymbol}
         />
       )}
-      {!isCfd && drawingToolbar}
-
-      {isObjectTreeOpen && (
-        <DrawingObjectTreePanel
-          drawings={allDrawings}
-          selectedDrawingId={selectedDrawingId}
-          hiddenDrawingIds={hiddenDrawingIds}
-          onSelectDrawing={setSelectedDrawingId}
-          onToggleHideDrawing={toggleHideDrawing}
-          onToggleLockDrawing={toggleLockDrawing}
-          onDeleteDrawing={deleteDrawingById}
-          onClearAllDrawings={handleClearAllDrawings}
-          onClose={toggleObjectTree}
-        />
-      )}
-
-      {!isCfd && showPaperPanel && (
-        <PaperTradingPanel
-          symbol={activeSymbol}
-          currentPrice={displayCandle?.close || 0}
-          trades={paperTrades}
-          pendingPositionParams={pendingPositionParams}
-          onClosePanel={closePaperPanel}
-          onCreateTrade={handleCreatePaperTrade}
-          onCloseTrade={handleClosePaperTrade}
-          onDeleteTrade={handleDeletePaperTrade}
-        />
-      )}
 
       {activeVideoTitle && (
         <div className="review-video-banner">
@@ -941,6 +916,15 @@ export function ChartWorkspace({
 
           <div className="ui-divider-v" />
 
+          <RandomReplayControl
+            key={`${market}:${activeSymbol}:${activeTimeframe}:${replayDataContextKey}`}
+            market={market}
+            symbol={activeSymbol}
+            timeframe={activeTimeframe}
+            disabled={loading}
+            onBegin={() => setReplayState((current) => current.status === 'idle' ? current : { ...current, status: 'paused' })}
+            onStart={handleStartReplay}
+          />
           <FreeReplayPanel
             replayState={replayState}
             activeSymbol={activeSymbol}
@@ -1022,7 +1006,32 @@ export function ChartWorkspace({
       )}
 
       <div ref={chartAreaRef} className="review-chart-area">
-        {isCfd && drawingToolbar}
+        {drawingToolbar}
+        {isObjectTreeOpen && (
+          <DrawingObjectTreePanel
+            drawings={allDrawings}
+            selectedDrawingId={selectedDrawingId}
+            hiddenDrawingIds={hiddenDrawingIds}
+            onSelectDrawing={setSelectedDrawingId}
+            onToggleHideDrawing={toggleHideDrawing}
+            onToggleLockDrawing={toggleLockDrawing}
+            onDeleteDrawing={deleteDrawingById}
+            onClearAllDrawings={handleClearAllDrawings}
+            onClose={toggleObjectTree}
+          />
+        )}
+        {!isCfd && showPaperPanel && (
+          <PaperTradingPanel
+            symbol={activeSymbol}
+            currentPrice={displayCandle?.close || 0}
+            trades={paperTrades}
+            pendingPositionParams={pendingPositionParams}
+            onClosePanel={closePaperPanel}
+            onCreateTrade={handleCreatePaperTrade}
+            onCloseTrade={handleClosePaperTrade}
+            onDeleteTrade={handleDeletePaperTrade}
+          />
+        )}
         <button
           type="button"
           className="ui-btn review-copy-chart"

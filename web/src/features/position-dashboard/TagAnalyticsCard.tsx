@@ -7,6 +7,7 @@ import {
 import { Tags } from 'lucide-react';
 
 interface Props {
+  currency?: 'USDT' | 'USD';
   positions: ReviewPosition[];
   tags: PositionTag[];
 }
@@ -24,7 +25,7 @@ interface TagStat {
   profitFactor: number | null;
 }
 
-export function TagAnalyticsCard({ positions, tags }: Props) {
+export function TagAnalyticsCard({ positions, tags, currency = 'USDT' }: Props) {
   const stats: TagStat[] = useMemo(() => {
     const byTagId = new Map<number, ReviewPosition[]>();
     const untagged: ReviewPosition[] = [];
@@ -131,7 +132,7 @@ export function TagAnalyticsCard({ positions, tags }: Props) {
                   }`}
                 >
                   {isProfit ? '+' : ''}
-                  {item.totalPnl.toFixed(2)} USDT
+                  {item.totalPnl.toFixed(2)} {currency}
                 </span>
               </div>
             </div>

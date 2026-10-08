@@ -5,7 +5,7 @@
 /* Toast System */
 .toast-container {
   position: fixed;
-  top: 16px;
+  top: calc(var(--header-height) + 12px);
   right: 16px;
   z-index: 9999;
   display: flex;
@@ -26,7 +26,7 @@
   border-radius: var(--radius-sm);
   background: var(--bg-dark-800);
   border: 1px solid var(--border-color);
-  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
+  box-shadow: var(--shadow-main);
   color: var(--text-primary);
   font-size: 13px;
   line-height: 1.4;
@@ -141,10 +141,11 @@
 .confirm-modal {
   width: 100%;
   max-width: 420px;
+  max-height: calc(100dvh - 32px);
   background: var(--bg-dark-800);
   border: 1px solid var(--border-color);
   border-radius: var(--radius-md);
-  box-shadow: 0 16px 40px rgba(0, 0, 0, 0.45);
+  box-shadow: var(--shadow-main);
   display: flex;
   flex-direction: column;
   overflow: hidden;
@@ -168,6 +169,7 @@
   justify-content: space-between;
   padding: 14px 18px;
   border-bottom: 1px solid var(--border-color);
+  flex-shrink: 0;
 }
 
 .confirm-title-wrap {
@@ -211,6 +213,8 @@
 }
 
 .confirm-body {
+  min-height: 0;
+  overflow-y: auto;
   padding: 18px;
   color: var(--text-secondary);
   font-size: 13px;
@@ -229,6 +233,7 @@
   padding: 12px 18px;
   border-top: 1px solid var(--border-color);
   background: var(--bg-dark-900, var(--bg-dark-800));
+  flex-shrink: 0;
 }
 
 .confirm-btn {

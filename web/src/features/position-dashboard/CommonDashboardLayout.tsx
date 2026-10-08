@@ -26,6 +26,7 @@ export type DashboardKpi = ReturnType<typeof summarizePositions> & {
 };
 
 export interface CommonDashboardLayoutProps {
+  currency?: 'USDT' | 'USD';
   title: string;
   subtitle: ReactNode;
 
@@ -62,6 +63,7 @@ export interface CommonDashboardLayoutProps {
 
 export function CommonDashboardLayout(props: CommonDashboardLayoutProps) {
   const {
+    currency = 'USDT',
     title,
     subtitle,
     dateRange,
@@ -85,7 +87,7 @@ export function CommonDashboardLayout(props: CommonDashboardLayoutProps) {
     extraHeader,
     comparisonSlot,
     journalSlot,
-    journalTitle = '交易反思日记流 (Trading Journal Stream)',
+    journalTitle = '交易复盘日记',
     journalSubtitle = '入场依据与心得沉淀',
   } = props;
 
@@ -103,13 +105,16 @@ export function CommonDashboardLayout(props: CommonDashboardLayoutProps) {
           </div>
         </div>
 
-        <div className="posdash-filters">
-          <div className="posdash-segmented-group">
+        {extraHeader && <div className="posdash-header-actions">{extraHeader}</div>}
+
+        <div className="posdash-filters" role="group" aria-label="看板筛选">
+          <div className="posdash-segmented-group" role="group" aria-label="统计时间范围">
             {dateRangeOptions.map((item) => (
               <button
                 key={item}
                 type="button"
                 className={`posdash-segmented-btn ${dateRange === item ? 'active' : ''}`}
+                aria-pressed={dateRange === item}
                 onClick={() => onDateRangeChange(item)}
               >
                 {dateRangeLabels[item] || item}
@@ -118,6 +123,7 @@ export function CommonDashboardLayout(props: CommonDashboardLayoutProps) {
           </div>
 
           <select
+            aria-label="看板交易对"
             value={symbolFilter}
             onChange={(e) => onSymbolFilterChange(e.target.value)}
             className="posdash-select"
@@ -130,10 +136,11 @@ export function CommonDashboardLayout(props: CommonDashboardLayoutProps) {
             ))}
           </select>
 
-          <div className="posdash-segmented-group">
+          <div className="posdash-segmented-group" role="group" aria-label="交易方向">
             <button
               type="button"
               className={`posdash-segmented-btn ${sideFilter === 'all' ? 'active' : ''}`}
+              aria-pressed={sideFilter === 'all'}
               onClick={() => onSideFilterChange('all')}
             >
               全部方向
@@ -141,6 +148,7 @@ export function CommonDashboardLayout(props: CommonDashboardLayoutProps) {
             <button
               type="button"
               className={`posdash-segmented-btn ${sideFilter === 'long' ? 'active' : ''}`}
+              aria-pressed={sideFilter === 'long'}
               onClick={() => onSideFilterChange('long')}
             >
               仅做多
@@ -148,6 +156,7 @@ export function CommonDashboardLayout(props: CommonDashboardLayoutProps) {
             <button
               type="button"
               className={`posdash-segmented-btn ${sideFilter === 'short' ? 'active' : ''}`}
+              aria-pressed={sideFilter === 'short'}
               onClick={() => onSideFilterChange('short')}
             >
               仅做空
@@ -155,6 +164,7 @@ export function CommonDashboardLayout(props: CommonDashboardLayoutProps) {
           </div>
 
           <select
+            aria-label="看板策略标签"
             value={tagFilter}
             onChange={(e) => onTagFilterChange(e.target.value)}
             className="posdash-select"
@@ -167,17 +177,15 @@ export function CommonDashboardLayout(props: CommonDashboardLayoutProps) {
             ))}
           </select>
 
-          {extraHeader}
         </div>
       </header>
-      {comparisonSlot}
 
       {/* 1. 顶部 KPI 卡片指标网格 */}
       <section className="posdash-kpi-grid">
         <div className="posdash-kpi-card">
           <div className="posdash-kpi-header">
             <span className="posdash-kpi-title" title="已平仓净盈亏累计，与收益曲线终点相同">
-              累计净盈亏 (Net PnL)
+              累计净盈亏
             </span>
             <span className={`posdash-kpi-icon-wrap ${kpi.totalPnl >= 0 ? 'profit' : 'loss'}`}>
               {kpi.totalPnl >= 0 ? <TrendingUp size={15} /> : <TrendingDown size={15} />}
@@ -186,7 +194,7 @@ export function CommonDashboardLayout(props: CommonDashboardLayoutProps) {
           <div className={`posdash-kpi-value ${kpi.totalPnl >= 0 ? 'posrev-profit' : 'posrev-loss'}`}>
             {kpi.totalPnl >= 0 ? '+' : ''}
             {kpi.totalPnl.toFixed(2)}
-            <span className="posdash-currency-unit"> USDT</span>
+            <span className="posdash-currency-unit"> {currency}</span>
           </div>
           <div className="posdash-kpi-sub">
             <span
@@ -210,7 +218,7 @@ export function CommonDashboardLayout(props: CommonDashboardLayoutProps) {
 
         <div className="posdash-kpi-card">
           <div className="posdash-kpi-header">
-            <span className="posdash-kpi-title">综合胜率 (Win Rate)</span>
+            <span className="posdash-kpi-title">综合胜率</span>
             <span className="posdash-kpi-icon-wrap neutral">
               <Percent size={15} />
             </span>
@@ -268,58 +276,61 @@ export function CommonDashboardLayout(props: CommonDashboardLayoutProps) {
 
         <div className="posdash-kpi-card">
           <div className="posdash-kpi-header">
-            <span className="posdash-kpi-title">摩擦磨损 (手续费/资金费)</span>
+            <span className="posdash-kpi-title">交易成本 · 手续费 / 资金费</span>
             <span className="posdash-kpi-icon-wrap neutral">
               <Coins size={15} />
             </span>
           </div>
           <div className="posdash-kpi-value" style={{ color: 'var(--text-secondary)' }}>
-            -{kpi.totalFee.toFixed(2)}
-            <span className="posdash-currency-unit"> USDT</span>
+            {(-Math.abs(kpi.totalFee)).toFixed(2)}
+            <span className="posdash-currency-unit"> {currency}</span>
           </div>
           <div className="posdash-kpi-sub">
-            <span>资金费: {kpi.totalFunding >= 0 ? '+' : ''}{kpi.totalFunding.toFixed(2)} USDT</span>
+            <span>{currency === 'USD' ? '隔夜费' : '资金费'}: {kpi.totalFunding >= 0 ? '+' : ''}{kpi.totalFunding.toFixed(2)} {currency}</span>
           </div>
         </div>
       </section>
+
+      {comparisonSlot}
 
       {/* 2. 中部核心图表: 累计收益曲线 + 策略标签效能 */}
       <section className="posdash-section-grid">
         <div className="posdash-card">
           <div className="posdash-card-header">
-            <h3 className="posdash-card-title">
+            <h3 className="posdash-card-title" title="Equity Curve">
               <TrendingUp size={16} color="#3b82f6" />
-              累计净盈亏收益走势 (Equity Curve)
+              累计净盈亏走势
             </h3>
             <span className="posdash-card-extra">按时间顺序累加各笔净值</span>
           </div>
-          <EquityCurveChart positions={performancePositions} />
+          <EquityCurveChart currency={currency} positions={performancePositions} />
         </div>
 
         <div className="posdash-card">
           <div className="posdash-card-header">
-            <h3 className="posdash-card-title">
+            <h3 className="posdash-card-title" title="Tag Performance">
               <Zap size={16} color="#f59e0b" />
-              策略标签胜率与收益画像 (Tag Performance)
+              策略标签表现
             </h3>
             <span className="posdash-card-extra">打标策略盈利能力诊断</span>
           </div>
-          <TagAnalyticsCard positions={performancePositions} tags={tags as any} />
+          <TagAnalyticsCard currency={currency} positions={performancePositions} tags={tags as any} />
         </div>
       </section>
 
       {/* 2.5 交易节奏与盈亏日历热力图 */}
-      <section className="posdash-card" style={{ marginBottom: '20px' }}>
+      <section className="posdash-card">
         <div className="posdash-card-header">
           <h3 className="posdash-card-title">
             <Calendar size={16} color="#06b6d4" />
-            交易节奏与盈亏日历 (Trading Calendar Heatmap)
+            交易节奏与盈亏日历
           </h3>
           <span className="posdash-card-extra">
             近 12 周盈亏全景 · 点击单元格快速过滤当日交易日记
           </span>
         </div>
         <TradingCalendarHeatmap
+          currency={currency}
           positions={calendarPositions}
           selectedDate={selectedCalendarDate}
           onSelectDate={onSelectCalendarDate}
@@ -333,11 +344,11 @@ export function CommonDashboardLayout(props: CommonDashboardLayoutProps) {
           <div className="posdash-card-header">
             <h3 className="posdash-card-title">
               <Layers size={16} color="#10b981" />
-              交易对净盈亏贡献榜 (Symbol Leaderboard)
+              交易对净盈亏贡献榜
             </h3>
             <span className="posdash-card-extra">提款机 vs 绞肉机</span>
           </div>
-          <SymbolLeaderboardCard positions={performancePositions} />
+          <SymbolLeaderboardCard currency={currency} positions={performancePositions} />
         </div>
 
         <div className="posdash-card">

@@ -21,20 +21,7 @@ export const ChartReadoutBar = memo(function ChartReadoutBar({
   showVolume = true,
 }: Props) {
   return (
-    <div
-      style={{
-        height: '32px',
-        background: 'var(--bg-dark-800)',
-        borderBottom: '1px solid var(--border-color)',
-        display: 'flex',
-        alignItems: 'center',
-        padding: '0 16px',
-        fontSize: '12px',
-        gap: '16px',
-        fontFamily: 'var(--font-mono)',
-        color: 'var(--text-secondary)',
-      }}
-    >
+    <div className="chart-readout-bar">
       <div
         style={{
           display: 'flex',

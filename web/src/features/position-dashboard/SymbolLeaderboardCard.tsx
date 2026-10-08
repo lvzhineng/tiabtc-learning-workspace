@@ -3,6 +3,7 @@ import { positionPnl, type ReviewPosition } from '@/api/position-review-api';
 import { Layers } from 'lucide-react';
 
 interface Props {
+  currency?: 'USDT' | 'USD';
   positions: ReviewPosition[];
 }
 
@@ -15,7 +16,7 @@ interface SymbolStat {
   totalPnl: number;
 }
 
-export function SymbolLeaderboardCard({ positions }: Props) {
+export function SymbolLeaderboardCard({ positions, currency = 'USDT' }: Props) {
   const { stats, maxAbsPnl } = useMemo(() => {
     const map = new Map<
       string,
@@ -111,7 +112,7 @@ export function SymbolLeaderboardCard({ positions }: Props) {
                   }`}
                 >
                   {isProfit ? '+' : ''}
-                  {item.totalPnl.toFixed(2)} USDT
+                  {item.totalPnl.toFixed(2)} {currency}
                 </span>
               </div>
             </div>

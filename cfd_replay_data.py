@@ -5,7 +5,7 @@ import threading
 import time
 from datetime import datetime
 
-from gate_cfd_provider import CFD_INTERVAL_MS, validate_cfd_scope
+from gate_cfd_provider import CFD_INTERVAL_MS, validate_cfd_scope, validate_cfd_position_scope
 
 
 class CfdReplayData:
@@ -152,8 +152,8 @@ class CfdReplayData:
             cursor = page_end + 1
         return rows[:count]
 
-    def load(self, symbol, interval, *, anchor=None, before=None, after=None, replay_cursor=None, cutoff=None, limit=500, offline=False):
-        validate_cfd_scope(symbol, interval)
+    def load(self, symbol, interval, *, anchor=None, before=None, after=None, replay_cursor=None, cutoff=None, limit=500, offline=False, position_symbol=False):
+        (validate_cfd_position_scope if position_symbol else validate_cfd_scope)(symbol, interval)
         if not isinstance(limit, int) or not 1 <= limit <= 3000:
             raise ValueError("CFD 单次加载数量必须是 1–3000")
         for value in (anchor, before, after, replay_cursor, cutoff):
@@ -194,6 +194,25 @@ class CfdReplayData:
         # ArrowRight on a live bar would persist a replay cursor in the future.
         candles = [row for row in candles if row["timestamp"] + CFD_INTERVAL_MS[interval] <= end]
         return {"candles": candles[:limit], "source": "gate-cfd", "volumeAvailable": False, "warning": warning}
+
+    def load_position_window(self, symbol, interval, start, end, *, offline=False):
+        validate_cfd_position_scope(symbol, interval)
+        step = CFD_INTERVAL_MS[interval]
+        if start <= 0 or end < start or (end - start) // step + 1 > 3000:
+            raise ValueError("CFD 仓位 K 线窗口无效或超过 3000 根上限")
+        warning = None
+        with self._lock(symbol, interval):
+            try:
+                if offline:
+                    raise RuntimeError("离线模式：仅显示本机已有 CFD 行情")
+                self._ensure(symbol, interval, start, end)
+            except RuntimeError as error:
+                warning = str(error)
+            candles = self._rows(symbol, interval, start, end)
+        if not candles and warning and not offline:
+            raise RuntimeError(warning)
+        return {"candles": candles, "source": "gate-cfd", "candleVenue": "gate-cfd",
+                "volumeAvailable": False, "warning": warning}
 
     def list_drawings(self, symbol, interval):
         validate_cfd_scope(symbol, interval)

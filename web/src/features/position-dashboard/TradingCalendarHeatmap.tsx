@@ -5,6 +5,7 @@ import { formatNumber } from '@/features/position-review/position-review-format'
 import '@/styles/trading-calendar-heatmap.css';
 
 interface TradingCalendarHeatmapProps {
+  currency?: 'USDT' | 'USD';
   positions: ReviewPosition[];
   selectedDate: string | null;
   onSelectDate: (date: string | null) => void;
@@ -40,6 +41,7 @@ function formatShanghaiDate(timestampMs: number): string {
 }
 
 export function TradingCalendarHeatmap({
+  currency = 'USDT',
   positions,
   selectedDate,
   onSelectDate,
@@ -173,7 +175,7 @@ export function TradingCalendarHeatmap({
                     onMouseLeave={() => setHoveredDay(null)}
                     title={
                       day.count > 0
-                        ? `${day.dateStr}: ${day.pnl >= 0 ? '+' : ''}${formatNumber(day.pnl)} USDT (${day.count} 笔)`
+                        ? `${day.dateStr}: ${day.pnl >= 0 ? '+' : ''}${formatNumber(day.pnl)} ${currency} (${day.count} 笔)`
                         : `${day.dateStr}: 无交易`
                     }
                   />
@@ -203,7 +205,7 @@ export function TradingCalendarHeatmap({
               <span>
                 <strong>{hoveredDay.dateStr}</strong> 净盈亏:{' '}
                 <strong className={hoveredDay.pnl >= 0 ? 'posrev-profit' : 'posrev-loss'}>
-                  {hoveredDay.pnl >= 0 ? '+' : ''}{formatNumber(hoveredDay.pnl)} USDT
+                  {hoveredDay.pnl >= 0 ? '+' : ''}{formatNumber(hoveredDay.pnl)} {currency}
                 </strong>{' '}
                 ({hoveredDay.count} 笔 · {hoveredDay.winCount} 胜 {hoveredDay.lossCount} 负)
               </span>

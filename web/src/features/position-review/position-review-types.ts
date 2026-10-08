@@ -44,11 +44,16 @@ export interface ReviewPosition {
   fills?: PositionFill[];
 }
 
-export type ReviewVenue = 'bitget' | 'gate';
+export type ReviewVenue = 'bitget' | 'gate' | 'gate-cfd';
+
+export type PositionReviewCredentialInput =
+  | { apiKey: string; secret: string; passphrase?: string }
+  | { reuseGateCredentials: true };
 
 export interface PositionReviewVenues {
   bitget: boolean;
   gate: boolean;
+  'gate-cfd'?: boolean;
 }
 
 export interface PositionReviewState {
@@ -60,6 +65,7 @@ export interface PositionReviewState {
   balances?: {
     bitget: { total: number | null } | null;
     gate: { total: number | null } | null;
+    'gate-cfd'?: { total: number | null; currency: 'USD' } | null;
   };
   positions: ReviewPosition[];
   tags: PositionTag[];
@@ -70,9 +76,14 @@ export function positionKey(position: Pick<ReviewPosition, 'venue' | 'positionId
 }
 
 export function venueLabel(venue: string | null | undefined): string {
+  if (venue === 'gate-cfd') return 'Gate CFD';
   if (venue === 'gate') return 'Gate';
   if (venue === 'bitget') return 'Bitget';
   return venue || '未知交易所';
+}
+
+export function positionCurrency(position: Pick<ReviewPosition, 'venue'>): 'USD' | 'USDT' {
+  return position.venue === 'gate-cfd' ? 'USD' : 'USDT';
 }
 
 export interface PositionCandleBatch {

@@ -9,7 +9,7 @@
 1. **顺序学习**：导入任意 YouTube 频道或播放列表，管理学习状态，并从视频发布时间进入行情复盘。TiaBTC 频道是示例模板，不是唯一目录。
 2. **行情复盘**：查看 Bybit 永续合约历史 K 线、成交量、自由回放、持久化画图和模拟交易。
 3. **bit浪浪实盘分析**：读取导入的历史交割单，左侧选择交易，右侧显示对应 K 线、成交量和开平仓标记。
-4. **仓位复盘**：读取本机保存的 Bitget UTA / Gate 只读密钥，手动同步历史仓位与当前持仓，所有交易所仓位汇聚在同一列表，右侧显示对应 K 线、开平仓标记，并支持备注与标签。
+4. **仓位复盘**：读取本机保存的 Bitget UTA / Gate 永续 / Gate CFD 只读密钥，手动同步历史仓位与当前持仓，所有交易所仓位汇聚在同一列表，右侧显示对应 K 线、开平仓标记，并支持备注与标签。
 5. **全球市场**：独立读取 Gate 公共 TradFi 行情，首期提供黄金 XAUUSD、纳斯达克100 NAS100、日经225 JPN225，支持自由回放和持久化画图；不显示成交量，不提供模拟交易。数据来源标注「Gate CFD」，内部 tab / API / 缓存键仍使用 `cfd`。
 
 默认入口是顺序学习。项目只保留 React/Vite 前端入口，不要重新引入旧版独立 HTML 页面。不要把仓位复盘与 bit浪浪交割单、模拟交易混为一类。
@@ -116,6 +116,12 @@ Python 后端是纯 API 服务。禁止恢复项目目录静态文件服务；�
 - 看板时间窗按快照最晚开仓时间裁切，不要用 `Date.now()`。
 
 ### 3.6 仓位复盘（Bitget UTA + Gate）
+
+- **Gate CFD / TradFi** 为独立仓位来源 `venue=gate-cfd`，复用仓位复盘入口与既有仓位表，不新增顶部入口。私有账户适配在 `gate_cfd_position_provider.py`，仅调用签名 GET `/tradfi/positions`、`/tradfi/positions/history`、`/tradfi/users/assets`；当前 CCXT 不支持 TradFi，使用 Gate APIv4 HMAC-SHA512 鉴权，无账户写接口。
+- CFD 密钥单独 Fernet 加密保存为 `gate-cfd_api_key_enc` / `gate-cfd_api_secret_enc`，不隐式启用已配置的 Gate 永续密钥；GET 只返回 `venues['gate-cfd']`。历史查询最多一个月，已同步记录持续保留；手动同步与现有 409 锁共用。
+- CFD 仓位 K 线只走 Gate 公共 TradFi，复用 `cfd_candles` / `cfd_cache_ranges`，允许已同步仓位的其它 CFD 品种；全球市场仍保留三个品种目录。休市不补造 K 线、不修复连续缺口、无成交量、不回退 Bybit；3000 根响应与 12000 根图表上限继续生效。
+- CFD 数量为手，盈亏及账户权益为 USD；列表与看板不得与 USDT 汇总相加。看板按加密永续 / CFD 分开统计。未知历史杠杆 / 保证金不推算，CFD 不套用永续 ROI 公式。不从开平仓摘要合成分批成交。
+- CFD 仓位沿用稳定 MT5 `position_id`，禁止按近似开仓时间迁移其他 CFD 仓位的备注。备注 / 标签 / 画图均按 `(gate-cfd, position_id)` 保存；画图写 `position_drawings`，禁止写全球市场 `cfd_drawings`。无需建表或迁移历史数据；回滚停用代码即可，新记录保留。
 
 - 仓位复盘顶部入口由 `AppShell.tsx` 的 `positions` tab 管理；默认入口仍是顺序学习。
 - 仓位复盘内含 **K 线复盘**与**账户看板**两个视图，不要为看板新增顶部入口。看板日记跳转到某笔仓位时，应切回 K 线并定位该仓位。

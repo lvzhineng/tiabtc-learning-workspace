@@ -220,7 +220,14 @@ export const PositionReviewToolbar = memo(function PositionReviewToolbar(
             onVenueFilterChange(venueFilter === 'gate' ? 'all' : 'gate')
           }
         >
-          Gate
+          Gate 永续
+        </button>
+        <button
+          type="button"
+          className={venueFilter === 'gate-cfd' ? 'active' : ''}
+          onClick={() => onVenueFilterChange(venueFilter === 'gate-cfd' ? 'all' : 'gate-cfd')}
+        >
+          Gate CFD
         </button>
       </div>
 

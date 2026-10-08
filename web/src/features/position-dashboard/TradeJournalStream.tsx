@@ -36,6 +36,7 @@ function loadJournalUiState() {
 }
 
 interface Props {
+  currency?: 'USDT' | 'USD';
   positions: ReviewPosition[];
   tags: PositionTag[];
   onNavigateToPosition?: (positionId: string) => void;
@@ -43,6 +44,7 @@ interface Props {
 }
 
 export function TradeJournalStream({
+  currency = 'USDT',
   positions,
   tags,
   onNavigateToPosition,
@@ -200,7 +202,7 @@ export function TradeJournalStream({
                     }`}
                   >
                     {isProfit ? '+' : ''}
-                    {pnl.toFixed(2)} USDT
+                    {pnl.toFixed(2)} {currency}
                   </span>
                 </div>
               </div>

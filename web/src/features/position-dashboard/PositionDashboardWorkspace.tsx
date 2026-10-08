@@ -37,6 +37,7 @@ function loadDashboardUiState() {
       'all',
     ]) as DateRangeFilter,
     symbolFilter: storedString(stored.symbolFilter, 'all', undefined, 40),
+    market: storedString(stored.market, 'crypto', ['crypto', 'cfd']) as 'crypto' | 'cfd',
     sideFilter: storedString(stored.sideFilter, 'all', [
       'all',
       'long',
@@ -53,6 +54,7 @@ interface Props {
   tags: PositionTag[];
   configured: boolean;
   balanceTotal: number | null;
+  cfdBalanceTotal?: number | null;
   syncing?: boolean;
   onSync?: () => void | Promise<void>;
   onNoteUpdated?: (positionId: string, note: string) => void;
@@ -64,12 +66,18 @@ export function PositionDashboardWorkspace({
   tags,
   configured,
   balanceTotal,
+  cfdBalanceTotal,
   syncing = false,
   onSync,
   onNoteUpdated,
   onNavigateToPosition,
 }: Props) {
   const [initialUiState] = useState(loadDashboardUiState);
+  const [market, setMarket] = useState(initialUiState.market);
+  const currency = market === 'cfd' ? 'USD' : 'USDT';
+  const marketPositions = useMemo(() => positions.filter((p) =>
+    (p.venue === 'gate-cfd') === (market === 'cfd')
+  ), [positions, market]);
   const [dateRange, setDateRange] = useState<DateRangeFilter>(
     initialUiState.dateRange
   );
@@ -100,14 +108,14 @@ export function PositionDashboardWorkspace({
   );
 
   const symbols = useMemo(() => {
-    return [...new Set(positions.map((p) => p.chartSymbol))].sort();
-  }, [positions]);
+    return [...new Set(marketPositions.map((p) => p.chartSymbol))].sort();
+  }, [marketPositions]);
 
-  const comparisonPositions = useMemo(() => positions.filter((position) =>
+  const comparisonPositions = useMemo(() => marketPositions.filter((position) =>
     (symbolFilter === 'all' || position.chartSymbol === symbolFilter)
     && (sideFilter === 'all' || position.side === sideFilter)
     && (tagFilter === 'all' || position.tagIds.includes(Number(tagFilter)))
-  ), [positions, symbolFilter, sideFilter, tagFilter]);
+  ), [marketPositions, symbolFilter, sideFilter, tagFilter]);
 
   useEffect(() => {
     if (positions.length === 0) return;
@@ -124,12 +132,13 @@ export function PositionDashboardWorkspace({
 
   useEffect(() => {
     writeLocalUiState(POSITION_DASHBOARD_UI_STORAGE_KEY, {
+      market,
       dateRange,
       symbolFilter,
       sideFilter,
       tagFilter,
     });
-  }, [dateRange, sideFilter, symbolFilter, tagFilter]);
+  }, [dateRange, sideFilter, symbolFilter, tagFilter, market]);
 
   // Filtered positions based on active filters
   const filteredPositions = useMemo(() => {
@@ -137,7 +146,7 @@ export function PositionDashboardWorkspace({
       dateRange === 'all' ? 0 : Date.now() - DATE_RANGE_MS_MAP[dateRange];
     const targetTagId = tagFilter === 'all' ? null : Number(tagFilter);
 
-    return positions.filter((p) => {
+    return marketPositions.filter((p) => {
       if (cutoffMs > 0) {
         const time = p.exitTimeMs || p.entryTimeMs;
         if (time < cutoffMs) return false;
@@ -147,7 +156,7 @@ export function PositionDashboardWorkspace({
       if (targetTagId != null && !p.tagIds.includes(targetTagId)) return false;
       return true;
     });
-  }, [dateRange, positions, sideFilter, symbolFilter, tagFilter]);
+  }, [dateRange, marketPositions, sideFilter, symbolFilter, tagFilter]);
 
   const performancePositions = useMemo(
     () => filteredPositions.filter((position) => position.status === 'closed'),
@@ -183,11 +192,12 @@ export function PositionDashboardWorkspace({
 
   return (
     <CommonDashboardLayout
-      comparisonSlot={<PeriodComparison positions={comparisonPositions} dateRange={dateRange} endMs={Date.now()} />}
-      title="仓位看盘 · 账户数据大屏"
+      currency={currency}
+      comparisonSlot={<PeriodComparison currency={currency} positions={comparisonPositions} dateRange={dateRange} endMs={Date.now()} />}
+      title="仓位复盘 · 账户看板"
       subtitle={
         <>
-          已归集 <strong>{positions.length}</strong> 笔仓位 ·{' '}
+          {market === 'cfd' ? 'Gate CFD' : '加密永续'} · 已归集 <strong>{marketPositions.length}</strong> 笔仓位 ·{' '}
           <strong>{tags.length}</strong> 个策略标签
         </>
       }
@@ -209,11 +219,19 @@ export function PositionDashboardWorkspace({
       onSelectCalendarDate={setSelectedCalendarDate}
       extraHeader={
         <>
-          {balanceTotal != null && (
+          <select className="posdash-select" aria-label="账户市场" value={market} onChange={(event) => {
+            setMarket(event.target.value as 'crypto' | 'cfd');
+            setSymbolFilter('all');
+            setSelectedCalendarDate(null);
+          }}>
+            <option value="crypto">加密永续 · USDT</option>
+            <option value="cfd">Gate CFD · USD</option>
+          </select>
+          {(market === 'cfd' ? cfdBalanceTotal : balanceTotal) != null && (
             <div className="posdash-balance-chip" title="已配置交易所账户权益合计">
               <span className="posdash-live-dot" />
               <Wallet size={13} />
-              <span>{balanceTotal.toFixed(2)} USDT</span>
+              <span>{(market === 'cfd' ? cfdBalanceTotal : balanceTotal)?.toFixed(2)} {currency}</span>
             </div>
           )}
 
@@ -231,6 +249,7 @@ export function PositionDashboardWorkspace({
       }
       journalSlot={
         <TradeJournalStream
+          currency={currency}
           positions={journalPositions}
           tags={tags}
           onNavigateToPosition={onNavigateToPosition}

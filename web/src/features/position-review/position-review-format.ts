@@ -42,6 +42,8 @@ export function roiDisplayTitle(roi: number | null | undefined): string | undefi
 }
 
 export function calculatePositionRoi(position: ReviewPosition): number | null {
+  // MT5 quantity is lots; its margin cannot be derived with the swap formula.
+  if (position.venue === 'gate-cfd') return null;
   const pnl = position.netPnl ?? position.realizedPnl;
   const { entryPrice, contracts, leverage } = position;
   if (pnl == null || !Number.isFinite(pnl)) return null;

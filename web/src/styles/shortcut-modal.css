@@ -23,13 +23,13 @@
 .shortcut-modal-container {
   width: 100%;
   max-width: 520px;
-  max-height: 85vh;
+  max-height: min(85vh, calc(100dvh - 32px));
   display: flex;
   flex-direction: column;
   background: var(--bg-dark-800);
   border: 1px solid var(--border-color);
   border-radius: var(--radius-md);
-  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.5);
+  box-shadow: var(--shadow-main);
   overflow: hidden;
 }
 
@@ -40,6 +40,7 @@
   padding: 14px 18px;
   border-bottom: 1px solid var(--border-color);
   background: var(--bg-dark-900);
+  flex-shrink: 0;
 }
 
 .shortcut-modal-title {
@@ -60,11 +61,12 @@
 }
 
 .shortcut-modal-close {
-  display: flex;
+  display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 28px;
-  height: 28px;
+  width: 30px;
+  height: 30px;
+  flex-shrink: 0;
   padding: 0;
   border: none;
   background: transparent;
@@ -80,6 +82,7 @@
 }
 
 .shortcut-modal-body {
+  min-height: 0;
   padding: 16px 18px;
   overflow-y: auto;
   display: flex;
@@ -110,6 +113,8 @@
   border-radius: var(--radius-sm);
   background: var(--bg-dark-700);
   border: 1px solid color-mix(in srgb, var(--border-color) 60%, transparent);
+  gap: 12px;
+  flex-wrap: wrap;
 }
 
 .shortcut-desc {
@@ -140,6 +145,9 @@
   background: var(--bg-dark-900);
   font-size: 11px;
   color: var(--text-muted);
+  flex-shrink: 0;
+  gap: 12px;
+  flex-wrap: wrap;
 }
 
 .shortcut-btn-close {

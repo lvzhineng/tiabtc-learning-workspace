@@ -105,6 +105,7 @@ export function FreeReplayPanel({
             color: 'var(--accent-orange)',
             border: '1px solid var(--accent-orange)',
             borderRadius: 'var(--radius-sm)',
+            height: 'var(--control-height)',
             padding: '3px 10px',
             fontSize: '12px',
             fontWeight: 600,
@@ -119,19 +120,9 @@ export function FreeReplayPanel({
         </button>
 
         {showModal && (
-          <div
-            style={{
-              position: 'fixed',
-              inset: 0,
-              background: 'rgba(0, 0, 0, 0.65)',
-              zIndex: 100,
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'center',
-            }}
-          >
+          <div className="free-replay-overlay">
             <div
-              className="app-card"
+              className="app-card free-replay-dialog"
               style={{
                 width: '380px',
                 background: 'var(--bg-dark-800)',
@@ -185,7 +176,7 @@ export function FreeReplayPanel({
                   style={{
                     width: '100%',
                     background: 'var(--bg-dark-700)',
-                    color: '#fff',
+                    color: 'var(--text-primary)',
                     border: '1px solid var(--accent-blue)',
                     borderRadius: 'var(--radius-sm)',
                     padding: '6px 10px',
@@ -266,6 +257,7 @@ export function FreeReplayPanel({
 
   return (
     <div
+      className="free-replay-controls"
       style={{
         display: 'flex',
         alignItems: 'center',

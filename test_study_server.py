@@ -741,6 +741,111 @@ class WorkspaceValidationTests(TemporaryWorkspaceDatabase):
 
 
 class PositionReviewStorageTests(TemporaryWorkspaceDatabase):
+    def test_cfd_sync_preserves_same_time_positions_and_cross_period_drawings(self):
+        from gate_cfd_position_provider import parse_cfd_position
+        opened = parse_cfd_position({
+            "position_id": 101, "symbol": "EURUSD", "position_dir": "Long",
+            "time_create": 1700000000, "price_open": "1.1", "volume": "0.2",
+        }, closed=False)
+        other = {**opened, "positionId": "102"}
+        with study_server.database() as connection:
+            for position in (opened, other):
+                study_server._upsert_exchange_position(connection, position, "2026-10-08")
+        for position in (opened, other):
+            study_server.save_position_note({"venue": "gate-cfd", "positionId": position["positionId"], "note": position["positionId"]})
+        tag = study_server.create_position_tag("CFD")
+        study_server.save_position_tag_map({"venue": "gate-cfd", "positionId": "101", "tagIds": [tag["id"]]})
+        study_server.save_position_drawing({**sample_drawing(symbol="EURUSD"), "venue": "gate-cfd", "positionId": "101"})
+        closed = {**opened, "status": "closed", "exitTimeMs": opened["entryTimeMs"] + 60000, "exitPrice": 1.2, "netPnl": 19.0}
+        with study_server.database() as connection:
+            study_server._persist_venue_sync(connection, "gate-cfd", [closed], [other], [], False, "2026-10-08", "gate-cfd_usd_total", 1000)
+        state = study_server.get_position_review_state()
+        cfd_positions = {p["positionId"]: p for p in state["positions"] if p["venue"] == "gate-cfd"}
+        self.assertEqual(cfd_positions["101"]["status"], "closed")
+        self.assertEqual(cfd_positions["101"]["note"], "101")
+        self.assertEqual(cfd_positions["102"]["note"], "102")
+        self.assertEqual(cfd_positions["101"]["tagIds"], [tag["id"]])
+        self.assertEqual(study_server.list_position_drawings("gate-cfd", "101", "EURUSD", "15")[0]["id"], "drawing-1")
+        self.assertEqual(study_server.list_position_drawings("gate-cfd", "102", "EURUSD", "60"), [])
+        self.assertIsNone(state["balance"])
+        self.assertEqual(state["balances"]["gate-cfd"]["total"], 1000)
+        with study_server.database() as connection:
+            self.assertEqual(connection.execute("SELECT COUNT(*) FROM cfd_drawings").fetchone()[0], 0)
+            self.assertEqual(connection.execute("SELECT COUNT(*) FROM chart_drawings").fetchone()[0], 0)
+
+    def test_cfd_credentials_are_independent_and_get_never_exposes_secrets(self):
+        import json
+        with mock.patch.object(study_server, "_encrypt_secret", side_effect=lambda value: "encrypted:" + value):
+            study_server.save_position_review_credentials({"venue": "gate-cfd", "apiKey": "fixture-cfd-key", "secret": "fixture-cfd-secret"})
+        state = study_server.get_position_review_state()
+        self.assertTrue(state["configured"])
+        self.assertTrue(state["venues"]["gate-cfd"])
+        self.assertFalse(state["venues"]["gate"])
+        self.assertNotIn("fixture-cfd", json.dumps(state))
+        with mock.patch.object(study_server, "load_gate_credentials", return_value={"apiKey": "fixture", "secret": "fixture"}), mock.patch.object(study_server, "GateCfdPositionProvider") as provider:
+            provider.return_value.fetch_closed_positions.return_value = []
+            provider.return_value.fetch_open_positions.return_value = []
+            provider.return_value.fetch_balance.return_value = {"total": 500, "currency": "USD"}
+            result = study_server._sync_position_review()
+            self.assertEqual(result["balances"]["gate-cfd"]["total"], 500)
+            self.assertIsNone(result["balance"])
+            provider.return_value.fetch_open_positions.side_effect = RuntimeError("fixture CFD failure")
+            with self.assertRaisesRegex(RuntimeError, "fixture CFD failure"):
+                study_server._sync_position_review()
+        self.assertEqual(study_server.get_position_review_state()["balances"]["gate-cfd"]["total"], 500)
+
+        with mock.patch.object(study_server, "_encrypt_secret", side_effect=lambda value: "encrypted:" + value), mock.patch.object(study_server, "_decrypt_secret", side_effect=lambda value: value.removeprefix("encrypted:")):
+            study_server.save_position_review_credentials({"venue": "gate", "apiKey": "fixture-gate-key", "secret": "fixture-gate-secret"})
+            result = study_server.save_position_review_credentials({"venue": "gate-cfd", "reuseGateCredentials": True})
+            self.assertEqual(result, {"configured": True, "venue": "gate-cfd"})
+            self.assertEqual(study_server.load_gate_credentials("gate-cfd"), {"apiKey": "fixture-gate-key", "secret": "fixture-gate-secret"})
+            study_server.save_position_review_credentials({"venue": "gate", "apiKey": "fixture-new-key", "secret": "fixture-new-secret"})
+            self.assertEqual(study_server.load_gate_credentials("gate-cfd")["apiKey"], "fixture-gate-key")
+        self.assertNotIn("fixture-gate", json.dumps(study_server.get_position_review_state()))
+
+    def test_cfd_candle_cache_keeps_closures_and_never_uses_perpetual_tables(self):
+        from cfd_replay_data import CfdReplayData
+        start = 1700000000000
+        provider = mock.Mock()
+        provider.fetch.return_value = []
+        replay = CfdReplayData(study_server.database, study_server.DATABASE_LOCK, provider)
+        first = replay.load_position_window("EURUSD", "1", start, start + 60000)
+        second = replay.load_position_window("EURUSD", "1", start, start + 60000)
+        self.assertEqual(first["candles"], [])
+        self.assertFalse(second["volumeAvailable"])
+        self.assertEqual(provider.fetch.call_count, 1)
+        provider.fetch.return_value = [{"timestamp": start + 120000, "open": 1.1, "high": 1.2, "low": 1.0, "close": 1.15}]
+        batch = replay.load_position_window("EURUSD", "1", start, start + 120000)
+        self.assertEqual(len(batch["candles"]), 1)
+        self.assertNotIn("volume", batch["candles"][0])
+        with self.assertRaises(ValueError):
+            replay.load_position_window("EURUSD", "1", start, start + 3000 * 60000)
+        with study_server.database() as connection:
+            self.assertEqual(connection.execute("SELECT COUNT(*) FROM market_candles").fetchone()[0], 0)
+            self.assertEqual(connection.execute("SELECT COUNT(*) FROM venue_market_candles").fetchone()[0], 0)
+            self.assertEqual(connection.execute("SELECT COUNT(*) FROM cfd_candles").fetchone()[0], 1)
+        provider.fetch.side_effect = RuntimeError("offline upstream")
+        failed = replay.load_position_window("EURUSD", "1", start, start + 180000)
+        self.assertEqual(len(failed["candles"]), 1)
+        self.assertIn("offline upstream", failed["warning"])
+        self.assertTrue(replay._missing("EURUSD", "1", start + 120001, start + 180000))
+        position = {
+            "venue": "gate-cfd", "positionId": "101", "unifiedSymbol": "EURUSD",
+            "chartSymbol": "EURUSD", "side": "long", "status": "closed",
+            "entryTimeMs": start, "exitTimeMs": start + 31 * 86400000,
+        }
+        with study_server.database() as connection:
+            study_server._upsert_exchange_position(connection, position, "2026-10-08")
+        with mock.patch.object(study_server.CFD_REPLAY, "load_position_window", return_value=first) as load, mock.patch.object(study_server, "load_candle_range") as perpetual:
+            batch = study_server.load_position_review_candles("EURUSD", "1", start, position["exitTimeMs"], "gate-cfd")
+            self.assertTrue(batch["truncated"])
+            self.assertFalse(batch["volumeAvailable"])
+            args = load.call_args.args
+            self.assertLessEqual((args[3] - args[2]) // 60000 + 1, 3000)
+            perpetual.assert_not_called()
+        with self.assertRaisesRegex(ValueError, "请先同步"):
+            study_server.load_position_review_candles("XAGUSD", "1", start, start + 60000, "gate-cfd")
+
     def test_reader_only_fetches_fills_in_active_venue_symbol_time_scopes(self):
         import position_review_reader
         with study_server.database() as connection:
@@ -1614,6 +1719,35 @@ class BitlangReviewStorageTests(TemporaryWorkspaceDatabase):
 
 
 class VenueIsolationTests(unittest.TestCase):
+    def test_gate_cfd_signed_get_and_history_pagination(self):
+        import hashlib
+        import hmac
+        import json
+        from gate_cfd_position_provider import GateCfdPositionProvider, history_start_ms
+        provider = GateCfdPositionProvider({"apiKey": "fixture-key", "secret": "fixture-secret"})
+        response = mock.MagicMock()
+        response.__enter__.return_value.read.return_value = json.dumps({"data": {"equity": "123.45"}}).encode()
+        with mock.patch("gate_cfd_position_provider.urlopen", return_value=response) as opened, mock.patch("gate_cfd_position_provider.time.time", return_value=1700000000):
+            self.assertEqual(provider.fetch_balance()["total"], 123.45)
+        request = opened.call_args.args[0]
+        self.assertEqual(request.get_method(), "GET")
+        self.assertEqual(request.full_url, "https://api.gateio.ws/api/v4/tradfi/users/assets")
+        message = "\n".join(("GET", "/api/v4/tradfi/users/assets", "", hashlib.sha512(b"").hexdigest(), "1700000000"))
+        self.assertEqual(request.get_header("Sign"), hmac.new(b"fixture-secret", message.encode(), hashlib.sha512).hexdigest())
+        row = {"position_id": 101, "symbol": "XAUUSD", "position_dir": "Short", "volume": "0.2",
+               "price_open": "2000", "time_create": 1700000000, "time_close": 1700000060,
+               "close_price": "1990", "realized_pnl": "17", "realized_pnl_detail": {"closed_pnl": "20", "fee": "-2", "swap": "-1"}}
+        with mock.patch.object(provider, "_get", side_effect=[{"list": [row], "total_page": 2}, {"list": [{**row, "position_id": 102}], "total_page": 2}]) as get:
+            positions = provider.fetch_closed_positions(1700010000000)
+            self.assertEqual(len(positions), 2)
+            self.assertEqual(positions[0]["netPnl"], 17)
+            self.assertEqual(positions[0]["closeFee"], 2)
+            self.assertEqual(positions[0]["entryTimeMs"], 1700000000000)
+            self.assertEqual(get.call_args_list[1].args[1]["page"], 2)
+            self.assertEqual(get.call_args_list[0].args[1]["begin_time"], history_start_ms(1700010000000) // 1000)
+        with self.assertRaises(ValueError):
+            provider._get("/tradfi/positions/101/close")
+
     def test_assign_fills_isolates_venues_with_same_position_id(self):
         positions = [
             {

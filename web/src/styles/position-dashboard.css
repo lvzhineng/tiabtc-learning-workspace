@@ -22,17 +22,21 @@
    顶部工具栏 (Header Bar)
    ============================================================ */
 
+.posdash-container > * {
+  flex-shrink: 0;
+}
+
 .posdash-header {
   display: flex;
   align-items: center;
   justify-content: space-between;
   flex-wrap: wrap;
   gap: 12px;
-  padding: 12px 18px;
+  padding: 14px 16px;
   background: var(--bg-dark-800);
   border: 1px solid var(--border-color);
   border-radius: var(--radius-md);
-  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.06);
+  box-shadow: var(--shadow-card);
   min-width: 0;
 }
 
@@ -40,6 +44,8 @@
   display: flex;
   align-items: center;
   gap: 12px;
+  min-width: 0;
+  flex: 1 1 260px;
 }
 
 .posdash-title-icon {
@@ -48,6 +54,7 @@
   justify-content: center;
   width: 36px;
   height: 36px;
+  flex-shrink: 0;
   border-radius: 8px;
   background: linear-gradient(135deg, rgba(37, 99, 235, 0.2), rgba(59, 130, 246, 0.1));
   color: #3b82f6;
@@ -72,11 +79,23 @@
   color: var(--text-primary);
 }
 
+.posdash-header-actions {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  min-width: 0;
+}
+
 .posdash-filters {
   display: flex;
   align-items: center;
   flex-wrap: wrap;
   gap: 8px;
+  flex-basis: 100%;
+  min-width: 0;
+  padding-top: 12px;
+  border-top: 1px solid var(--border-color);
 }
 
 /* 分段胶囊按钮组 (Segmented Pills) */
@@ -84,7 +103,7 @@
   display: inline-flex;
   align-items: center;
   background: var(--bg-dark-700);
-  padding: 3px;
+  padding: 2px;
   border-radius: var(--radius-sm);
   border: 1px solid var(--border-color);
   gap: 2px;
@@ -94,13 +113,15 @@
   border: none;
   background: transparent;
   color: var(--text-muted);
-  padding: 4px 10px;
-  font-size: 11.5px;
+  height: 26px;
+  padding: 0 10px;
+  font-size: 12px;
   font-weight: 500;
   border-radius: 4px;
   cursor: pointer;
   transition: all 0.15s ease;
   line-height: 1.2;
+  white-space: nowrap;
 }
 
 .posdash-segmented-btn:hover:not(.active) {
@@ -108,14 +129,16 @@
 }
 
 .posdash-segmented-btn.active {
-  background: var(--bg-dark-800);
-  color: var(--text-primary);
+  background: color-mix(in srgb, var(--accent-blue) 13%, var(--bg-dark-800));
+  color: var(--accent-blue);
   font-weight: 600;
-  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.15);
+  box-shadow: var(--shadow-soft);
 }
 
 .posdash-select {
-  height: 30px;
+  height: var(--control-height);
+  min-width: 130px;
+  max-width: 220px;
   padding: 0 10px;
   background: var(--bg-dark-700);
   color: var(--text-primary);
@@ -135,7 +158,7 @@
   display: inline-flex;
   align-items: center;
   gap: 6px;
-  height: 30px;
+  height: var(--control-height);
   padding: 0 12px;
   border-radius: var(--radius-sm);
   font-size: 12px;
@@ -180,6 +203,8 @@
   font-weight: 600;
   color: #10b981;
   letter-spacing: -0.01em;
+  min-height: var(--control-height);
+  font-variant-numeric: tabular-nums;
 }
 
 .posdash-live-dot {
@@ -187,8 +212,7 @@
   height: 6px;
   border-radius: 50%;
   background-color: #10b981;
-  box-shadow: 0 0 8px #10b981;
-  animation: posdash-pulse 2s infinite;
+  flex-shrink: 0;
 }
 
 @keyframes posdash-pulse {
@@ -212,7 +236,7 @@
 
 .posdash-kpi-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(185px, 1fr));
+  grid-template-columns: repeat(5, minmax(0, 1fr));
   gap: 12px;
   min-width: 0;
   width: 100%;
@@ -222,21 +246,19 @@
   position: relative;
   display: flex;
   flex-direction: column;
-  justify-content: space-between;
+  gap: 8px;
   padding: 14px 16px;
   background: var(--bg-dark-800);
   border: 1px solid var(--border-color);
   border-radius: var(--radius-md);
-  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.05);
+  box-shadow: var(--shadow-card);
   transition: transform 0.15s ease, border-color 0.15s ease, box-shadow 0.15s ease;
   min-width: 0;
   overflow: hidden;
 }
 
 .posdash-kpi-card:hover {
-  transform: translateY(-1px);
-  border-color: var(--text-muted);
-  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.08);
+  border-color: var(--border-active);
 }
 
 .posdash-kpi-card.hero.profit-glow {
@@ -261,7 +283,7 @@
   display: flex;
   align-items: center;
   justify-content: space-between;
-  margin-bottom: 8px;
+  gap: 8px;
 }
 
 .posdash-kpi-title {
@@ -279,6 +301,7 @@
   height: 26px;
   border-radius: 6px;
   background: var(--bg-dark-700);
+  flex-shrink: 0;
 }
 
 .posdash-kpi-icon-wrap.profit {
@@ -307,12 +330,13 @@
 }
 
 .posdash-kpi-value {
-  font-size: 22px;
+  font-size: clamp(18px, 1.6vw, 24px);
   font-weight: 700;
   font-family: var(--font-mono, monospace);
   line-height: 1.15;
-  margin-bottom: 8px;
   letter-spacing: -0.02em;
+  font-variant-numeric: tabular-nums;
+  overflow-wrap: anywhere;
 }
 
 .posdash-currency-unit {
@@ -341,6 +365,7 @@
   align-items: center;
   gap: 6px;
   flex-wrap: wrap;
+  margin-top: auto;
 }
 
 .posdash-sub-chip {
@@ -417,9 +442,12 @@
   border: 1px solid var(--border-color);
   border-radius: var(--radius-md);
   padding: 16px 18px;
-  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.06);
-  min-height: 330px;
+  box-shadow: var(--shadow-card);
   min-width: 0;
+}
+
+.posdash-section-grid > .posdash-card {
+  min-height: 300px;
 }
 
 .posdash-card-header {
@@ -429,6 +457,8 @@
   margin-bottom: 14px;
   padding-bottom: 10px;
   border-bottom: 1px solid var(--border-color);
+  flex-wrap: wrap;
+  gap: 6px 12px;
 }
 
 .posdash-card-title {
@@ -1068,7 +1098,81 @@
 .posrev-loss {
   color: #f43f5e !important;
 }
-.period-comparison { padding: 16px; margin-bottom: 12px; }
-.period-comparison table { width: 100%; text-align: left; font-size: 12px; }
-.period-comparison th, .period-comparison td { padding: 6px; }
-.period-comparison p { color: var(--text-muted); font-size: 12px; }
+.period-comparison {
+  gap: 8px;
+  padding: 14px 16px;
+}
+
+.period-comparison-table-wrap {
+  overflow-x: auto;
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-sm);
+}
+
+.period-comparison table {
+  width: 100%;
+  min-width: 440px;
+  border-collapse: collapse;
+  text-align: right;
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+
+.period-comparison th,
+.period-comparison td {
+  padding: 8px 12px;
+}
+
+.period-comparison th {
+  background: var(--bg-dark-700);
+  color: var(--text-secondary);
+  font-weight: 500;
+}
+
+.period-comparison th:first-child,
+.period-comparison td:first-child {
+  width: 34%;
+  text-align: left;
+}
+
+.period-comparison td {
+  border-top: 1px solid var(--border-color);
+}
+
+.period-comparison td:nth-child(2) {
+  background: color-mix(in srgb, var(--accent-blue) 5%, transparent);
+  font-weight: 600;
+}
+
+.period-comparison p {
+  color: var(--text-muted);
+  font-size: 12px;
+}
+
+@media (max-width: 1250px) {
+  .posdash-kpi-grid {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 800px) {
+  .posdash-container {
+    padding: 12px 12px 24px;
+    gap: 12px;
+  }
+
+  .posdash-header,
+  .posdash-card {
+    padding: 12px;
+  }
+
+  .posdash-kpi-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .posdash-filters .posdash-select {
+    flex: 1 1 130px;
+    max-width: none;
+    min-width: 0;
+  }
+}

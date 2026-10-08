@@ -162,6 +162,56 @@ test('pending review filter persists; exports saved notes and drawing scopes sur
   await expect(page.getByLabel('相邻时段对比')).toBeVisible();
 });
 
+test('Gate CFD positions keep their market, drawings, currency and chart capability across reloads', async ({ page }) => {
+  const requests: string[] = [];
+  await mockApi(page, requests);
+  const cfd = { ...positions[0], venue: 'gate-cfd', positionId: '101', unifiedSymbol: 'EURUSD', chartSymbol: 'EURUSD',
+    contracts: 0.2, leverage: null, note: 'CFD 笔记', netPnl: 20 };
+  await page.route('**/api/position-review', (route) => route.fulfill({ json: {
+    configured: true, venues: { bitget: false, gate: false, 'gate-cfd': true }, syncedAt: null,
+    balance: { total: 100 }, balances: { 'gate-cfd': { total: 500, currency: 'USD' } },
+    positions: [...positions, cfd], tags: [],
+  } }));
+  await page.route('**/api/position-review/candles?*', (route) => {
+    const params = new URL(route.request().url()).searchParams;
+    if (params.get('venue') !== 'gate-cfd') return route.fallback();
+    expect(params.get('venue')).toBe('gate-cfd');
+    expect(params.get('symbol')).toBe('EURUSD');
+    const step = intervals[params.get('interval') || '15'];
+    const start = Math.floor((cfd.entryTimeMs - 100 * step) / step) * step;
+    return route.fulfill({ json: { candles: Array.from({ length: 250 }, (_, index) => ({
+      timestamp: start + index * step, open: 100, high: 102, low: 99, close: 101,
+    })), candleVenue: 'gate-cfd', source: 'gate-cfd', volumeAvailable: false } });
+  });
+  await page.goto('/?tab=positions');
+  await page.getByRole('button', { name: 'Gate CFD', exact: true }).click();
+  await expect(page.locator('[data-review-id]')).toHaveCount(1);
+  await expect(page.getByRole('button', { name: '导出复盘卡片' })).toBeEnabled();
+  await expect(page.locator('.posrev-venue-badge')).toHaveText('K 线来源 Gate CFD');
+  const chart = page.locator('.chart-canvas-price-pane');
+  await chart.hover({ position: { x: 200, y: 150 } });
+  await expect(page.locator('.bitlang-candle-readout')).toContainText('开');
+  await expect(page.locator('.bitlang-candle-readout')).not.toContainText('量');
+  await page.getByTitle('画图图层对象树', { exact: true }).click();
+  await expect(page.locator('.tree-item-label')).toHaveText('画线 101');
+  await page.getByTitle('关闭对象树', { exact: true }).click();
+  for (const name of ['1m', '5m', '15m', '1h', '4h', '1d', '1w']) {
+    await page.getByRole('button', { name, exact: true }).click();
+    await expect(page.getByRole('button', { name: '导出复盘卡片' })).toBeEnabled();
+    await expect(page.locator('.posrev-venue-badge')).toHaveText('K 线来源 Gate CFD');
+  }
+  await page.reload();
+  await expect(page.locator('[data-review-id]')).toHaveCount(1);
+  await expect(page.getByRole('button', { name: 'Gate CFD', exact: true })).toHaveClass(/active/);
+  await page.getByRole('button', { name: '看板', exact: true }).click();
+  await page.getByLabel('账户市场').selectOption('cfd');
+  await page.getByRole('button', { name: '全部', exact: true }).click();
+  await expect(page.locator('.posdash-balance-chip')).toContainText('500.00 USD');
+  await expect(page.locator('.posdash-container')).toContainText('Gate CFD');
+  await expect(page.locator('.posdash-currency-unit').first()).toHaveText('USD');
+  expect(requests).not.toContain('/api/paper-trades');
+});
+
 test('five entries, themes and position review queue/card/diagnostics remain usable', async ({ page }) => {
   await mockApi(page);
   await page.goto('/');

@@ -40,12 +40,13 @@ import { PositionDashboardWorkspace } from '@/features/position-dashboard/Positi
 import { toast } from '@/ui/feedback/toast';
 import { writeLocalUiState } from '@/ui/persistence/local-ui-state';
 import type {
+  PositionReviewCredentialInput,
   PositionReviewVenues,
   PositionTag,
   ReviewPosition,
   ReviewVenue,
 } from './position-review-types';
-import { positionKey, positionPnl, venueLabel } from './position-review-types';
+import { positionKey, positionPnl, positionCurrency, venueLabel } from './position-review-types';
 import { summarizePositions } from './position-stats';
 import { PositionReviewChart } from './PositionReviewChart';
 import { PositionReviewPanel } from './PositionReviewPanel';
@@ -172,7 +173,7 @@ const PositionReviewListItem = memo(function PositionReviewListItem({
           </div>
           <div className="posrev-row-pnl">
             <strong className={pnl >= 0 ? 'profit' : 'loss'}>
-              {pnl >= 0 ? '+' : ''}{formatNumber(pnl)}
+              {item.venue === 'gate-cfd' && item.netPnl == null ? '—' : `${pnl >= 0 ? '+' : ''}${formatNumber(pnl)}`} {positionCurrency(item)}
             </strong>
             {roi != null && (
               <span
@@ -200,6 +201,7 @@ export function PositionReviewWorkspace({
   });
   const [syncedAt, setSyncedAt] = useState<string | null>(null);
   const [balanceTotal, setBalanceTotal] = useState<number | null>(null);
+  const [cfdBalanceTotal, setCfdBalanceTotal] = useState<number | null>(null);
   const [positions, setPositions] = useState<ReviewPosition[]>([]);
   const [tags, setTags] = useState<PositionTag[]>([]);
   const [loading, setLoading] = useState(true);
@@ -297,6 +299,7 @@ export function PositionReviewWorkspace({
       venues?: PositionReviewVenues;
       syncedAt: string | null;
       balance: { total: number | null } | null;
+      balances?: { 'gate-cfd'?: { total: number | null } | null };
       positions: ReviewPosition[];
       tags: PositionTag[];
     }) => {
@@ -304,9 +307,11 @@ export function PositionReviewWorkspace({
       setVenues({
         bitget: Boolean(state.venues?.bitget),
         gate: Boolean(state.venues?.gate),
+        'gate-cfd': Boolean(state.venues?.['gate-cfd']),
       });
       setSyncedAt(state.syncedAt);
       setBalanceTotal(state.balance?.total ?? null);
+      setCfdBalanceTotal(state.balances?.['gate-cfd']?.total ?? null);
       setPositions(state.positions);
       setTags(state.tags);
       setShowCredentials(!state.configured);
@@ -578,27 +583,31 @@ export function PositionReviewWorkspace({
   }, [page, selected]);
 
   const stats = useMemo(() => summarizePositions(filtered), [filtered]);
+  const pnlByCurrency = useMemo(() => ['USDT', 'USD'].map((currency) => ({
+    currency,
+    positions: filtered.filter((item) => positionCurrency(item) === currency),
+  })).filter((group) => group.positions.length).map((group) => ({
+    currency: group.currency, stats: summarizePositions(group.positions),
+  })), [filtered]);
   const syncedAtMs = syncedAt ? Date.parse(syncedAt) : NaN;
   const isSyncStale =
     Number.isFinite(syncedAtMs) && Date.now() - syncedAtMs > SYNC_STALE_MS;
 
   const handleSaveCredentials = async (
     venue: ReviewVenue,
-    creds: { apiKey: string; secret: string; passphrase?: string }
+    creds: PositionReviewCredentialInput
   ) => {
     setSavingVenue(venue);
     setError(null);
     try {
       await savePositionReviewCredentials({
         venue,
-        apiKey: creds.apiKey,
-        secret: creds.secret,
-        passphrase: creds.passphrase,
+        ...creds,
       });
       setVenues((current) => ({ ...current, [venue]: true }));
       setConfigured(true);
       toast.success(
-        venue === 'gate' ? 'Gate 只读密钥已成功加密保存' : 'Bitget 只读密钥已成功加密保存'
+        `${venueLabel(venue)} 只读密钥已成功加密保存`
       );
     } catch (cause) {
       const errMsg = cause instanceof Error ? cause.message : '保存密钥失败';
@@ -667,9 +676,15 @@ export function PositionReviewWorkspace({
   const updateSelected = (next: ReviewPosition) => {
     setPositions((current) =>
       current.map((item) =>
-        positionKey(item) === positionKey(next) ? next : item
+        positionKey(item) === positionKey(next) ? { ...item, note: next.note } : item
       )
     );
+  };
+
+  const updatePositionTags = (target: ReviewPosition, tagIds: number[]) => {
+    setPositions((current) => current.map((item) =>
+      positionKey(item) === positionKey(target) ? { ...item, tagIds } : item
+    ));
   };
 
   const handleTagDeleted = (deletedId: number) => {
@@ -711,10 +726,11 @@ export function PositionReviewWorkspace({
           <div>
             <strong>仓位复盘</strong>
             <span>
-              {[venues.bitget && 'Bitget', venues.gate && 'Gate']
+              {[venues.bitget && 'Bitget', venues.gate && 'Gate', venues['gate-cfd'] && 'Gate CFD']
                 .filter(Boolean)
                 .join(' · ') || '未配置交易所'}
               {balanceTotal != null ? ` · ${formatNumber(balanceTotal)} USDT` : ''}
+              {cfdBalanceTotal != null ? ` · CFD ${formatNumber(cfdBalanceTotal)} USD` : ''}
             </span>
           </div>
           <div className="posrev-view-switch">
@@ -808,28 +824,28 @@ export function PositionReviewWorkspace({
               <strong>{stats.count} 笔</strong>
             </div>
           )}
-          <div className="posrev-stat-item" title="已平仓净盈亏累计，不含当前持仓未实现盈亏">
+          {pnlByCurrency.map((group) => <div key={group.currency} className="posrev-stat-item" title="已平仓净盈亏累计，不含当前持仓未实现盈亏">
             <span>总盈亏</span>
-            <strong className={stats.totalPnl >= 0 ? 'profit' : 'loss'}>
-              {stats.totalPnl >= 0 ? '+' : ''}{formatNumber(stats.totalPnl)} USDT
+            <strong className={group.stats.totalPnl >= 0 ? 'profit' : 'loss'}>
+              {group.stats.totalPnl >= 0 ? '+' : ''}{formatNumber(group.stats.totalPnl)} {group.currency}
             </strong>
-          </div>
+          </div>)}
           <div className="posrev-stat-item">
             <span>胜率</span>
             <strong>{formatNumber(stats.winRate, 1)}%</strong>
           </div>
-          {stats.profitFactor != null && (
-            <div className="posrev-stat-item" title="已平仓盈利总额 / 亏损总额">
-              <span>盈亏比</span>
-              <strong>{formatNumber(stats.profitFactor, 2)}</strong>
+          {pnlByCurrency.map((group) => group.stats.profitFactor != null && (
+            <div key={group.currency} className="posrev-stat-item" title="已平仓盈利总额 / 亏损总额">
+              <span>盈亏比 {group.currency}</span>
+              <strong>{formatNumber(group.stats.profitFactor, 2)}</strong>
             </div>
-          )}
-          {stats.totalFee > 0 && (
-            <div className="posrev-stat-item" title="总手续费支出">
-              <span>手续费</span>
-              <span>-{formatNumber(stats.totalFee, 2)}</span>
+          ))}
+          {pnlByCurrency.map((group) => group.stats.totalFee > 0 && (
+            <div key={group.currency} className="posrev-stat-item" title="总手续费支出">
+              <span>手续费 {group.currency}</span>
+              <span>-{formatNumber(group.stats.totalFee, 2)}</span>
             </div>
-          )}
+          ))}
         </div>
 
         <div className="bitlang-trade-list" ref={listRef}>
@@ -873,6 +889,7 @@ export function PositionReviewWorkspace({
             tags={tags}
             configured={configured}
             balanceTotal={balanceTotal}
+            cfdBalanceTotal={cfdBalanceTotal}
             syncing={syncing}
             onSync={handleSync}
             onNoteUpdated={(positionId, note) => {
@@ -907,8 +924,9 @@ export function PositionReviewWorkspace({
                       selectedPnl >= 0 ? 'profit' : 'loss'
                     }`}
                   >
-                    {selectedPnl >= 0 ? '+' : ''}
-                    {formatNumber(selectedPnl)} USDT
+                    {selected.venue === 'gate-cfd' && selected.netPnl == null
+                      ? '—'
+                      : `${selectedPnl >= 0 ? '+' : ''}${formatNumber(selectedPnl)}`} {positionCurrency(selected)}
                   </strong>
                   <button
                     type="button"
@@ -998,9 +1016,11 @@ export function PositionReviewWorkspace({
                   <PositionReviewPanel
                     key={positionKey(selected)}
                     position={selected}
+                    positions={positions}
                     tags={tags}
                     onChange={updateSelected}
-                    onTagsCreated={(tag) => setTags((current) => [...current, tag])}
+                    onTagIdsChange={updatePositionTags}
+                    onTagsCreated={(tag) => setTags((current) => current.some((item) => item.id === tag.id) ? current : [...current, tag])}
                     onTagDeleted={handleTagDeleted}
                   />
                 </div>

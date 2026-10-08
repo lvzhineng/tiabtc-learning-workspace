@@ -1,8 +1,9 @@
 .learning-container {
-  max-width: 1360px;
+  max-width: 1480px;
   width: 100%;
   margin: 0 auto;
-  padding: 28px 24px 56px;
+  padding: 24px 24px 40px;
+  min-width: 0;
   overflow: auto;
   height: 100%;
 }
@@ -11,8 +12,8 @@
   display: flex;
   align-items: flex-start;
   justify-content: space-between;
-  gap: 24px;
-  margin-bottom: 22px;
+  gap: 16px;
+  margin-bottom: 18px;
 }
 
 .learning-eyebrow {
@@ -26,7 +27,7 @@
 
 .learning-title {
   margin: 0;
-  font-size: clamp(26px, 3vw, 34px);
+  font-size: clamp(24px, 2.2vw, 30px);
   letter-spacing: -0.03em;
   font-weight: 700;
   color: var(--text-primary);
@@ -115,7 +116,6 @@
 
 .learning-metric-card:hover {
   border-color: var(--border-active);
-  transform: translateY(-1px);
 }
 
 .learning-metric-label {
@@ -315,10 +315,10 @@
 
 .learning-table th,
 .learning-table td {
-  padding: 12px 14px;
+  padding: 10px 12px;
   border-bottom: 1px solid var(--border-color);
   text-align: left;
-  vertical-align: top;
+  vertical-align: middle;
 }
 
 .learning-table th {
@@ -331,6 +331,7 @@
   position: sticky;
   top: 0;
   z-index: 2;
+  white-space: nowrap;
 }
 
 .learning-table tr:hover {
@@ -358,7 +359,7 @@
 }
 
 .learning-col-bookmark {
-  width: 50px;
+  width: 56px;
 }
 
 .learning-col-date {
@@ -370,7 +371,7 @@
 }
 
 .learning-col-actions {
-  width: 140px;
+  width: 132px;
 }
 
 .learning-index {
@@ -473,7 +474,8 @@
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  padding: 2px;
+  width: 30px;
+  height: 30px;
   border-radius: 4px;
   transition: color 0.15s ease, background 0.15s ease;
 }
@@ -498,6 +500,8 @@
   font-family: inherit;
   cursor: pointer;
   outline: none;
+  min-width: 92px;
+  min-height: var(--control-height);
 }
 
 .status-badge-select.status-learned {
@@ -548,10 +552,43 @@
 
 @media (max-width: 1100px) {
   .learning-stats-grid {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
+    grid-template-columns: repeat(4, minmax(0, 1fr));
   }
 
   .learning-progress-card {
     grid-column: 1 / -1;
+  }
+}
+
+@media (max-width: 1000px) {
+  .learning-table-wrap {
+    max-width: 100%;
+    overflow-x: auto;
+  }
+}
+
+@media (max-width: 720px) {
+  .learning-container {
+    padding: 16px 12px 24px;
+  }
+
+  .learning-hero,
+  .learning-context-bar {
+    flex-wrap: wrap;
+    gap: 10px;
+  }
+
+  .learning-stats-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .learning-import-panel,
+  .learning-filters-card {
+    padding: 12px;
+  }
+
+  .learning-import-input {
+    flex-basis: 100%;
+    min-width: 0;
   }
 }

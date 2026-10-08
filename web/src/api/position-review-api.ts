@@ -13,6 +13,7 @@ import {
 import {
   type PositionCandleBatch,
   type PositionReviewState,
+  type PositionReviewCredentialInput,
   type PositionTag,
   type ReviewPosition,
   positionPnl,
@@ -33,6 +34,7 @@ type RawCandleResponse = {
   candleVenue?: string;
   warning?: string;
   truncated?: boolean;
+  volumeAvailable?: boolean;
 };
 
 export async function fetchPositionReviewState(): Promise<PositionReviewState> {
@@ -65,11 +67,8 @@ export async function fetchVenueCacheAudit(): Promise<VenueCacheAudit> {
   return requestJson<VenueCacheAudit>('/api/position-review/cache-audit');
 }
 
-export async function savePositionReviewCredentials(payload: {
-  venue: 'bitget' | 'gate';
-  apiKey: string;
-  secret: string;
-  passphrase?: string;
+export async function savePositionReviewCredentials(payload: PositionReviewCredentialInput & {
+  venue: 'bitget' | 'gate' | 'gate-cfd';
 }): Promise<{ configured: boolean; venue: string }> {
   return requestJson('/api/position-review/credentials', {
     method: 'POST',
@@ -242,7 +241,10 @@ async function requestPositionCandles(
   const truncated = Boolean(data.truncated);
   const rawWarning = (data.warning || '').trim() || null;
   const candleVenue = data.candleVenue || 'bybit';
-  const candles = parseCandleRows(data.candles, symbol, interval);
+  const candles = parseCandleRows(
+    data.volumeAvailable === false ? data.candles.map((row) => ({ ...row, volume: 0 })) : data.candles,
+    symbol, interval
+  );
   if (!rawWarning) {
     rememberCandleWindow(
       'position',
@@ -305,6 +307,11 @@ export async function fetchPositionEarlierCandles(
   signal?: AbortSignal,
   venue?: string
 ): Promise<PositionCandleBatch> {
+  if (venue === 'gate-cfd') {
+    return requestPositionCandles(new URLSearchParams({
+      symbol, interval, venue, before: String(beforeMs), limit: String(limit),
+    }), symbol, interval, signal);
+  }
   const intervalMs = TIMEFRAME_SECONDS_MAP[interval] * 1000;
   const exitTimeMs = beforeMs - intervalMs;
   const entryTimeMs = Math.max(1_230_768_000_000, exitTimeMs - intervalMs * limit);
@@ -329,6 +336,11 @@ export async function fetchPositionLaterCandles(
   signal?: AbortSignal,
   venue?: string
 ): Promise<PositionCandleBatch> {
+  if (venue === 'gate-cfd') {
+    return requestPositionCandles(new URLSearchParams({
+      symbol, interval, venue, after: String(afterMs), limit: String(limit),
+    }), symbol, interval, signal);
+  }
   const intervalMs = TIMEFRAME_SECONDS_MAP[interval] * 1000;
   const entryTimeMs = afterMs + intervalMs;
   const exitTimeMs = Math.min(Date.now(), entryTimeMs + intervalMs * limit);
