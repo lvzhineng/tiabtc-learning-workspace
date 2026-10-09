@@ -5,7 +5,7 @@
 /* Toast System */
 .toast-container {
   position: fixed;
-  top: 16px;
+  top: calc(var(--header-height) + 12px);
   right: 16px;
   z-index: 9999;
   display: flex;
@@ -141,6 +141,7 @@
 .confirm-modal {
   width: 100%;
   max-width: 420px;
+  max-height: calc(100dvh - 32px);
   background: var(--surface-elevated);
   border: 1px solid var(--border-color);
   border-radius: var(--radius-lg);
@@ -167,6 +168,7 @@
   align-items: center;
   justify-content: space-between;
   padding: 16px 18px 4px;
+  flex-shrink: 0;
 }
 
 .confirm-title-wrap {
@@ -210,6 +212,8 @@
 }
 
 .confirm-body {
+  min-height: 0;
+  overflow-y: auto;
   padding: 8px 18px 20px;
   color: var(--text-secondary);
   font-size: 13px;
@@ -228,6 +232,7 @@
   padding: 12px 18px;
   border-top: 1px solid var(--border-color);
   background: var(--bg-dark-700);
+  flex-shrink: 0;
 }
 
 .confirm-btn {

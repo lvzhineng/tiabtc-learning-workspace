@@ -31,7 +31,8 @@ function ComparisonMetric({ label, current, previous, delta, deltaText, neutral 
   );
 }
 
-export function PeriodComparison({ positions, dateRange, endMs, useEntryTime }: {
+export function PeriodComparison({ positions, dateRange, endMs, useEntryTime, currency = 'USDT' }: {
+  currency?: 'USDT' | 'USD';
   positions: ReviewPosition[]; dateRange: string; endMs: number; useEntryTime?: boolean;
 }) {
   const days = Number(dateRange.replace('d', ''));
@@ -56,7 +57,7 @@ export function PeriodComparison({ positions, dateRange, endMs, useEntryTime }: 
       </div>
       <div className="posdash-compare-grid">
         <ComparisonMetric
-          label="已实现盈亏 (USDT)"
+          label={`已实现盈亏 (${currency})`}
           current={signedNumber(current.totalPnl)}
           previous={signedNumber(previous.totalPnl)}
           delta={pnlDelta}
@@ -70,7 +71,7 @@ export function PeriodComparison({ positions, dateRange, endMs, useEntryTime }: 
           deltaText={winRateDelta == null ? '样本不足' : `${winRateDelta > 0 ? '+' : ''}${winRateDelta.toFixed(1)} pp`}
         />
         <ComparisonMetric
-          label="单笔期望 (USDT)"
+          label={`单笔期望 (${currency})`}
           current={current.closedCount ? signedNumber(current.expectancy) : '—'}
           previous={previous.closedCount ? signedNumber(previous.expectancy) : '—'}
           delta={expectancyDelta}

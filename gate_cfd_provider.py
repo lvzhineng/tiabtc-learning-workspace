@@ -2,6 +2,7 @@
 
 import json
 import math
+import re
 import threading
 import time
 from urllib.error import HTTPError, URLError
@@ -21,6 +22,15 @@ CFD_INTERVAL_MS = {"1": 60_000, "5": 300_000, "15": 900_000, "60": 3_600_000, "2
 def validate_cfd_scope(symbol, interval):
     if symbol not in CFD_SYMBOLS:
         raise ValueError("不支持该 CFD 品种")
+    if interval not in CFD_TIMEFRAMES:
+        raise ValueError("不支持该 CFD K 线周期")
+
+
+def validate_cfd_position_scope(symbol, interval):
+    # Account symbols may include forex, stocks and broker suffixes. Global
+    # markets still uses the explicit three-symbol whitelist above.
+    if not isinstance(symbol, str) or not re.fullmatch(r"[A-Z0-9][A-Z0-9._-]{1,39}", symbol):
+        raise ValueError("CFD 仓位品种无效")
     if interval not in CFD_TIMEFRAMES:
         raise ValueError("不支持该 CFD K 线周期")
 
@@ -84,7 +94,7 @@ class GateCfdMarketDataProvider:
         raise RuntimeError("Gate CFD 暂时无法连接，请稍后重试")
 
     def fetch(self, symbol, interval, *, start=None, end=None, limit=None):
-        validate_cfd_scope(symbol, interval)
+        validate_cfd_position_scope(symbol, interval)
         params = {"kline_type": CFD_TIMEFRAMES[interval]}
         if start is not None:
             params["begin_time"] = start // 1000

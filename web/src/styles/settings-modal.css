@@ -13,6 +13,11 @@
   color: var(--text-primary);
 }
 
+.settings-section + .settings-section {
+  padding-top: 16px;
+  border-top: 1px solid var(--border-color);
+}
+
 .settings-disclosure {
   margin: 0 0 10px;
   font-size: 13px;

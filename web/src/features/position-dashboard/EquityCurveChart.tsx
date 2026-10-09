@@ -16,6 +16,7 @@ interface Point {
 }
 
 interface Props {
+  currency?: 'USDT' | 'USD';
   positions: ReviewPosition[];
 }
 
@@ -104,7 +105,7 @@ function niceStep(range: number, targetTicks: number): number {
   return nice * magnitude;
 }
 
-export function EquityCurveChart({ positions }: Props) {
+export function EquityCurveChart({ positions, currency = 'USDT' }: Props) {
   const gradientId = useId().replace(/:/g, '');
   const [canvasElement, setCanvasElement] = useState<HTMLDivElement | null>(null);
   const [width, setWidth] = useState(0);
@@ -361,14 +362,14 @@ export function EquityCurveChart({ positions }: Props) {
               <span className="posdash-tooltip-label">单笔净盈亏</span>
               <span className={`posdash-tooltip-value ${activePoint.pnl >= 0 ? 'profit' : 'loss'}`}>
                 {activePoint.pnl >= 0 ? '+' : ''}
-                {activePoint.pnl.toFixed(2)} USDT
+                {activePoint.pnl.toFixed(2)} {currency}
               </span>
             </div>
             <div className="posdash-tooltip-row">
               <span className="posdash-tooltip-label">累计净值</span>
               <span className={`posdash-tooltip-value ${activePoint.cumulative >= 0 ? 'profit' : 'loss'}`}>
                 {activePoint.cumulative >= 0 ? '+' : ''}
-                {activePoint.cumulative.toFixed(2)} USDT
+                {activePoint.cumulative.toFixed(2)} {currency}
               </span>
             </div>
             <div className="posdash-tooltip-row">

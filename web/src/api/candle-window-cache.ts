@@ -37,6 +37,7 @@ export function positionCandleCacheVenue(
   symbol: string,
   positionVenue?: string | null
 ): string {
+  if (positionVenue === 'gate-cfd') return 'gate-cfd';
   const compact = String(symbol || '').trim().toUpperCase();
   if (compact === 'BTCUSDT' || compact === 'ETHUSDT') return 'bybit';
   const venue = String(positionVenue || '').trim().toLowerCase();
@@ -243,6 +244,7 @@ export function sliceCachedCandleWindow(
 }
 
 export function candleVenueLabel(venue: string | null | undefined): string {
+  if (venue === 'gate-cfd') return 'K 线来源 Gate CFD';
   if (venue === 'bitget') return 'K 线来源 Bitget';
   if (venue === 'gate') return 'K 线来源 Gate';
   return 'K 线来源 Bybit';

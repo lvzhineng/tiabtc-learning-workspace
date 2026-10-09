@@ -11,8 +11,8 @@
   --border-subtle: #181d27;
 
   --text-primary: #e8ebf2;
-  --text-secondary: #9aa3b6;
-  --text-muted: #646d81;
+  --text-secondary: #b0bbcd;
+  --text-muted: #8a95aa;
 
   --accent-blue: #4f7cff;
   --accent-blue-hover: #3f6cf2;
@@ -27,7 +27,7 @@
 
   --surface-elevated: #141922;
   --surface-overlay: rgba(4, 6, 10, 0.62);
-  --control-height: 30px;
+  --control-height: 32px;
   --header-height: 52px;
 
   --font-family: 'IBM Plex Sans', 'Segoe UI', 'PingFang SC', 'Microsoft YaHei',
@@ -62,11 +62,11 @@
   --text-secondary: #4b5565;
   --text-muted: #7a8496;
 
-  --accent-blue: #3d6af0;
-  --accent-blue-hover: #2f5bdf;
-  --accent-green: #0e9f74;
-  --accent-red: #e03a5a;
-  --accent-orange: #d98a1c;
+  --accent-blue: #2563eb;
+  --accent-blue-hover: #1d4fd8;
+  --accent-green: #078566;
+  --accent-red: #d82f50;
+  --accent-orange: #b66b00;
 
   --surface-elevated: #ffffff;
   --surface-overlay: rgba(15, 23, 42, 0.32);

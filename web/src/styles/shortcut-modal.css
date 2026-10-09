@@ -23,7 +23,7 @@
 .shortcut-modal-container {
   width: 100%;
   max-width: 520px;
-  max-height: 85vh;
+  max-height: min(85vh, calc(100dvh - 32px));
   display: flex;
   flex-direction: column;
   background: var(--surface-elevated);
@@ -51,6 +51,7 @@
   justify-content: space-between;
   padding: 16px 18px;
   border-bottom: 1px solid var(--border-color);
+  flex-shrink: 0;
 }
 
 .shortcut-modal-title {
@@ -75,11 +76,12 @@
 }
 
 .shortcut-modal-close {
-  display: flex;
+  display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 28px;
-  height: 28px;
+  width: 30px;
+  height: 30px;
+  flex-shrink: 0;
   padding: 0;
   border: none;
   background: transparent;
@@ -95,6 +97,7 @@
 }
 
 .shortcut-modal-body {
+  min-height: 0;
   padding: 16px 18px;
   overflow-y: auto;
   display: flex;
@@ -125,6 +128,8 @@
   align-items: center;
   justify-content: space-between;
   padding: 8px 12px;
+  gap: 12px;
+  flex-wrap: wrap;
 }
 
 .shortcut-row + .shortcut-row {
@@ -159,6 +164,9 @@
   background: var(--bg-dark-700);
   font-size: 11px;
   color: var(--text-muted);
+  flex-shrink: 0;
+  gap: 12px;
+  flex-wrap: wrap;
 }
 
 .shortcut-btn-close {

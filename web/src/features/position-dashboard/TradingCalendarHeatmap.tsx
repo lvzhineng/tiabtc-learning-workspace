@@ -5,6 +5,7 @@ import { formatNumber } from '@/features/position-review/position-review-format'
 import '@/styles/trading-calendar-heatmap.css';
 
 interface TradingCalendarHeatmapProps {
+  currency?: 'USDT' | 'USD';
   positions: ReviewPosition[];
   selectedDate: string | null;
   onSelectDate: (date: string | null) => void;
@@ -40,6 +41,7 @@ function formatShanghaiDate(timestampMs: number): string {
 }
 
 export function TradingCalendarHeatmap({
+  currency = 'USDT',
   positions,
   selectedDate,
   onSelectDate,
@@ -188,7 +190,7 @@ export function TradingCalendarHeatmap({
                   onMouseLeave={() => setHoveredDay(null)}
                   aria-label={
                     day.count > 0
-                      ? `${day.dateStr}: ${day.pnl >= 0 ? '+' : ''}${formatNumber(day.pnl)} USDT (${day.count} 笔)`
+                      ? `${day.dateStr}: ${day.pnl >= 0 ? '+' : ''}${formatNumber(day.pnl)} ${currency} (${day.count} 笔)`
                       : `${day.dateStr}: 无交易`
                   }
                 />
@@ -206,7 +208,7 @@ export function TradingCalendarHeatmap({
                 <strong>{focusDay.dateStr}</strong>
                 <strong className={focusDay.pnl >= 0 ? 'posrev-profit' : 'posrev-loss'}>
                   {focusDay.pnl >= 0 ? '+' : ''}
-                  {formatNumber(focusDay.pnl)} USDT
+                  {formatNumber(focusDay.pnl)} {currency}
                 </strong>
                 <span>
                   {focusDay.count} 笔 · {focusDay.winCount} 胜 {focusDay.lossCount} 负

@@ -68,6 +68,7 @@ export function loadPositionReviewUiState(): PositionReviewUiState {
       'all',
       'bitget',
       'gate',
+      'gate-cfd',
     ]) as VenueFilter,
     side: storedString(stored.side, 'all', [
       'all',
