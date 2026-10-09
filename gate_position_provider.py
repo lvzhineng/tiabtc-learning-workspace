@@ -188,6 +188,14 @@ class GateUsdtPositionProvider:
             params.update(extra)
         return params
 
+    def _contract_size(self, contract):
+        try:
+            market = self.exchange.market(contract)
+        except (ccxt.BaseError, KeyError, TypeError, ValueError):
+            return None
+        contract_size = _to_float(market.get("contractSize"))
+        return contract_size if contract_size is not None and contract_size > 0 else None
+
     def fetch_balance_usdt(self):
         try:
             with self.request_lock:
@@ -208,6 +216,7 @@ class GateUsdtPositionProvider:
         }
 
     def fetch_open_positions(self):
+        self.warm_up_markets()
         try:
             with self.request_lock:
                 rows = self.exchange.fetch_positions(None, self._swap_params())
@@ -221,6 +230,7 @@ class GateUsdtPositionProvider:
         return positions
 
     def fetch_closed_positions(self, since_ms, until_ms, limit=1000, max_pages=50):
+        self.warm_up_markets()
         positions = []
         offset = 0
         since_sec = max(0, int(since_ms / 1000))
@@ -421,6 +431,7 @@ class GateUsdtPositionProvider:
             ),
             "exitPrice": None,
             "contracts": abs(contracts),
+            "contractSize": self._contract_size(contract),
             "leverage": leverage,
             "marginMode": parse_gate_margin_mode(row, info),
             "hedged": str(info.get("mode") or "").strip().lower() == "dual",
@@ -478,6 +489,7 @@ class GateUsdtPositionProvider:
             "contracts": _first_float(
                 row.get("accum_size"), row.get("max_size")
             ),
+            "contractSize": self._contract_size(contract),
             "leverage": parse_gate_leverage({}, row),
             "marginMode": None,
             "hedged": False,

@@ -436,7 +436,7 @@ export function PositionReviewChart({
           onClose={toggleObjectTree}
         />
       )}
-      <div className="posrev-chart-controls">
+      <div className="posrev-chart-controls posrev-chart-overlay-actions">
         {hasOtherPositions && (
           <button
             type="button"
@@ -449,6 +449,17 @@ export function PositionReviewChart({
             <span>{showOtherPositions ? '隐藏其他仓位' : '显示其他仓位'}</span>
           </button>
         )}
+        {chartLoading && displayedCandles.length > 0 ? (
+          <div className="posrev-venue-badge posrev-refreshing">更新中</div>
+        ) : displayedCandles.length > 0 ? (
+          <div
+            className={`posrev-venue-badge ${
+              candleVenue === 'bitget' || candleVenue === 'gate' ? 'fallback' : ''
+            }`}
+          >
+            {candleVenueLabel(candleVenue)}
+          </div>
+        ) : null}
         {position.fills && position.fills.length >= 2 && (
           <button
             type="button"
@@ -539,19 +550,6 @@ export function PositionReviewChart({
       {chartWarning && !chartError && (
         <div className="bitlang-chart-status warning">{chartWarning}</div>
       )}
-      {chartLoading && displayedCandles.length > 0 && (
-        <div className="posrev-venue-badge posrev-refreshing">更新中</div>
-      )}
-      {displayedCandles.length > 0 &&
-        !(chartLoading && displayedCandles.length > 0) && (
-        <div
-          className={`posrev-venue-badge ${
-            candleVenue === 'bitget' || candleVenue === 'gate' ? 'fallback' : ''
-          }`}
-        >
-          {candleVenueLabel(candleVenue)}
-        </div>
-        )}
     </div>
   );
 }

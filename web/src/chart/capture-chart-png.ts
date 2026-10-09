@@ -31,6 +31,21 @@ function formatCaptureLabel(label: ChartCaptureLabel): string {
     .join(' · ');
 }
 
+function formatLocalCaptureTime(date: Date): string {
+  const pad = (value: number) => String(value).padStart(2, '0');
+  const offsetMinutes = -date.getTimezoneOffset();
+  const offsetSign = offsetMinutes >= 0 ? '+' : '-';
+  const absoluteOffset = Math.abs(offsetMinutes);
+  const offset = `${offsetSign}${pad(Math.floor(absoluteOffset / 60))}:${pad(
+    absoluteOffset % 60
+  )}`;
+  return `本机时间 ${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(
+    date.getDate()
+  )} ${pad(date.getHours())}:${pad(date.getMinutes())}:${pad(
+    date.getSeconds()
+  )} UTC${offset}`;
+}
+
 function drawCaptureLabel(
   context: CanvasRenderingContext2D,
   label: ChartCaptureLabel,
@@ -38,11 +53,10 @@ function drawCaptureLabel(
   width: number
 ) {
   const text = formatCaptureLabel(label);
-  if (!text) return;
+  const localTime = formatLocalCaptureTime(new Date());
   const fontSize = Math.max(12, Math.min(15, Math.round(width / 72)));
+  const top = 10;
   context.save();
-  context.font = `600 ${fontSize}px "Segoe UI","PingFang SC","Microsoft YaHei",sans-serif`;
-  context.textAlign = 'left';
   context.textBaseline = 'top';
   context.shadowColor =
     themeMode === 'dark' ? 'rgba(0, 0, 0, 0.65)' : 'rgba(255, 255, 255, 0.85)';
@@ -50,9 +64,38 @@ function drawCaptureLabel(
   context.shadowOffsetY = 1;
   context.fillStyle =
     themeMode === 'dark' ? 'rgba(178, 181, 190, 0.95)' : 'rgba(19, 23, 34, 0.78)';
-  context.fillText(text, 12, 10, Math.max(80, width - 24));
+  context.font = `600 ${fontSize}px "Segoe UI","PingFang SC","Microsoft YaHei",sans-serif`;
+  const labelWidth = context.measureText(text).width;
+  context.font = `500 ${fontSize}px "Segoe UI","PingFang SC","Microsoft YaHei",sans-serif`;
+  const timeWidth = context.measureText(localTime).width;
+  const stackTime = Boolean(text) && labelWidth + timeWidth + 48 > width;
+
+  if (text) {
+    context.font = `600 ${fontSize}px "Segoe UI","PingFang SC","Microsoft YaHei",sans-serif`;
+    context.textAlign = 'left';
+    const maxLabelWidth = stackTime
+      ? Math.max(80, width - 24)
+      : Math.max(80, width - timeWidth - 36);
+    context.fillText(text, 12, top, maxLabelWidth);
+  }
+
+  context.font = `500 ${fontSize}px "Segoe UI","PingFang SC","Microsoft YaHei",sans-serif`;
+  context.textAlign = 'right';
+  context.fillText(
+    localTime,
+    width - 12,
+    stackTime ? top + fontSize + 4 : top,
+    Math.max(120, width - 24)
+  );
   if (label.time) {
-    context.fillText(label.time, 12, 13 + fontSize, Math.max(80, width - 24));
+    context.font = `600 ${fontSize}px "Segoe UI","PingFang SC","Microsoft YaHei",sans-serif`;
+    context.textAlign = 'left';
+    context.fillText(
+      label.time,
+      12,
+      top + (stackTime ? 2 : 1) * (fontSize + 4),
+      Math.max(80, width - 24)
+    );
   }
   context.restore();
 }

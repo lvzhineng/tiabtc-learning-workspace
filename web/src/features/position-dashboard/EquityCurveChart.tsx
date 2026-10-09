@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useId, useMemo, useState } from 'react';
 import type { ReviewPosition } from '@/api/position-review-api';
 import { buildEquityCurve } from '@/features/position-review/position-stats';
 import { formatChartTime } from '@/chart/chart-time';
@@ -18,6 +18,14 @@ interface Point {
 interface Props {
   positions: ReviewPosition[];
 }
+
+const CHART_HEIGHT = 248;
+const PAD_TOP = 16;
+const PAD_BOTTOM = 28;
+const PAD_LEFT = 52;
+const PAD_RIGHT = 14;
+const PROFIT_COLOR = 'var(--accent-green)';
+const LOSS_COLOR = 'var(--accent-red)';
 
 function getSmoothPath(points: Point[]): string {
   if (points.length <= 1) return '';
@@ -74,130 +82,115 @@ function downsamplePathPoints(points: Point[], maxPoints = 1200): Point[] {
 }
 
 function formatShortDate(timestampMs: number): string {
-  const d = new Date(timestampMs);
   return new Intl.DateTimeFormat('zh-CN', {
     timeZone: 'Asia/Shanghai',
     month: '2-digit',
     day: '2-digit',
-    hour: '2-digit',
-    minute: '2-digit',
-    hour12: false,
-  }).format(d).replace(/\//g, '-');
+  }).format(new Date(timestampMs)).replace(/\//g, '-');
+}
+
+function formatAxisValue(value: number): string {
+  const abs = Math.abs(value);
+  const text = abs >= 10000 ? `${(abs / 1000).toFixed(0)}k` : abs >= 1000 ? `${(abs / 1000).toFixed(1)}k` : abs.toFixed(0);
+  if (Number(text.replace('k', '')) === 0) return '0';
+  return `${value < 0 ? '-' : '+'}${text}`;
+}
+
+function niceStep(range: number, targetTicks: number): number {
+  const rough = range / Math.max(1, targetTicks);
+  const magnitude = 10 ** Math.floor(Math.log10(rough));
+  const residual = rough / magnitude;
+  const nice = residual >= 5 ? 10 : residual >= 2 ? 5 : residual >= 1 ? 2 : 1;
+  return nice * magnitude;
 }
 
 export function EquityCurveChart({ positions }: Props) {
+  const gradientId = useId().replace(/:/g, '');
+  const [canvasElement, setCanvasElement] = useState<HTMLDivElement | null>(null);
+  const [width, setWidth] = useState(0);
   const [hoveredPoint, setHoveredPoint] = useState<Point | null>(null);
 
-  const { points, maxAth, maxDrawdown, totalPnl, sampleCount, minVal, maxVal, yTicks } = useMemo(() => {
-    const equity = buildEquityCurve(positions);
-    if (equity.points.length === 0) {
-      return {
-        points: [],
-        maxAth: 0,
-        maxDrawdown: 0,
-        totalPnl: 0,
-        sampleCount: 0,
-        minVal: 0,
-        maxVal: 0,
-        yTicks: [],
-      };
-    }
+  useEffect(() => {
+    if (!canvasElement) return;
+    const update = () => setWidth(Math.round(canvasElement.clientWidth));
+    update();
+    const observer = new ResizeObserver(update);
+    observer.observe(canvasElement);
+    return () => observer.disconnect();
+  }, [canvasElement]);
 
-    const firstTime = equity.points[0].timeMs - 3600000;
-    const dataSeries = [
-      {
-        timeMs: firstTime,
-        symbol: '',
-        side: 'long' as const,
-        pnl: 0,
-        cumulative: 0,
-      },
+  const equity = useMemo(() => buildEquityCurve(positions), [positions]);
+
+  const geometry = useMemo(() => {
+    if (equity.points.length === 0 || width <= 0) return null;
+
+    const series = [
+      { timeMs: equity.points[0].timeMs - 3600000, symbol: '', side: 'long' as const, pnl: 0, cumulative: 0 },
       ...equity.points,
     ];
 
-    // Map to SVG coordinates (width: 600, height: 210, padding: 30 left/right, 24 top, 28 bottom)
-    const svgWidth = 600;
-    const svgHeight = 210;
-    const padTop = 22;
-    const padBottom = 32;
-    const padLeft = 45;
-    const padRight = 20;
-
-    let computedMin = 0;
-    let computedMax = 0;
-    for (const d of dataSeries) {
-      if (d.cumulative < computedMin) computedMin = d.cumulative;
-      if (d.cumulative > computedMax) computedMax = d.cumulative;
+    let rawMin = 0;
+    let rawMax = 0;
+    for (const item of series) {
+      if (item.cumulative < rawMin) rawMin = item.cumulative;
+      if (item.cumulative > rawMax) rawMax = item.cumulative;
     }
-    if (computedMax === computedMin) {
-      computedMax += 10;
-      computedMin -= 10;
+    if (rawMax === rawMin) {
+      rawMax += 10;
+      rawMin -= 10;
     }
-    // Add 10% breathing room
-    const paddingVal = (computedMax - computedMin) * 0.08;
-    computedMax += paddingVal;
-    computedMin -= paddingVal;
-
-    const valRange = computedMax - computedMin || 1;
-
-    const mappedPoints: Point[] = dataSeries.map((d, i) => {
-      const x =
-        padLeft +
-        (i / Math.max(1, dataSeries.length - 1)) * (svgWidth - padLeft - padRight);
-      const normalizedY = (d.cumulative - computedMin) / valRange;
-      const y =
-        svgHeight - padBottom - normalizedY * (svgHeight - padTop - padBottom);
-      return {
-        index: i,
-        timeMs: d.timeMs,
-        symbol: d.symbol,
-        side: d.side,
-        pnl: d.pnl,
-        cumulative: d.cumulative,
-        x,
-        y,
-      };
-    });
-
-    // Generate 4 Y-ticks
-    const ticks: Array<{ val: number; y: number }> = [];
-    const tickSteps = 3;
-    for (let step = 0; step <= tickSteps; step++) {
-      const v = computedMin + (step / tickSteps) * valRange;
-      const y = svgHeight - padBottom - (step / tickSteps) * (svgHeight - padTop - padBottom);
-      ticks.push({ val: v, y });
-    }
-
-    return {
-      points: mappedPoints,
-      maxAth: equity.peak,
-      maxDrawdown: equity.maxDrawdown,
-      totalPnl: equity.totalPnl,
-      sampleCount: equity.closed.length,
-      minVal: computedMin,
-      maxVal: computedMax,
-      yTicks: ticks,
-    };
-  }, [positions]);
-
-  const pathGeometry = useMemo(() => {
-    if (points.length <= 1) {
-      return { linePath: '', areaPath: '', zeroY: 0 };
-    }
+    const step = niceStep(rawMax - rawMin, 4);
+    const minVal = Math.floor(rawMin / step) * step;
+    const maxVal = Math.ceil(rawMax / step) * step;
     const valRange = maxVal - minVal || 1;
-    const zeroY = 210 - 32 - ((0 - minVal) / valRange) * (210 - 22 - 32);
+    const plotWidth = Math.max(1, width - PAD_LEFT - PAD_RIGHT);
+    const plotHeight = CHART_HEIGHT - PAD_TOP - PAD_BOTTOM;
+    const toY = (value: number) => PAD_TOP + (1 - (value - minVal) / valRange) * plotHeight;
+
+    const points: Point[] = series.map((item, index) => ({
+      index,
+      timeMs: item.timeMs,
+      symbol: item.symbol,
+      side: item.side,
+      pnl: item.pnl,
+      cumulative: item.cumulative,
+      x: PAD_LEFT + (index / Math.max(1, series.length - 1)) * plotWidth,
+      y: toY(item.cumulative),
+    }));
+
+    const ticks: Array<{ value: number; y: number }> = [];
+    for (let value = minVal; value <= maxVal + step / 2; value += step) {
+      ticks.push({ value, y: toY(value) });
+    }
+
+    const zeroY = toY(0);
     const pathPoints = downsamplePathPoints(points);
     const linePath = getSmoothPath(pathPoints);
     const firstX = pathPoints[0].x;
     const lastX = pathPoints[pathPoints.length - 1].x;
+    const zeroOffset = Math.min(1, Math.max(0, (zeroY - PAD_TOP) / plotHeight));
+
+    const labelCount = Math.max(2, Math.min(6, Math.floor(plotWidth / 110)));
+    const xLabels: Point[] = [];
+    for (let i = 0; i < labelCount; i++) {
+      const index = 1 + Math.round((i / (labelCount - 1)) * (points.length - 2));
+      const point = points[Math.min(points.length - 1, Math.max(1, index))];
+      if (!xLabels.some((item) => item.index === point.index)) xLabels.push(point);
+    }
+
     return {
+      points,
+      ticks,
+      zeroY,
+      zeroOffset,
       linePath,
       areaPath: `${linePath} L ${lastX.toFixed(1)} ${zeroY.toFixed(1)} L ${firstX.toFixed(1)} ${zeroY.toFixed(1)} Z`,
-      zeroY,
+      xLabels,
+      plotWidth,
     };
-  }, [maxVal, minVal, points]);
+  }, [equity, width]);
 
-  if (points.length <= 1) {
+  if (equity.points.length === 0) {
     return (
       <div className="posdash-empty-state">
         <TrendingUp size={28} />
@@ -206,260 +199,204 @@ export function EquityCurveChart({ positions }: Props) {
     );
   }
 
-  const { areaPath, linePath, zeroY } = pathGeometry;
-
-  // 现代科技电光青蓝 (Cyber Blue-Cyan) 配色
-  const strokeColor = '#0ea5e9';
-  const fillColor = 'url(#cyberCyanGrad)';
-
-  const handleMouseMove = (e: React.MouseEvent<SVGSVGElement>) => {
-    const rect = e.currentTarget.getBoundingClientRect();
-    const mouseX = ((e.clientX - rect.left) / rect.width) * 600;
-
+  const handleMouseMove = (event: React.MouseEvent<SVGSVGElement>) => {
+    if (!geometry) return;
+    const rect = event.currentTarget.getBoundingClientRect();
+    const mouseX = event.clientX - rect.left;
+    const { points, plotWidth } = geometry;
     const pointIndex = Math.max(
-      0,
-      Math.min(
-        points.length - 1,
-        Math.round(((mouseX - 45) / (580 - 45)) * (points.length - 1))
-      )
+      1,
+      Math.min(points.length - 1, Math.round(((mouseX - PAD_LEFT) / plotWidth) * (points.length - 1)))
     );
     const nextPoint = points[pointIndex];
-    setHoveredPoint((current) =>
-      current?.index === nextPoint.index ? current : nextPoint
-    );
+    setHoveredPoint((current) => (current?.index === nextPoint.index ? current : nextPoint));
   };
 
-  // 3 Key time points for X-axis
-  const startPoint = points[1] || points[0];
-  const midPoint = points[Math.floor(points.length / 2)];
-  const endPoint = points[points.length - 1];
+  const activePoint =
+    hoveredPoint && geometry ? geometry.points[hoveredPoint.index] ?? null : null;
+  const lastPoint = geometry?.points[geometry.points.length - 1];
 
   return (
     <div className="posdash-chart-wrap">
-      <svg
-        className="posdash-svg-chart"
-        viewBox="0 0 600 210"
-        preserveAspectRatio="none"
-        onMouseMove={handleMouseMove}
-        onMouseLeave={() => setHoveredPoint(null)}
-      >
-        <defs>
-          {/* 电光青蓝通透云雾渐变 */}
-          <linearGradient id="cyberCyanGrad" x1="0" y1="0" x2="0" y2="1">
-            <stop offset="0%" stopColor="#0ea5e9" stopOpacity="0.22" />
-            <stop offset="45%" stopColor="#38bdf8" stopOpacity="0.08" />
-            <stop offset="100%" stopColor="#0284c7" stopOpacity="0.0" />
-          </linearGradient>
-          {/* 电光科技微光阴影 */}
-          <filter id="cyberGlow" x="-10%" y="-10%" width="120%" height="120%">
-            <feDropShadow
-              dx="0"
-              dy="3"
-              stdDeviation="3.5"
-              floodColor="#0ea5e9"
-              floodOpacity="0.38"
-            />
-          </filter>
-        </defs>
+      <div className="posdash-chart-canvas" ref={setCanvasElement} style={{ height: CHART_HEIGHT }}>
+        {geometry && (
+          <svg
+            className="posdash-svg-chart"
+            width={width}
+            height={CHART_HEIGHT}
+            viewBox={`0 0 ${width} ${CHART_HEIGHT}`}
+            onMouseMove={handleMouseMove}
+            onMouseLeave={() => setHoveredPoint(null)}
+          >
+            <defs>
+              <linearGradient
+                id={`${gradientId}-stroke`}
+                gradientUnits="userSpaceOnUse"
+                x1="0"
+                y1={PAD_TOP}
+                x2="0"
+                y2={CHART_HEIGHT - PAD_BOTTOM}
+              >
+                <stop offset={geometry.zeroOffset} stopColor={PROFIT_COLOR} />
+                <stop offset={geometry.zeroOffset} stopColor={LOSS_COLOR} />
+              </linearGradient>
+              <linearGradient
+                id={`${gradientId}-fill`}
+                gradientUnits="userSpaceOnUse"
+                x1="0"
+                y1={PAD_TOP}
+                x2="0"
+                y2={CHART_HEIGHT - PAD_BOTTOM}
+              >
+                <stop offset="0" stopColor={PROFIT_COLOR} stopOpacity="0.24" />
+                <stop offset={geometry.zeroOffset} stopColor={PROFIT_COLOR} stopOpacity="0.02" />
+                <stop offset={geometry.zeroOffset} stopColor={LOSS_COLOR} stopOpacity="0.02" />
+                <stop offset="1" stopColor={LOSS_COLOR} stopOpacity="0.24" />
+              </linearGradient>
+            </defs>
 
-        {/* 背景轻量水平网格线与 Y 轴刻度 */}
-        {yTicks.map((t, idx) => (
-          <g key={idx}>
+            {geometry.ticks.map((tick) => (
+              <g key={tick.value}>
+                <line
+                  className="posdash-chart-grid"
+                  x1={PAD_LEFT}
+                  y1={tick.y}
+                  x2={width - PAD_RIGHT}
+                  y2={tick.y}
+                />
+                <text className="posdash-chart-axis" x={PAD_LEFT - 8} y={tick.y + 3.5} textAnchor="end">
+                  {formatAxisValue(tick.value)}
+                </text>
+              </g>
+            ))}
+
             <line
-              x1="45"
-              y1={t.y}
-              x2="580"
-              y2={t.y}
-              stroke="var(--border-color, rgba(128,128,128,0.12))"
-              strokeDasharray="3 3"
-              strokeWidth="0.8"
-              opacity="0.6"
+              className="posdash-chart-zero"
+              x1={PAD_LEFT}
+              y1={geometry.zeroY}
+              x2={width - PAD_RIGHT}
+              y2={geometry.zeroY}
             />
-            <text
-              x="40"
-              y={t.y + 3.5}
-              textAnchor="end"
-              fontSize="9.5"
-              fill="var(--text-muted, #888)"
-              fontFamily="var(--font-mono, monospace)"
-            >
-              {t.val >= 0 ? `+${t.val.toFixed(0)}` : t.val.toFixed(0)}
-            </text>
-          </g>
-        ))}
 
-        {/* 零轴基准线 (加深) */}
-        <line
-          x1="45"
-          y1={zeroY}
-          x2="580"
-          y2={zeroY}
-          stroke="var(--text-muted, rgba(128,128,128,0.4))"
-          strokeDasharray="4 4"
-          strokeWidth="1.2"
-          opacity="0.75"
-        />
-
-        {/* 渐变面积 */}
-        <path d={areaPath} fill={fillColor} />
-
-        {/* 电光青蓝丝滑平滑曲线 */}
-        <path
-          d={linePath}
-          fill="none"
-          stroke={strokeColor}
-          strokeWidth="2.8"
-          strokeLinecap="round"
-          strokeLinejoin="round"
-          filter="url(#cyberGlow)"
-        />
-
-        {/* X 轴时间刻度文字 */}
-        {startPoint && (
-          <text
-            x={startPoint.x}
-            y="202"
-            fontSize="9.5"
-            fill="var(--text-muted, #888)"
-            textAnchor="start"
-          >
-            {formatShortDate(startPoint.timeMs)}
-          </text>
-        )}
-        {midPoint && points.length > 3 && (
-          <text
-            x={midPoint.x}
-            y="202"
-            fontSize="9.5"
-            fill="var(--text-muted, #888)"
-            textAnchor="middle"
-          >
-            {formatShortDate(midPoint.timeMs)}
-          </text>
-        )}
-        {endPoint && (
-          <text
-            x={endPoint.x}
-            y="202"
-            fontSize="9.5"
-            fill="var(--text-muted, #888)"
-            textAnchor="end"
-          >
-            {formatShortDate(endPoint.timeMs)}
-          </text>
-        )}
-
-        {/* 鼠标悬浮指示 */}
-        {hoveredPoint && hoveredPoint.index > 0 && (
-          <g>
-            <line
-              x1={hoveredPoint.x}
-              y1="20"
-              x2={hoveredPoint.x}
-              y2="180"
-              stroke="#0ea5e9"
-              strokeDasharray="3 3"
-              strokeWidth="1.2"
-              opacity="0.6"
-            />
-            {/* 发光外圈 */}
-            <circle
-              cx={hoveredPoint.x}
-              cy={hoveredPoint.y}
-              r="7"
-              fill="#0ea5e9"
-              opacity="0.25"
-            />
-            {/* 实体核心点 */}
-            <circle
-              cx={hoveredPoint.x}
-              cy={hoveredPoint.y}
-              r="4"
-              fill="#0ea5e9"
-              stroke="var(--bg-dark-800, #ffffff)"
+            <path d={geometry.areaPath} fill={`url(#${gradientId}-fill)`} />
+            <path
+              d={geometry.linePath}
+              fill="none"
+              stroke={`url(#${gradientId}-stroke)`}
               strokeWidth="2"
+              strokeLinecap="round"
+              strokeLinejoin="round"
             />
-          </g>
+
+            {geometry.xLabels.map((point, index) => (
+              <text
+                key={point.index}
+                className="posdash-chart-axis"
+                x={point.x}
+                y={CHART_HEIGHT - 8}
+                textAnchor={index === 0 ? 'start' : index === geometry.xLabels.length - 1 ? 'end' : 'middle'}
+              >
+                {formatShortDate(point.timeMs)}
+              </text>
+            ))}
+
+            {lastPoint && !activePoint && (
+              <circle
+                cx={lastPoint.x}
+                cy={lastPoint.y}
+                r="3.5"
+                fill={lastPoint.cumulative >= 0 ? PROFIT_COLOR : LOSS_COLOR}
+                stroke="var(--bg-dark-800)"
+                strokeWidth="2"
+              />
+            )}
+
+            {activePoint && (
+              <g>
+                <line
+                  className="posdash-chart-crosshair"
+                  x1={activePoint.x}
+                  y1={PAD_TOP}
+                  x2={activePoint.x}
+                  y2={CHART_HEIGHT - PAD_BOTTOM}
+                />
+                <circle
+                  cx={activePoint.x}
+                  cy={activePoint.y}
+                  r="8"
+                  fill={activePoint.cumulative >= 0 ? PROFIT_COLOR : LOSS_COLOR}
+                  opacity="0.18"
+                />
+                <circle
+                  cx={activePoint.x}
+                  cy={activePoint.y}
+                  r="4"
+                  fill={activePoint.cumulative >= 0 ? PROFIT_COLOR : LOSS_COLOR}
+                  stroke="var(--bg-dark-800)"
+                  strokeWidth="2"
+                />
+              </g>
+            )}
+          </svg>
         )}
-      </svg>
 
-      {/* Tooltip 悬浮卡片 */}
-      {hoveredPoint && hoveredPoint.index > 0 && (
-        <div
-          className="posdash-chart-tooltip"
-          style={{
-            left: `${(hoveredPoint.x / 600) * 100}%`,
-            top: `${(hoveredPoint.y / 210) * 100}%`,
-            transform: `translate(${
-              hoveredPoint.x < 150
-                ? '0%'
-                : hoveredPoint.x > 450
-                ? '-100%'
-                : '-50%'
-            }, ${hoveredPoint.y < 90 ? '14px' : 'calc(-100% - 12px)'})`,
-          }}
-        >
-          <div className="posdash-tooltip-header">
-            <span
-              className={`posrev-side-badge ${hoveredPoint.side}`}
-              style={{ fontSize: 11, padding: '2px 7px', fontWeight: 600 }}
-            >
-              {hoveredPoint.symbol} · {hoveredPoint.side === 'long' ? '多头' : '空头'}
-            </span>
-            <span className="posdash-tooltip-time">
-              {formatChartTime(hoveredPoint.timeMs)}
-            </span>
+        {activePoint && geometry && (
+          <div
+            className="posdash-chart-tooltip"
+            style={{
+              left: activePoint.x,
+              top: activePoint.y,
+              transform: `translate(${
+                activePoint.x < width * 0.25 ? '12px' : activePoint.x > width * 0.75 ? 'calc(-100% - 12px)' : '-50%'
+              }, ${activePoint.y < CHART_HEIGHT * 0.45 ? '14px' : 'calc(-100% - 14px)'})`,
+            }}
+          >
+            <div className="posdash-tooltip-header">
+              <span className={`posrev-side-badge ${activePoint.side}`}>
+                {activePoint.symbol} · {activePoint.side === 'long' ? '多' : '空'}
+              </span>
+              <span className="posdash-tooltip-time">{formatChartTime(activePoint.timeMs)}</span>
+            </div>
+            <div className="posdash-tooltip-row">
+              <span className="posdash-tooltip-label">单笔净盈亏</span>
+              <span className={`posdash-tooltip-value ${activePoint.pnl >= 0 ? 'profit' : 'loss'}`}>
+                {activePoint.pnl >= 0 ? '+' : ''}
+                {activePoint.pnl.toFixed(2)} USDT
+              </span>
+            </div>
+            <div className="posdash-tooltip-row">
+              <span className="posdash-tooltip-label">累计净值</span>
+              <span className={`posdash-tooltip-value ${activePoint.cumulative >= 0 ? 'profit' : 'loss'}`}>
+                {activePoint.cumulative >= 0 ? '+' : ''}
+                {activePoint.cumulative.toFixed(2)} USDT
+              </span>
+            </div>
+            <div className="posdash-tooltip-row">
+              <span className="posdash-tooltip-label">序号</span>
+              <span className="posdash-tooltip-value">#{activePoint.index}</span>
+            </div>
           </div>
+        )}
+      </div>
 
-          <div className="posdash-tooltip-row">
-            <span className="posdash-tooltip-label">单笔净盈亏</span>
-            <span
-              className={`posdash-tooltip-value ${
-                hoveredPoint.pnl >= 0 ? 'profit' : 'loss'
-              }`}
-            >
-              {hoveredPoint.pnl >= 0 ? '+' : ''}
-              {hoveredPoint.pnl.toFixed(2)} USDT
-            </span>
-          </div>
-
-          <div className="posdash-tooltip-row">
-            <span className="posdash-tooltip-label">累计净值</span>
-            <span
-              className={`posdash-tooltip-value ${
-                hoveredPoint.cumulative >= 0 ? 'profit' : 'loss'
-              }`}
-            >
-              {hoveredPoint.cumulative >= 0 ? '+' : ''}
-              {hoveredPoint.cumulative.toFixed(2)} USDT
-            </span>
-          </div>
-        </div>
-      )}
-
-      {/* 底部摘要栏 */}
       <div className="posdash-chart-summary">
         <div className="posdash-summary-item">
           <span className="posdash-summary-label" title="累计净值序列的最高点">
-            历史最高净值 (ATH)
+            历史最高 (ATH)
           </span>
-          <span className="posdash-summary-val cyan-accent">
+          <span className={`posdash-summary-val ${equity.peak > 0 ? 'profit' : 'neutral'}`}>
             <TrendingUp size={13} />
-            {maxAth >= 0 ? '+' : ''}
-            {maxAth.toFixed(2)} USDT
+            {equity.peak >= 0 ? '+' : ''}
+            {equity.peak.toFixed(2)}
           </span>
         </div>
 
         <div className="posdash-summary-item">
-          <span
-            className="posdash-summary-label"
-            title="同一累计净值序列上，历史峰值到其后低点的最大回落"
-          >
-            最大回撤 (Max DD)
+          <span className="posdash-summary-label" title="同一累计净值序列上，历史峰值到其后低点的最大回落">
+            最大回撤
           </span>
           <span className="posdash-summary-val loss">
-            <TrendingDown size={13} />
-            -{maxDrawdown.toFixed(2)} USDT
+            <TrendingDown size={13} />-{equity.maxDrawdown.toFixed(2)}
           </span>
         </div>
 
@@ -467,16 +404,15 @@ export function EquityCurveChart({ positions }: Props) {
           <span className="posdash-summary-label" title="已平仓净盈亏累计，等于收益曲线终点">
             当前净值
           </span>
-          <span className={`posdash-summary-val ${totalPnl >= 0 ? 'cyan-accent' : 'loss'}`}>
-            {totalPnl >= 0 ? '+' : ''}{totalPnl.toFixed(2)} USDT
+          <span className={`posdash-summary-val ${equity.totalPnl >= 0 ? 'profit' : 'loss'}`}>
+            {equity.totalPnl >= 0 ? '+' : ''}
+            {equity.totalPnl.toFixed(2)}
           </span>
         </div>
 
         <div className="posdash-summary-item">
-          <span className="posdash-summary-label">总样本</span>
-          <span className="posdash-summary-val neutral">
-            {sampleCount} 笔交易
-          </span>
+          <span className="posdash-summary-label">样本</span>
+          <span className="posdash-summary-val neutral">{equity.closed.length} 笔</span>
         </div>
       </div>
     </div>

@@ -43,12 +43,13 @@ export function roiDisplayTitle(roi: number | null | undefined): string | undefi
 
 export function calculatePositionRoi(position: ReviewPosition): number | null {
   const pnl = position.netPnl ?? position.realizedPnl;
-  const { entryPrice, contracts, leverage } = position;
+  const { entryPrice, contracts, contractSize, leverage } = position;
   if (pnl == null || !Number.isFinite(pnl)) return null;
   if (entryPrice == null || !(entryPrice > 0)) return null;
   if (contracts == null || !(contracts > 0)) return null;
+  const size = contractSize != null && contractSize > 0 ? contractSize : 1;
   const lev = leverage != null && leverage > 0 ? leverage : 1;
-  const initialMargin = (entryPrice * contracts) / lev;
+  const initialMargin = (entryPrice * contracts * size) / lev;
   if (!(initialMargin > 0) || !Number.isFinite(initialMargin)) return null;
   return (pnl / initialMargin) * 100;
 }

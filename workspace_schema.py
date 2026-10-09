@@ -92,6 +92,7 @@ CREATE TABLE IF NOT EXISTS exchange_positions (
     entry_price REAL,
     exit_price REAL,
     contracts REAL,
+    contract_size REAL,
     leverage REAL,
     margin_mode TEXT,
     hedged INTEGER NOT NULL DEFAULT 0,

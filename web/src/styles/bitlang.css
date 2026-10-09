@@ -4,7 +4,7 @@
   height: 100%;
   min-height: 0;
   display: grid;
-  grid-template-columns: 350px minmax(0, 1fr);
+  grid-template-columns: 344px minmax(0, 1fr);
   background: var(--bg-dark-900);
   color: var(--text-primary);
   position: relative;
@@ -22,8 +22,8 @@
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 26px;
-  height: 26px;
+  width: 28px;
+  height: 28px;
   padding: 0;
   border: 1px solid var(--border-color);
   border-radius: var(--radius-sm);
@@ -36,7 +36,7 @@
 .bitlang-sidebar-toggle-btn:hover {
   color: var(--text-primary);
   background: var(--bg-dark-600);
-  border-color: var(--accent-blue);
+  border-color: var(--border-active);
 }
 
 .bitlang-sidebar-expand-float {
@@ -44,12 +44,13 @@
   top: 12px;
   left: 12px;
   z-index: 20;
-  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.4);
+  background: var(--surface-elevated);
+  box-shadow: var(--shadow-main);
 }
 
 .bitlang-review-shell.sidebar-collapsed .bitlang-chart-header,
 .bitlang-review-shell.sidebar-collapsed .posdash-header {
-  padding-left: 48px;
+  padding-left: 52px;
 }
 
 .bitlang-state {
@@ -59,20 +60,27 @@
   align-items: center;
   justify-content: center;
   gap: 8px;
-  color: var(--text-secondary);
+  color: var(--text-muted);
+  font-size: 13px;
 }
 
 .bitlang-state-action {
+  height: 30px;
   border: 1px solid var(--border-color);
-  border-radius: 6px;
-  padding: 5px 10px;
+  border-radius: var(--radius-sm);
+  padding: 0 12px;
   color: var(--text-primary);
   background: var(--bg-dark-700);
+  font: inherit;
+  font-size: 12px;
+  font-weight: 600;
   cursor: pointer;
+  transition: border-color 0.15s ease, color 0.15s ease, background 0.15s ease;
 }
 
 .bitlang-state-action:hover {
-  border-color: var(--accent-blue);
+  border-color: var(--accent-line);
+  background: var(--accent-soft);
   color: var(--accent-blue);
 }
 
@@ -85,22 +93,25 @@
 }
 
 .bitlang-sidebar-title {
-  height: 52px;
+  height: 54px;
+  flex-shrink: 0;
   display: flex;
   align-items: center;
   padding: 8px 14px;
   border-bottom: 1px solid var(--border-color);
-  background: color-mix(in srgb, var(--bg-dark-800) 92%, var(--accent-blue) 8%);
+  background: var(--bg-dark-800);
 }
 
 .bitlang-sidebar-title > div:first-child {
   display: flex;
   flex-direction: column;
+  gap: 1px;
   min-width: 0;
 }
 
 .bitlang-sidebar-title strong {
   font-size: 14px;
+  font-weight: 650;
   letter-spacing: -0.01em;
 }
 
@@ -115,20 +126,26 @@
 .bitlang-sidebar-filters {
   display: flex;
   flex-direction: column;
-  gap: 7px;
-  padding: 9px;
+  gap: 8px;
+  padding: 12px;
   border-bottom: 1px solid var(--border-color);
 }
 
 .bitlang-search {
   display: flex;
   align-items: center;
-  gap: 6px;
-  padding: 0 8px;
+  gap: 7px;
+  padding: 0 10px;
   background: var(--bg-dark-700);
   border: 1px solid var(--border-color);
   border-radius: var(--radius-sm);
   color: var(--text-muted);
+  transition: border-color 0.15s ease, box-shadow 0.15s ease;
+}
+
+.bitlang-search:focus-within {
+  border-color: var(--accent-blue);
+  box-shadow: var(--focus-ring);
 }
 
 .bitlang-search input,
@@ -141,7 +158,22 @@
   border-radius: var(--radius-sm);
   background: var(--bg-dark-700);
   color: var(--text-primary);
+  font-family: inherit;
   font-size: 12px;
+  transition: border-color 0.15s ease, background 0.15s ease, color 0.15s ease,
+    box-shadow 0.15s ease;
+}
+
+.bitlang-duration-filter input:focus,
+.bitlang-sidebar-filters select:focus {
+  outline: none;
+  border-color: var(--accent-blue);
+  box-shadow: var(--focus-ring);
+}
+
+.bitlang-sidebar-filters select:hover,
+.bitlang-sidebar-filters button:hover:not(:disabled) {
+  border-color: var(--border-active);
 }
 
 .bitlang-search input {
@@ -149,6 +181,10 @@
   border: 0;
   outline: 0;
   background: transparent;
+}
+
+.bitlang-search input::placeholder {
+  color: var(--text-muted);
 }
 
 .bitlang-duration-filter {
@@ -167,18 +203,19 @@
 
 .bitlang-duration-filter input {
   width: 100%;
-  padding: 0 7px;
+  padding: 0 8px;
   outline: 0;
 }
 
 .bitlang-sidebar-filters select {
-  padding: 0 7px;
+  padding: 0 8px;
+  cursor: pointer;
 }
 
 .bitlang-filter-row {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 7px;
+  gap: 8px;
 }
 
 .bitlang-sidebar-filters button {
@@ -190,18 +227,21 @@
 }
 
 .bitlang-progress {
-  min-height: 34px;
+  min-height: 36px;
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 6px;
-  padding: 6px 10px;
+  padding: 6px 14px;
   border-bottom: 1px solid var(--border-color);
+  background: var(--bg-dark-700);
 }
 
 .bitlang-progress strong {
+  color: var(--text-secondary);
   font-family: var(--font-mono);
   font-size: 12px;
+  font-weight: 500;
 }
 
 .bitlang-trade-list {
@@ -215,23 +255,24 @@
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
   gap: 3px 8px;
-  padding: 9px 11px;
+  padding: 10px 14px;
   border: 0;
-  border-bottom: 1px solid var(--border-color);
+  border-bottom: 1px solid var(--border-subtle);
   background: transparent;
   color: var(--text-secondary);
   text-align: left;
   cursor: pointer;
+  font-family: inherit;
   font-variant-numeric: tabular-nums;
-  transition: background-color 0.12s ease;
+  transition: background-color 0.12s ease, box-shadow 0.12s ease;
 }
 
-.bitlang-trade-row:hover,
-.bitlang-trade-row.active {
+.bitlang-trade-row:hover {
   background: var(--bg-dark-700);
 }
 
 .bitlang-trade-row.active {
+  background: var(--accent-soft);
   box-shadow: inset 3px 0 var(--accent-blue);
 }
 
@@ -245,7 +286,8 @@
 .bitlang-row-main strong {
   overflow: hidden;
   color: var(--text-primary);
-  font-size: 12px;
+  font-size: 12.5px;
+  font-weight: 600;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -266,8 +308,8 @@
 .bitlang-trade-row-compact {
   display: flex;
   flex-direction: column;
-  gap: 4px;
-  padding: 8px 11px;
+  gap: 5px;
+  padding: 10px 14px;
 }
 
 .bitlang-trade-row-compact > span:last-child {
@@ -298,40 +340,50 @@
 .bitlang-sidebar-filters .review-filter-chips {
   display: flex;
   flex-wrap: wrap;
-  gap: 4px;
+  gap: 5px;
 }
 
 .bitlang-sidebar-filters .review-filter-chips button,
 .bitlang-sidebar-filters .review-more-filters {
-  height: 24px;
-  padding: 0 8px;
+  height: 26px;
+  padding: 0 10px;
   border: 1px solid var(--border-color);
   border-radius: 99px;
-  background: var(--bg-dark-700);
+  background: transparent;
   color: var(--text-secondary);
-  font-size: 11px;
+  font-size: 11.5px;
   cursor: pointer;
+}
+
+.bitlang-sidebar-filters .review-filter-chips button:hover:not(.active) {
+  background: var(--bg-dark-700);
+  color: var(--text-primary);
 }
 
 .bitlang-sidebar-filters .review-more-filters {
   width: 100%;
   border-radius: var(--radius-sm);
+  background: var(--bg-dark-700);
 }
 
 .bitlang-sidebar-filters .review-filter-chips button.active,
 .bitlang-sidebar-filters .review-more-filters:hover {
-  border-color: color-mix(in srgb, var(--accent-blue) 55%, var(--border-color));
-  background: color-mix(in srgb, var(--accent-blue) 16%, var(--bg-dark-800));
+  border-color: var(--accent-line);
+  background: var(--accent-soft);
   color: var(--text-primary);
 }
 
 .review-list-section {
-  padding: 6px 11px 4px;
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  padding: 6px 14px 5px;
   color: var(--text-muted);
-  font-size: 10px;
-  letter-spacing: 0.04em;
+  font-size: 10.5px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
   text-transform: uppercase;
-  background: color-mix(in srgb, var(--bg-dark-800) 70%, var(--bg-dark-700));
+  background: var(--bg-dark-700);
   border-bottom: 1px solid var(--border-color);
 }
 
@@ -339,7 +391,7 @@
   display: flex;
   justify-content: center;
   align-items: center;
-  padding: 6px 8px;
+  padding: 7px 8px;
   font-size: 11px;
   color: var(--text-muted);
   border-top: 1px solid var(--border-color);
@@ -352,10 +404,11 @@
   right: 116px;
   z-index: 7;
   max-width: 46%;
-  padding: 3px 8px;
+  padding: 3px 9px;
   border: 1px solid var(--border-color);
-  border-radius: var(--radius-sm);
-  background: color-mix(in srgb, var(--bg-dark-800) 88%, transparent);
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--surface-elevated) 90%, transparent);
+  backdrop-filter: blur(6px);
   color: var(--text-muted);
   font-size: 11px;
   line-height: 1.3;
@@ -363,8 +416,8 @@
 }
 
 .bitlang-venue-badge.fallback {
-  color: #f59e0b;
-  border-color: color-mix(in srgb, #f59e0b 45%, var(--border-color));
+  color: var(--accent-orange);
+  border-color: color-mix(in srgb, var(--accent-orange) 40%, var(--border-color));
 }
 
 .bitlang-venue-badge.bitlang-refreshing {
@@ -376,7 +429,7 @@
   flex-wrap: wrap;
   justify-content: space-between;
   gap: 6px 12px;
-  padding: 6px 10px;
+  padding: 8px 14px;
   background: var(--bg-dark-800);
   border-bottom: 1px solid var(--border-color);
   font-size: 12px;
@@ -389,29 +442,33 @@
 }
 
 .bitlang-stat-item span {
-  font-size: 10px;
+  font-size: 10.5px;
   color: var(--text-muted);
 }
 
 .bitlang-stat-item strong {
-  font-size: 12px;
+  font-size: 12.5px;
+  font-family: var(--font-mono);
+  font-weight: 600;
 }
 
 .bitlang-pagination {
-  height: 40px;
+  height: 44px;
+  flex-shrink: 0;
   display: flex;
   align-items: center;
   justify-content: flex-end;
   gap: 6px;
-  padding: 5px 9px;
+  padding: 6px 12px;
   border-top: 1px solid var(--border-color);
   color: var(--text-muted);
   font-size: 11px;
+  font-variant-numeric: tabular-nums;
 }
 
 .bitlang-pagination button {
   width: 28px;
-  height: 27px;
+  height: 28px;
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -420,6 +477,13 @@
   background: var(--bg-dark-700);
   color: var(--text-secondary);
   cursor: pointer;
+  transition: border-color 0.15s ease, color 0.15s ease, background 0.15s ease;
+}
+
+.bitlang-pagination button:hover:not(:disabled) {
+  border-color: var(--border-active);
+  background: var(--bg-dark-600);
+  color: var(--text-primary);
 }
 
 .bitlang-pagination button:disabled {
@@ -439,7 +503,7 @@
   align-items: center;
   justify-content: space-between;
   flex-wrap: wrap;
-  gap: 8px;
+  gap: 10px;
   padding: 8px 16px;
   background: var(--bg-dark-800);
   border-bottom: 1px solid var(--border-color);
@@ -449,11 +513,12 @@
 
 .bitlang-chart-header h2 {
   font-size: 16px;
-  letter-spacing: -0.01em;
+  font-weight: 650;
+  letter-spacing: -0.015em;
 }
 
 .bitlang-chart-header p {
-  color: var(--text-secondary);
+  color: var(--text-muted);
   font-size: 12px;
 }
 
@@ -463,7 +528,7 @@
   align-items: center;
   gap: 2px;
   padding: 2px;
-  border-radius: var(--radius-sm);
+  border-radius: 9px;
   background: var(--bg-dark-700);
   border: 1px solid var(--border-color);
   max-width: 100%;
@@ -472,17 +537,17 @@
 
 .bitlang-timeframes button {
   height: 26px;
-  padding: 0 9px;
+  padding: 0 10px;
   border: 0;
-  border-radius: 4px;
+  border-radius: 6px;
   background: transparent;
-  color: var(--text-secondary);
+  color: var(--text-muted);
   cursor: pointer;
   font-size: 12px;
   font-weight: 500;
   font-family: inherit;
   flex-shrink: 0;
-  transition: background 0.15s ease, color 0.15s ease;
+  transition: background 0.15s ease, color 0.15s ease, box-shadow 0.15s ease;
 }
 
 .bitlang-timeframes button:hover {
@@ -490,9 +555,14 @@
 }
 
 .bitlang-timeframes button.active {
-  background: var(--accent-blue);
-  color: #fff;
+  background: var(--bg-dark-800);
+  color: var(--text-primary);
   font-weight: 600;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.25), 0 0 0 1px var(--border-active);
+}
+
+[data-theme='light'] .bitlang-timeframes button.active {
+  box-shadow: 0 1px 2px rgba(15, 23, 42, 0.1), 0 0 0 1px var(--border-color);
 }
 
 .bitlang-chart {
@@ -509,11 +579,11 @@
   display: inline-flex;
   align-items: center;
   gap: 7px;
-  padding: 7px 12px;
+  padding: 7px 14px;
   transform: translateX(-50%);
   border: 1px solid var(--border-color);
-  border-radius: var(--radius-sm);
-  background: var(--bg-dark-800);
+  border-radius: 999px;
+  background: var(--surface-elevated);
   box-shadow: var(--shadow-main);
   color: var(--text-secondary);
   font-size: 12px;
@@ -526,9 +596,9 @@
   z-index: 7;
   display: flex;
   gap: 10px;
-  padding: 5px 8px;
+  padding: 5px 9px;
   border-radius: var(--radius-sm);
-  background: color-mix(in srgb, var(--bg-dark-800) 88%, transparent);
+  background: color-mix(in srgb, var(--surface-elevated) 88%, transparent);
   color: var(--text-secondary);
   font-family: var(--font-mono);
   font-size: 11px;
@@ -536,12 +606,12 @@
 }
 
 .bitlang-chart-status.error {
-  border-color: var(--accent-red);
+  border-color: color-mix(in srgb, var(--accent-red) 50%, var(--border-color));
   color: var(--accent-red);
 }
 
 .bitlang-chart-status.warning {
-  border-color: var(--accent-orange);
+  border-color: color-mix(in srgb, var(--accent-orange) 50%, var(--border-color));
   color: var(--accent-orange);
 }
 
@@ -564,7 +634,8 @@
   display: flex;
   flex-direction: column;
   gap: 3px;
-  padding: 8px 10px;
+  padding: 9px 11px;
+  border: 1px solid var(--border-subtle);
   border-radius: var(--radius-sm);
   background: var(--bg-dark-700);
 }
@@ -577,7 +648,8 @@
 
 .bitlang-metrics strong {
   font-family: var(--font-mono);
-  font-size: 12px;
+  font-size: 12.5px;
+  font-weight: 600;
 }
 
 .bitlang-original-note p {
@@ -591,11 +663,12 @@
 .bitlang-source-note-body {
   margin: 0;
   padding: 10px 12px;
+  border: 1px solid var(--border-subtle);
   border-radius: var(--radius-sm);
   background: var(--bg-dark-700);
   color: var(--text-secondary);
   font-size: 12px;
-  line-height: 1.6;
+  line-height: 1.65;
   white-space: pre-wrap;
 }
 

@@ -9,10 +9,11 @@
 }
 
 .review-video-banner {
-  background: color-mix(in srgb, var(--accent-blue) 12%, var(--bg-dark-700));
-  border-bottom: 1px solid color-mix(in srgb, var(--accent-blue) 45%, var(--border-color));
+  background: linear-gradient(90deg, var(--accent-soft), transparent 70%), var(--bg-dark-800);
+  border-bottom: 1px solid var(--border-color);
+  box-shadow: inset 3px 0 var(--accent-blue);
   color: var(--text-primary);
-  padding: 6px 16px;
+  padding: 7px 16px;
   font-size: 12px;
   display: flex;
   align-items: center;
@@ -22,14 +23,14 @@
 
 .review-toolbar {
   height: auto;
-  min-height: 44px;
-  flex-wrap: wrap;
+  min-height: 46px;
+  flex-wrap: nowrap;
   background: var(--bg-dark-800);
   border-bottom: 1px solid var(--border-color);
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 6px 12px;
+  padding: 7px 12px;
   gap: 12px;
   flex-shrink: 0;
 }
@@ -40,20 +41,68 @@
   align-items: center;
   gap: 8px;
   min-width: 0;
-  flex-wrap: wrap;
+  flex-wrap: nowrap;
 }
 
-.review-workspace-cfd .review-toolbar {
-  height: auto;
-  min-height: 44px;
-  flex-wrap: wrap;
-  padding-top: 6px;
-  padding-bottom: 6px;
+.review-toolbar-left {
+  flex: 1;
+  overflow-x: auto;
+  scrollbar-width: thin;
 }
 
-.review-workspace-cfd .review-toolbar-left,
-.review-workspace-cfd .review-toolbar-right {
+.review-toolbar-left > *,
+.review-toolbar-right {
+  flex-shrink: 0;
+  white-space: nowrap;
+}
+
+.review-toolbar-more {
+  position: relative;
+}
+
+.review-toolbar-more summary {
+  list-style: none;
+}
+
+.review-toolbar-more summary::-webkit-details-marker {
+  display: none;
+}
+
+.review-toolbar-more[open] summary {
+  border-color: var(--accent-line);
+  background: var(--accent-soft);
+  color: var(--text-primary);
+}
+
+.review-toolbar-options {
+  position: absolute;
+  top: calc(100% + 8px);
+  right: 0;
+  z-index: 30;
+  width: min(340px, calc(100vw - 24px));
+  box-sizing: border-box;
+  padding: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  white-space: normal;
+  background: var(--surface-elevated);
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-pop);
+}
+
+.review-toolbar-display-options {
+  display: flex;
   flex-wrap: wrap;
+  gap: 8px;
+  padding-top: 12px;
+  border-top: 1px solid var(--border-color);
+}
+
+.review-toolbar-options .replay-bookmarks select {
+  width: 100%;
+  max-width: 100%;
 }
 
 .review-symbol-trigger {
@@ -75,8 +124,8 @@
 
 .review-symbol-trigger:hover,
 .review-symbol-trigger:focus-visible {
-  border-color: var(--accent-blue);
-  background: color-mix(in srgb, var(--accent-blue) 9%, var(--bg-dark-700));
+  border-color: var(--accent-line);
+  background: color-mix(in srgb, var(--accent-blue) 8%, var(--bg-dark-700));
 }
 
 .review-symbol-trigger svg:last-child {
@@ -91,8 +140,8 @@
   align-items: flex-start;
   justify-content: center;
   padding: min(12vh, 96px) 20px 24px;
-  background: rgba(3, 6, 12, 0.68);
-  backdrop-filter: blur(3px);
+  background: var(--surface-overlay);
+  backdrop-filter: blur(6px);
 }
 
 .symbol-search-dialog {
@@ -102,10 +151,11 @@
   flex-direction: column;
   overflow: hidden;
   border: 1px solid var(--border-color);
-  border-radius: var(--radius-md);
-  background: var(--bg-dark-800);
+  border-radius: var(--radius-lg);
+  background: var(--surface-elevated);
   color: var(--text-primary);
-  box-shadow: 0 24px 70px rgba(0, 0, 0, 0.42);
+  box-shadow: var(--shadow-pop);
+  animation: overlayPopIn 0.22s var(--ease-out);
 }
 
 .symbol-search-header {
@@ -156,10 +206,10 @@
   align-items: center;
   gap: 9px;
   border: 1px solid var(--accent-blue);
-  border-radius: var(--radius-sm);
+  border-radius: 10px;
   background: var(--bg-dark-900);
   color: var(--text-muted);
-  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent-blue) 12%, transparent);
+  box-shadow: var(--focus-ring);
 }
 
 .symbol-search-input-wrap input {
@@ -233,8 +283,8 @@
 }
 
 .symbol-search-result.highlighted:not(:disabled) {
-  border-color: color-mix(in srgb, var(--accent-blue) 38%, var(--border-color));
-  background: color-mix(in srgb, var(--accent-blue) 10%, var(--bg-dark-700));
+  border-color: transparent;
+  background: var(--accent-soft);
 }
 
 .symbol-search-result:disabled {
@@ -248,9 +298,10 @@
   display: grid;
   place-items: center;
   flex: 0 0 auto;
-  border-radius: 50%;
+  border-radius: 8px;
   background: var(--bg-dark-700);
   color: var(--accent-blue);
+  box-shadow: inset 0 0 0 1px var(--border-color);
 }
 
 .symbol-search-result-main {
@@ -355,14 +406,16 @@
 }
 
 .review-banner-warning {
-  background: color-mix(in srgb, var(--accent-orange) 14%, transparent);
-  border-bottom: 1px solid var(--accent-orange);
+  background: color-mix(in srgb, var(--accent-orange) 10%, var(--bg-dark-800));
+  border-bottom: 1px solid color-mix(in srgb, var(--accent-orange) 35%, var(--border-color));
+  box-shadow: inset 3px 0 var(--accent-orange);
   color: var(--accent-orange);
 }
 
 .review-banner-error {
-  background: color-mix(in srgb, var(--accent-red) 14%, transparent);
-  border-bottom: 1px solid var(--accent-red);
+  background: color-mix(in srgb, var(--accent-red) 10%, var(--bg-dark-800));
+  border-bottom: 1px solid color-mix(in srgb, var(--accent-red) 35%, var(--border-color));
+  box-shadow: inset 3px 0 var(--accent-red);
   color: var(--accent-red);
 }
 
@@ -372,7 +425,7 @@
   height: 22px;
   padding: 0 8px;
   border: 1px solid currentColor;
-  border-radius: 4px;
+  border-radius: 6px;
   background: transparent;
   color: inherit;
   font-size: 11px;
@@ -403,7 +456,8 @@
 .review-chart-loading {
   position: absolute;
   inset: 0;
-  background: color-mix(in srgb, var(--bg-dark-900) 72%, transparent);
+  background: color-mix(in srgb, var(--bg-dark-900) 68%, transparent);
+  backdrop-filter: blur(2px);
   z-index: 10;
   display: flex;
   align-items: center;
@@ -420,13 +474,25 @@
   display: flex;
   align-items: center;
   gap: 6px;
-  padding: 6px 10px;
+  padding: 6px 12px;
   border: 1px solid var(--border-color);
-  border-radius: var(--radius-sm);
-  background: var(--bg-dark-800);
+  border-radius: 999px;
+  background: var(--surface-elevated);
+  box-shadow: var(--shadow-main);
   color: var(--text-secondary);
   font-size: 12px;
   pointer-events: none;
+}
+
+@keyframes overlayPopIn {
+  from {
+    opacity: 0;
+    transform: translateY(-6px) scale(0.98);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
 }
 .replay-bookmarks { display: flex; align-items: center; gap: 5px; flex-wrap: wrap; }
 .replay-bookmarks select { max-width: 270px; }

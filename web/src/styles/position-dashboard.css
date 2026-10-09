@@ -1,91 +1,130 @@
 /* ============================================================
-   Position Dashboard (可视化数据看板与账户诊断大屏)
+   Position Dashboard (仓位复盘 / bit浪浪 共用看板)
    ============================================================ */
 
 .posdash-container {
   display: flex;
   flex-direction: column;
+  align-items: center;
   height: 100%;
   width: 100%;
   min-width: 0;
   max-width: 100%;
   overflow-y: auto;
   overflow-x: hidden;
-  padding: 16px 20px 36px 20px;
+  padding: 18px 22px 40px;
   background: var(--bg-dark-900);
   color: var(--text-primary);
   box-sizing: border-box;
-  gap: 16px;
+  gap: 14px;
+  container-type: inline-size;
+  container-name: posdash;
+}
+
+.posdash-container > * {
+  width: 100%;
+  max-width: 1520px;
+  flex-shrink: 0;
 }
 
 /* ============================================================
-   顶部工具栏 (Header Bar)
+   顶部：标题 + 操作 / 筛选条
    ============================================================ */
 
 .posdash-header {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  min-width: 0;
+}
+
+.posdash-header-top {
   display: flex;
   align-items: center;
   justify-content: space-between;
   flex-wrap: wrap;
   gap: 12px;
-  padding: 12px 18px;
-  background: var(--bg-dark-800);
-  border: 1px solid var(--border-color);
-  border-radius: var(--radius-md);
-  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.06);
-  min-width: 0;
+}
+
+.posdash-header-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
 }
 
 .posdash-title-group {
   display: flex;
   align-items: center;
   gap: 12px;
+  min-width: 0;
 }
 
 .posdash-title-icon {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 36px;
-  height: 36px;
-  border-radius: 8px;
-  background: linear-gradient(135deg, rgba(37, 99, 235, 0.2), rgba(59, 130, 246, 0.1));
-  color: #3b82f6;
-  box-shadow: inset 0 0 0 1px rgba(59, 130, 246, 0.2);
+  width: 38px;
+  height: 38px;
+  flex-shrink: 0;
+  border-radius: 11px;
+  background: linear-gradient(140deg, #6a8dff 0%, var(--accent-blue) 55%, #3554d9 100%);
+  color: #fff;
+  box-shadow:
+    0 0 0 1px rgba(255, 255, 255, 0.08) inset,
+    0 6px 16px -6px color-mix(in srgb, var(--accent-blue) 70%, transparent);
 }
 
 .posdash-title-text h2 {
   margin: 0;
-  font-size: 16px;
-  font-weight: 600;
+  font-size: 18px;
+  font-weight: 700;
   color: var(--text-primary);
-  letter-spacing: -0.01em;
+  letter-spacing: -0.02em;
   line-height: 1.25;
 }
 
 .posdash-title-text span {
-  font-size: 11.5px;
+  font-size: 12px;
   color: var(--text-muted);
 }
 
 .posdash-title-text strong {
-  color: var(--text-primary);
+  color: var(--text-secondary);
+  font-family: var(--font-mono);
+  font-weight: 600;
 }
 
 .posdash-filters {
   display: flex;
   align-items: center;
   flex-wrap: wrap;
+  gap: 10px 18px;
+  padding: 10px 14px;
+  background: var(--bg-dark-800);
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-card);
+}
+
+.posdash-filter-field {
+  display: inline-flex;
+  align-items: center;
   gap: 8px;
 }
 
-/* 分段胶囊按钮组 (Segmented Pills) */
+.posdash-filter-label {
+  font-size: 11.5px;
+  font-weight: 500;
+  color: var(--text-muted);
+  white-space: nowrap;
+}
+
 .posdash-segmented-group {
   display: inline-flex;
   align-items: center;
   background: var(--bg-dark-700);
-  padding: 3px;
-  border-radius: var(--radius-sm);
+  padding: 2px;
+  border-radius: 9px;
   border: 1px solid var(--border-color);
   gap: 2px;
 }
@@ -94,13 +133,15 @@
   border: none;
   background: transparent;
   color: var(--text-muted);
-  padding: 4px 10px;
-  font-size: 11.5px;
+  height: 26px;
+  padding: 0 11px;
+  font-family: inherit;
+  font-size: 12px;
   font-weight: 500;
-  border-radius: 4px;
+  border-radius: 6px;
   cursor: pointer;
   transition: all 0.15s ease;
-  line-height: 1.2;
+  line-height: 1;
 }
 
 .posdash-segmented-btn:hover:not(.active) {
@@ -111,36 +152,48 @@
   background: var(--bg-dark-800);
   color: var(--text-primary);
   font-weight: 600;
-  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.15);
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.25), 0 0 0 1px var(--border-active);
+}
+
+[data-theme='light'] .posdash-segmented-btn.active {
+  box-shadow: 0 1px 2px rgba(15, 23, 42, 0.1), 0 0 0 1px var(--border-color);
 }
 
 .posdash-select {
   height: 30px;
+  min-width: 132px;
   padding: 0 10px;
   background: var(--bg-dark-700);
   color: var(--text-primary);
   border: 1px solid var(--border-color);
   border-radius: var(--radius-sm);
+  font-family: inherit;
   font-size: 12px;
   cursor: pointer;
   outline: none;
-  transition: border-color 0.15s ease;
+  transition: border-color 0.15s ease, box-shadow 0.15s ease;
+}
+
+.posdash-select:hover {
+  border-color: var(--border-active);
 }
 
 .posdash-select:focus {
-  border-color: #3b82f6;
+  border-color: var(--accent-blue);
+  box-shadow: var(--focus-ring);
 }
 
 .posdash-btn {
   display: inline-flex;
   align-items: center;
   gap: 6px;
-  height: 30px;
-  padding: 0 12px;
+  height: 32px;
+  padding: 0 13px;
   border-radius: var(--radius-sm);
+  font-family: inherit;
   font-size: 12px;
-  font-weight: 500;
-  background: var(--bg-dark-700);
+  font-weight: 600;
+  background: var(--bg-dark-800);
   color: var(--text-primary);
   border: 1px solid var(--border-color);
   cursor: pointer;
@@ -148,8 +201,8 @@
 }
 
 .posdash-btn:hover:not(:disabled) {
-  background: var(--bg-dark-600, var(--bg-dark-700));
-  border-color: var(--text-muted);
+  background: var(--bg-dark-700);
+  border-color: var(--border-active);
 }
 
 .posdash-btn:disabled {
@@ -158,27 +211,30 @@
 }
 
 .posdash-btn.primary {
-  background: #2563eb;
+  background: var(--accent-blue);
   color: #fff;
   border-color: transparent;
-  box-shadow: 0 2px 6px rgba(37, 99, 235, 0.3);
+  box-shadow: 0 1px 0 rgba(255, 255, 255, 0.12) inset,
+    0 4px 12px -4px color-mix(in srgb, var(--accent-blue) 60%, transparent);
 }
 
 .posdash-btn.primary:hover:not(:disabled) {
-  background: #1d4ed8;
+  background: var(--accent-blue-hover);
 }
 
 .posdash-balance-chip {
   display: inline-flex;
   align-items: center;
-  gap: 6px;
-  padding: 4px 10px;
-  background: var(--bg-dark-700);
-  border: 1px solid var(--border-color);
-  border-radius: var(--radius-sm);
-  font-size: 12px;
+  gap: 7px;
+  height: 32px;
+  padding: 0 12px;
+  background: color-mix(in srgb, var(--accent-green) 8%, var(--bg-dark-800));
+  border: 1px solid color-mix(in srgb, var(--accent-green) 28%, var(--border-color));
+  border-radius: 999px;
+  font-family: var(--font-mono);
+  font-size: 12.5px;
   font-weight: 600;
-  color: #10b981;
+  color: var(--accent-green);
   letter-spacing: -0.01em;
 }
 
@@ -186,109 +242,110 @@
   width: 6px;
   height: 6px;
   border-radius: 50%;
-  background-color: #10b981;
-  box-shadow: 0 0 8px #10b981;
+  background-color: var(--accent-green);
   animation: posdash-pulse 2s infinite;
 }
 
 @keyframes posdash-pulse {
   0% {
-    transform: scale(0.95);
-    box-shadow: 0 0 0 0 rgba(16, 185, 129, 0.7);
+    box-shadow: 0 0 0 0 color-mix(in srgb, var(--accent-green) 60%, transparent);
   }
   70% {
-    transform: scale(1);
-    box-shadow: 0 0 0 5px rgba(16, 185, 129, 0);
+    box-shadow: 0 0 0 5px color-mix(in srgb, var(--accent-green) 0%, transparent);
   }
   100% {
-    transform: scale(0.95);
-    box-shadow: 0 0 0 0 rgba(16, 185, 129, 0);
+    box-shadow: 0 0 0 0 color-mix(in srgb, var(--accent-green) 0%, transparent);
   }
 }
 
 /* ============================================================
-   KPI 诊断矩阵卡片 (Executive KPI Grid)
+   KPI 指标
    ============================================================ */
 
 .posdash-kpi-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(185px, 1fr));
+  grid-template-columns: minmax(0, 1.5fr) repeat(4, minmax(0, 1fr));
   gap: 12px;
   min-width: 0;
-  width: 100%;
 }
 
 .posdash-kpi-card {
   position: relative;
   display: flex;
   flex-direction: column;
-  justify-content: space-between;
-  padding: 14px 16px;
+  padding: 15px 16px;
   background: var(--bg-dark-800);
   border: 1px solid var(--border-color);
   border-radius: var(--radius-md);
-  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.05);
-  transition: transform 0.15s ease, border-color 0.15s ease, box-shadow 0.15s ease;
+  box-shadow: var(--shadow-card);
+  transition: border-color 0.15s ease, box-shadow 0.15s ease;
   min-width: 0;
   overflow: hidden;
 }
 
 .posdash-kpi-card:hover {
-  transform: translateY(-1px);
-  border-color: var(--text-muted);
-  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.08);
+  border-color: var(--border-active);
+}
+
+.posdash-kpi-card.hero {
+  padding: 16px 18px;
+}
+
+.posdash-kpi-card.hero::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background: radial-gradient(120% 90% at 100% 0%, var(--hero-tint), transparent 60%);
 }
 
 .posdash-kpi-card.hero.profit-glow {
-  background: linear-gradient(
-    145deg,
-    var(--bg-dark-800) 65%,
-    rgba(14, 165, 233, 0.1) 100%
-  );
-  border-color: rgba(14, 165, 233, 0.38);
+  --hero-tint: color-mix(in srgb, var(--accent-green) 16%, transparent);
+  border-color: color-mix(in srgb, var(--accent-green) 30%, var(--border-color));
 }
 
 .posdash-kpi-card.hero.loss-glow {
-  background: linear-gradient(
-    145deg,
-    var(--bg-dark-800) 65%,
-    rgba(244, 63, 94, 0.1) 100%
-  );
-  border-color: rgba(244, 63, 94, 0.38);
+  --hero-tint: color-mix(in srgb, var(--accent-red) 16%, transparent);
+  border-color: color-mix(in srgb, var(--accent-red) 30%, var(--border-color));
+}
+
+.posdash-kpi-card.hero .posdash-kpi-value {
+  font-size: 32px;
+  margin: 2px 0 12px;
 }
 
 .posdash-kpi-header {
+  position: relative;
   display: flex;
   align-items: center;
   justify-content: space-between;
-  margin-bottom: 8px;
+  margin-bottom: 6px;
 }
 
 .posdash-kpi-title {
-  font-size: 11.5px;
-  color: var(--text-secondary);
+  font-size: 12px;
+  color: var(--text-muted);
   font-weight: 500;
-  letter-spacing: 0.01em;
 }
 
 .posdash-kpi-icon-wrap {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 26px;
-  height: 26px;
-  border-radius: 6px;
+  width: 28px;
+  height: 28px;
+  border-radius: 8px;
   background: var(--bg-dark-700);
 }
 
 .posdash-kpi-icon-wrap.profit {
-  background: rgba(14, 165, 233, 0.14);
-  color: #0ea5e9;
+  background: color-mix(in srgb, var(--accent-green) 14%, transparent);
+  color: var(--accent-green);
 }
 
 .posdash-kpi-icon-wrap.loss {
-  background: rgba(244, 63, 94, 0.14);
-  color: #f43f5e;
+  background: color-mix(in srgb, var(--accent-red) 14%, transparent);
+  color: var(--accent-red);
 }
 
 .posdash-kpi-icon-wrap.neutral {
@@ -297,45 +354,43 @@
 }
 
 .posdash-kpi-icon-wrap.amber {
-  background: rgba(245, 158, 11, 0.12);
-  color: #f59e0b;
+  background: color-mix(in srgb, var(--accent-orange) 13%, transparent);
+  color: var(--accent-orange);
 }
 
 .posdash-kpi-icon-wrap.blue {
-  background: rgba(59, 130, 246, 0.12);
-  color: #3b82f6;
+  background: var(--accent-soft);
+  color: var(--accent-blue);
 }
 
 .posdash-kpi-value {
-  font-size: 22px;
-  font-weight: 700;
+  position: relative;
+  font-size: 23px;
+  font-weight: 600;
   font-family: var(--font-mono, monospace);
   line-height: 1.15;
-  margin-bottom: 8px;
-  letter-spacing: -0.02em;
+  margin-bottom: 10px;
+  letter-spacing: -0.03em;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.posdash-kpi-value-muted {
+  color: var(--text-secondary);
 }
 
 .posdash-currency-unit {
   font-size: 12px;
   font-weight: 500;
   color: var(--text-muted);
-  margin-left: 2px;
-}
-
-.posdash-unit-badge {
-  display: inline-block;
-  font-size: 11px;
-  font-weight: 600;
-  padding: 1px 5px;
-  margin-left: 6px;
-  border-radius: 4px;
-  background: var(--bg-dark-700);
-  color: var(--text-muted);
-  vertical-align: middle;
+  margin-left: 5px;
+  letter-spacing: 0;
 }
 
 .posdash-kpi-sub {
-  font-size: 11px;
+  position: relative;
+  margin-top: auto;
+  font-size: 11.5px;
   color: var(--text-muted);
   display: flex;
   align-items: center;
@@ -343,71 +398,207 @@
   flex-wrap: wrap;
 }
 
+.posdash-kpi-sub strong {
+  font-family: var(--font-mono);
+  font-weight: 600;
+}
+
+.posdash-kpi-sub-split {
+  justify-content: space-between;
+}
+
 .posdash-sub-chip {
   display: inline-flex;
   align-items: center;
-  gap: 2px;
-  font-size: 10.5px;
+  gap: 3px;
+  height: 22px;
+  font-size: 11px;
   font-family: var(--font-mono, monospace);
-  padding: 1px 6px;
-  border-radius: 4px;
+  padding: 0 8px;
+  border-radius: 999px;
 }
 
 .posdash-sub-chip.profit {
-  background: rgba(14, 165, 233, 0.12);
-  color: #0ea5e9;
+  background: color-mix(in srgb, var(--accent-green) 12%, transparent);
+  color: var(--accent-green);
 }
 
 .posdash-sub-chip.loss {
-  background: rgba(244, 63, 94, 0.12);
-  color: #f43f5e;
+  background: color-mix(in srgb, var(--accent-red) 12%, transparent);
+  color: var(--accent-red);
 }
 
-/* 多空比例进度条 */
+.posdash-sub-chip.neutral {
+  background: var(--bg-dark-700);
+  color: var(--text-secondary);
+}
+
 .posdash-side-ratio-track {
   display: flex;
+  gap: 2px;
   height: 5px;
   width: 100%;
-  border-radius: 3px;
+  border-radius: 999px;
   overflow: hidden;
   background: var(--bg-dark-700);
-  margin-bottom: 6px;
+  margin-bottom: 8px;
 }
 
-.posdash-side-bar.long {
-  background: #0ea5e9;
+.posdash-side-bar {
+  height: 100%;
+  border-radius: 999px;
+  transition: width 0.4s var(--ease-out);
 }
 
-.posdash-side-bar.short {
-  background: #f43f5e;
+.posdash-side-bar.long,
+.posdash-side-bar.win {
+  background: var(--accent-green);
+}
+
+.posdash-side-bar.short,
+.posdash-side-bar.loss {
+  background: var(--accent-red);
 }
 
 .posdash-side-subtext.long {
-  color: #0ea5e9;
+  color: var(--accent-green);
   font-weight: 600;
 }
 
 .posdash-side-subtext.short {
-  color: #f43f5e;
+  color: var(--accent-red);
   font-weight: 600;
 }
 
 /* ============================================================
-   大屏两列网格布局
+   相邻时段对比
+   ============================================================ */
+
+.posdash-compare {
+  display: grid;
+  grid-template-columns: minmax(0, 0.8fr) minmax(0, 3fr);
+  align-items: stretch;
+  background: var(--bg-dark-800);
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-card);
+  overflow: hidden;
+}
+
+.posdash-compare-head {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 14px 16px;
+  border-right: 1px solid var(--border-color);
+  background: var(--bg-dark-700);
+}
+
+.posdash-compare-head > div {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 0;
+}
+
+.posdash-compare-head strong {
+  font-size: 13px;
+  font-weight: 650;
+}
+
+.posdash-compare-head span:not(.posdash-card-icon) {
+  font-size: 11px;
+  line-height: 1.5;
+  color: var(--text-muted);
+}
+
+.posdash-compare-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+
+.posdash-compare-metric {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+  padding: 13px 16px;
+}
+
+.posdash-compare-metric + .posdash-compare-metric {
+  border-left: 1px solid var(--border-subtle);
+}
+
+.posdash-compare-label {
+  font-size: 11px;
+  color: var(--text-muted);
+}
+
+.posdash-compare-value {
+  font-family: var(--font-mono);
+  font-size: 17px;
+  font-weight: 600;
+  letter-spacing: -0.02em;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.posdash-compare-foot {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 4px 8px;
+}
+
+.posdash-compare-delta {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  height: 20px;
+  padding: 0 7px;
+  border-radius: 999px;
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  font-weight: 600;
+}
+
+.posdash-compare-delta.profit {
+  background: color-mix(in srgb, var(--accent-green) 12%, transparent);
+  color: var(--accent-green);
+}
+
+.posdash-compare-delta.loss {
+  background: color-mix(in srgb, var(--accent-red) 12%, transparent);
+  color: var(--accent-red);
+}
+
+.posdash-compare-delta.neutral {
+  background: var(--bg-dark-700);
+  color: var(--text-secondary);
+}
+
+.posdash-compare-prev {
+  font-size: 10.5px;
+  color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
+}
+
+/* ============================================================
+   卡片与栅格
    ============================================================ */
 
 .posdash-section-grid {
   display: grid;
-  grid-template-columns: minmax(0, 1.45fr) minmax(0, 1fr);
-  gap: 16px;
+  gap: 14px;
   min-width: 0;
-  width: 100%;
 }
 
-@media (max-width: 1100px) {
-  .posdash-section-grid {
-    grid-template-columns: 1fr;
-  }
+.posdash-grid-main {
+  grid-template-columns: minmax(0, 1.75fr) minmax(0, 1fr);
+}
+
+.posdash-grid-even {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
 }
 
 .posdash-card {
@@ -417,8 +608,7 @@
   border: 1px solid var(--border-color);
   border-radius: var(--radius-md);
   padding: 16px 18px;
-  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.06);
-  min-height: 330px;
+  box-shadow: var(--shadow-card);
   min-width: 0;
 }
 
@@ -426,20 +616,49 @@
   display: flex;
   align-items: center;
   justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 6px 12px;
   margin-bottom: 14px;
-  padding-bottom: 10px;
-  border-bottom: 1px solid var(--border-color);
 }
 
 .posdash-card-title {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 9px;
   margin: 0;
-  font-size: 13.5px;
-  font-weight: 600;
+  font-size: 14px;
+  font-weight: 650;
   color: var(--text-primary);
   letter-spacing: -0.01em;
+}
+
+.posdash-card-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  flex-shrink: 0;
+  border-radius: 8px;
+  --icon-tone: var(--accent-blue);
+  background: color-mix(in srgb, var(--icon-tone) 14%, transparent);
+  color: var(--icon-tone);
+}
+
+.posdash-card-icon.amber {
+  --icon-tone: var(--accent-orange);
+}
+
+.posdash-card-icon.cyan {
+  --icon-tone: #22b8cf;
+}
+
+.posdash-card-icon.green {
+  --icon-tone: var(--accent-green);
+}
+
+.posdash-card-icon.violet {
+  --icon-tone: #8b7cf6;
 }
 
 .posdash-card-extra {
@@ -447,44 +666,92 @@
   color: var(--text-muted);
 }
 
+.posdash-date-filter-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: 24px;
+  padding: 0 9px;
+  border: 1px solid var(--accent-line);
+  border-radius: 999px;
+  background: var(--accent-soft);
+  color: var(--text-primary);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 0.15s ease;
+}
+
+.posdash-date-filter-chip:hover {
+  background: var(--accent-soft-strong);
+}
+
 /* ============================================================
-   累计净值曲线 (Equity Curve Chart)
+   累计收益曲线
    ============================================================ */
 
 .posdash-chart-wrap {
   position: relative;
   width: 100%;
   flex: 1;
-  min-height: 230px;
   display: flex;
   flex-direction: column;
   min-width: 0;
 }
 
-.posdash-svg-chart {
+.posdash-chart-canvas {
+  position: relative;
   width: 100%;
-  height: 100%;
-  flex: 1;
+  min-width: 0;
+}
+
+.posdash-svg-chart {
+  display: block;
   overflow: visible;
   cursor: crosshair;
+}
+
+.posdash-chart-grid {
+  stroke: var(--border-color);
+  stroke-width: 1;
+  stroke-dasharray: 2 4;
+}
+
+.posdash-chart-zero {
+  stroke: var(--text-muted);
+  stroke-width: 1;
+  stroke-dasharray: 4 4;
+  opacity: 0.7;
+}
+
+.posdash-chart-axis {
+  fill: var(--text-muted);
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+}
+
+.posdash-chart-crosshair {
+  stroke: var(--text-muted);
+  stroke-width: 1;
+  stroke-dasharray: 3 3;
 }
 
 .posdash-chart-tooltip {
   position: absolute;
   pointer-events: none;
-  background: var(--bg-dark-800);
+  background: var(--surface-elevated);
   border: 1px solid var(--border-color);
   border-radius: var(--radius-md);
-  padding: 10px 14px;
+  padding: 10px 12px;
   color: var(--text-primary);
-  box-shadow: 0 10px 28px rgba(0, 0, 0, 0.28);
+  box-shadow: var(--shadow-pop);
   z-index: 20;
+  min-width: 200px;
   white-space: nowrap;
-  transition: transform 0.08s ease-out;
   display: flex;
   flex-direction: column;
   gap: 5px;
-  backdrop-filter: blur(8px);
 }
 
 .posdash-tooltip-header {
@@ -493,8 +760,8 @@
   justify-content: space-between;
   gap: 12px;
   margin-bottom: 2px;
-  padding-bottom: 5px;
-  border-bottom: 1px solid var(--border-color);
+  padding-bottom: 6px;
+  border-bottom: 1px solid var(--border-subtle);
 }
 
 .posdash-tooltip-time {
@@ -520,21 +787,19 @@
 }
 
 .posdash-tooltip-value.profit {
-  color: #0ea5e9;
+  color: var(--accent-green);
 }
 
 .posdash-tooltip-value.loss {
-  color: #f43f5e;
+  color: var(--accent-red);
 }
 
 .posdash-chart-summary {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  flex-wrap: wrap;
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
   gap: 8px;
   padding-top: 12px;
-  margin-top: 6px;
+  margin-top: 10px;
   border-top: 1px dashed var(--border-color);
 }
 
@@ -542,6 +807,7 @@
   display: flex;
   flex-direction: column;
   gap: 2px;
+  min-width: 0;
 }
 
 .posdash-summary-label {
@@ -556,18 +822,15 @@
   display: inline-flex;
   align-items: center;
   gap: 4px;
-}
-
-.posdash-summary-val.cyan-accent {
-  color: #0ea5e9;
+  white-space: nowrap;
 }
 
 .posdash-summary-val.profit {
-  color: #0ea5e9;
+  color: var(--accent-green);
 }
 
 .posdash-summary-val.loss {
-  color: #f43f5e;
+  color: var(--accent-red);
 }
 
 .posdash-summary-val.neutral {
@@ -575,43 +838,47 @@
 }
 
 /* ============================================================
-   策略标签画像 (Tag Analytics)
+   策略标签画像
    ============================================================ */
 
-.posdash-tag-list {
+.posdash-tag-list,
+.posdash-symbol-list {
   display: flex;
   flex-direction: column;
-  gap: 10px;
+  gap: 8px;
   overflow-y: auto;
-  max-height: 280px;
-  padding-right: 4px;
+  max-height: 340px;
+  margin-right: -6px;
+  padding-right: 6px;
 }
 
 .posdash-tag-card {
   display: flex;
   flex-direction: column;
-  padding: 10px 12px;
+  padding: 11px 13px;
   background: var(--bg-dark-700);
-  border: 1px solid var(--border-color);
+  border: 1px solid var(--border-subtle);
   border-radius: var(--radius-sm);
-  gap: 6px;
-  transition: all 0.15s ease;
+  gap: 7px;
+  transition: border-color 0.15s ease;
 }
 
 .posdash-tag-card:hover {
-  border-color: var(--text-muted);
+  border-color: var(--border-active);
 }
 
 .posdash-tag-card-top {
   display: flex;
   align-items: center;
   justify-content: space-between;
+  gap: 10px;
 }
 
 .posdash-tag-identity {
   display: flex;
   align-items: center;
   gap: 8px;
+  min-width: 0;
 }
 
 .posdash-tag-indicator {
@@ -622,56 +889,66 @@
 }
 
 .posdash-tag-title {
+  overflow: hidden;
   font-size: 12.5px;
   font-weight: 600;
   color: var(--text-primary);
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .posdash-tag-count-badge {
+  flex-shrink: 0;
   font-size: 10.5px;
   color: var(--text-muted);
   background: var(--bg-dark-800);
-  padding: 1px 6px;
-  border-radius: 4px;
+  padding: 1px 7px;
+  border-radius: 999px;
 }
 
 .posdash-tag-figures {
   display: flex;
   align-items: center;
   gap: 8px;
+  flex-shrink: 0;
 }
 
 .posdash-pf-badge {
   font-size: 10.5px;
   font-family: var(--font-mono, monospace);
   font-weight: 600;
-  padding: 1px 6px;
-  border-radius: 4px;
-  background: rgba(245, 158, 11, 0.12);
-  color: #f59e0b;
+  padding: 1px 7px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--accent-orange) 12%, transparent);
+  color: var(--accent-orange);
 }
 
 .posdash-tag-pnl-val {
   font-size: 13px;
-  font-weight: 700;
+  font-weight: 600;
   font-family: var(--font-mono, monospace);
 }
 
 .posdash-dual-track {
   display: flex;
-  height: 6px;
+  gap: 2px;
+  height: 5px;
   width: 100%;
-  border-radius: 3px;
+  border-radius: 999px;
   overflow: hidden;
   background: var(--bg-dark-800);
 }
 
+.posdash-dual-bar {
+  border-radius: 999px;
+}
+
 .posdash-dual-bar.win {
-  background: #0ea5e9;
+  background: var(--accent-green);
 }
 
 .posdash-dual-bar.loss {
-  background: #f43f5e;
+  background: var(--accent-red);
 }
 
 .posdash-tag-card-bottom {
@@ -682,6 +959,11 @@
   color: var(--text-muted);
 }
 
+.posdash-tag-card-bottom strong {
+  color: var(--text-secondary);
+  font-family: var(--font-mono);
+}
+
 .posdash-tag-winloss-split {
   display: inline-flex;
   align-items: center;
@@ -689,42 +971,38 @@
 }
 
 .posdash-tag-winloss-split .win-text {
-  color: #0ea5e9;
+  color: var(--accent-green);
   font-weight: 600;
 }
 
 .posdash-tag-winloss-split .loss-text {
-  color: #f43f5e;
+  color: var(--accent-red);
   font-weight: 600;
 }
 
 /* ============================================================
-   交易对贡献榜 (Symbol Leaderboard)
+   交易对贡献榜
    ============================================================ */
 
 .posdash-symbol-list {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-  overflow-y: auto;
-  max-height: 280px;
-  padding-right: 4px;
+  gap: 6px;
 }
 
 .posdash-symbol-card {
   position: relative;
   display: flex;
   align-items: center;
-  padding: 10px 14px;
+  min-height: 44px;
+  padding: 9px 13px;
   background: var(--bg-dark-700);
-  border: 1px solid var(--border-color);
+  border: 1px solid var(--border-subtle);
   border-radius: var(--radius-sm);
   overflow: hidden;
-  transition: all 0.15s ease;
+  transition: border-color 0.15s ease;
 }
 
 .posdash-symbol-card:hover {
-  border-color: var(--text-muted);
+  border-color: var(--border-active);
 }
 
 .posdash-symbol-ambient-bar {
@@ -732,17 +1010,18 @@
   left: 0;
   top: 0;
   bottom: 0;
-  opacity: 0.14;
   pointer-events: none;
-  transition: width 0.3s ease;
+  transition: width 0.4s var(--ease-out);
 }
 
 .posdash-symbol-ambient-bar.profit {
-  background: #0ea5e9;
+  background: linear-gradient(90deg, color-mix(in srgb, var(--accent-green) 18%, transparent), color-mix(in srgb, var(--accent-green) 6%, transparent));
+  box-shadow: inset 2px 0 var(--accent-green);
 }
 
 .posdash-symbol-ambient-bar.loss {
-  background: #f43f5e;
+  background: linear-gradient(90deg, color-mix(in srgb, var(--accent-red) 18%, transparent), color-mix(in srgb, var(--accent-red) 6%, transparent));
+  box-shadow: inset 2px 0 var(--accent-red);
 }
 
 .posdash-symbol-content {
@@ -751,6 +1030,7 @@
   display: flex;
   align-items: center;
   justify-content: space-between;
+  gap: 10px;
   width: 100%;
 }
 
@@ -758,107 +1038,123 @@
   display: flex;
   align-items: center;
   gap: 10px;
+  min-width: 0;
 }
 
 .posdash-rank-medal {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 20px;
-  height: 20px;
-  border-radius: 4px;
+  width: 22px;
+  height: 22px;
+  flex-shrink: 0;
+  border-radius: 7px;
   font-size: 11px;
   font-weight: 700;
   font-family: var(--font-mono, monospace);
 }
 
 .posdash-rank-medal.gold {
-  background: #fbbf24;
-  color: #78350f;
+  background: linear-gradient(140deg, #fcd34d, #f59e0b);
+  color: #5b3207;
 }
 
 .posdash-rank-medal.silver {
-  background: #94a3b8;
+  background: linear-gradient(140deg, #e2e8f0, #94a3b8);
   color: #1e293b;
 }
 
 .posdash-rank-medal.bronze {
-  background: #d97706;
+  background: linear-gradient(140deg, #f3b37a, #c2702d);
   color: #fff;
 }
 
 .posdash-rank-medal.normal {
   background: var(--bg-dark-800);
   color: var(--text-muted);
+  box-shadow: inset 0 0 0 1px var(--border-color);
 }
 
 .posdash-symbol-ticker {
-  font-size: 13px;
-  font-weight: 700;
+  font-family: var(--font-mono);
+  font-size: 12.5px;
+  font-weight: 600;
   color: var(--text-primary);
   letter-spacing: -0.01em;
 }
 
 .posdash-symbol-meta-pill {
+  overflow: hidden;
   font-size: 11px;
   color: var(--text-muted);
-  background: var(--bg-dark-800);
-  padding: 2px 7px;
-  border-radius: 4px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .posdash-symbol-pnl-val {
-  font-size: 13.5px;
-  font-weight: 700;
+  font-size: 13px;
+  font-weight: 600;
   font-family: var(--font-mono, monospace);
+  white-space: nowrap;
 }
 
 /* ============================================================
-   交易反思日记流 (Trading Journal Stream)
+   交易反思日记
    ============================================================ */
+
+.posdash-journal-section {
+  min-height: 0;
+}
 
 .posdash-journal-controls {
   display: flex;
   align-items: center;
-  justify-content: space-between;
-  gap: 8px;
+  gap: 10px;
   flex-wrap: wrap;
-  margin-bottom: 10px;
+  margin-bottom: 12px;
 }
 
 .posdash-segmented-pill {
   display: inline-flex;
   align-items: center;
   gap: 6px;
+  height: 28px;
   border: 1px solid var(--border-color);
   background: var(--bg-dark-700);
   color: var(--text-secondary);
-  padding: 4px 10px;
-  font-size: 11.5px;
+  padding: 0 12px;
+  font-family: inherit;
+  font-size: 12px;
   font-weight: 500;
-  border-radius: 20px;
+  border-radius: 999px;
   cursor: pointer;
   transition: all 0.15s ease;
 }
 
 .posdash-segmented-pill:hover {
   color: var(--text-primary);
-  border-color: var(--text-muted);
+  border-color: var(--border-active);
 }
 
 .posdash-segmented-pill.active {
-  background: rgba(14, 165, 233, 0.15);
-  color: #0ea5e9;
-  border-color: rgba(14, 165, 233, 0.4);
+  background: var(--accent-soft);
+  color: var(--text-primary);
+  border-color: var(--accent-line);
 }
 
 .posdash-journal-list {
-  display: flex;
-  flex-direction: column;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(360px, 1fr));
+  align-content: start;
   gap: 12px;
   overflow-y: auto;
-  max-height: 280px;
-  padding-right: 4px;
+  max-height: 620px;
+  margin-right: -6px;
+  padding-right: 6px;
+}
+
+.posdash-journal-list > .posdash-empty-state {
+  grid-column: 1 / -1;
 }
 
 .posdash-journal-pager {
@@ -868,19 +1164,26 @@
   margin-left: auto;
   color: var(--text-muted);
   font-size: 11px;
+  font-variant-numeric: tabular-nums;
 }
 
 .posdash-journal-pager button {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 22px;
-  height: 22px;
+  width: 26px;
+  height: 26px;
   border: 1px solid var(--border-color);
-  border-radius: 4px;
+  border-radius: var(--radius-sm);
   background: var(--bg-dark-700);
   color: var(--text-secondary);
   cursor: pointer;
+  transition: border-color 0.15s ease, color 0.15s ease;
+}
+
+.posdash-journal-pager button:hover:not(:disabled) {
+  border-color: var(--border-active);
+  color: var(--text-primary);
 }
 
 .posdash-journal-pager button:disabled {
@@ -892,73 +1195,85 @@
   display: flex;
   flex-direction: column;
   background: var(--bg-dark-700);
-  border: 1px solid var(--border-color);
-  border-left-width: 3.5px;
+  border: 1px solid var(--border-subtle);
   border-radius: var(--radius-sm);
   padding: 12px 14px;
-  gap: 8px;
-  transition: all 0.15s ease;
+  gap: 9px;
+  transition: border-color 0.15s ease, box-shadow 0.15s ease;
 }
 
 .posdash-journal-card:hover {
-  border-color: var(--text-muted);
-  box-shadow: 0 3px 10px rgba(0, 0, 0, 0.08);
+  border-color: var(--border-active);
 }
 
 .posdash-journal-card.profit-border {
-  border-left-color: #0ea5e9;
+  box-shadow: inset 3px 0 var(--accent-green);
 }
 
 .posdash-journal-card.loss-border {
-  border-left-color: #f43f5e;
+  box-shadow: inset 3px 0 var(--accent-red);
 }
 
 .posdash-journal-card-header {
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   justify-content: space-between;
+  gap: 10px;
 }
 
 .posdash-journal-identity {
   display: flex;
   align-items: center;
   flex-wrap: wrap;
-  gap: 8px;
+  gap: 6px 8px;
+  min-width: 0;
 }
 
 .posdash-journal-symbol {
+  font-family: var(--font-mono);
   font-size: 13px;
-  font-weight: 700;
+  font-weight: 600;
   color: var(--text-primary);
 }
 
 .posdash-journal-time-pill {
   font-size: 11px;
   color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.posdash-journal-pnl-chip {
+  flex-shrink: 0;
 }
 
 .posdash-journal-pnl-num {
   font-size: 13px;
-  font-weight: 700;
+  font-weight: 600;
   font-family: var(--font-mono, monospace);
+  white-space: nowrap;
 }
 
 .posdash-journal-content {
+  flex: 1;
   background: var(--bg-dark-800);
-  border: 1px solid var(--border-color);
-  border-radius: 4px;
-  padding: 8px 10px;
-  cursor: pointer;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
+  padding: 9px 11px;
+  cursor: text;
   transition: border-color 0.15s ease;
 }
 
 .posdash-journal-content:hover {
-  border-color: #0ea5e9;
+  border-color: var(--accent-line);
 }
 
 .posdash-journal-text {
-  font-size: 12px;
-  line-height: 1.5;
+  display: -webkit-box;
+  -webkit-line-clamp: 5;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  font-size: 12.5px;
+  line-height: 1.6;
   color: var(--text-primary);
   white-space: pre-wrap;
 }
@@ -967,29 +1282,30 @@
   display: flex;
   align-items: center;
   gap: 6px;
-  font-size: 11.5px;
+  font-size: 12px;
   color: var(--text-muted);
-  font-style: italic;
 }
 
 .posdash-journal-editor {
   display: flex;
   flex-direction: column;
-  gap: 6px;
+  gap: 8px;
 }
 
 .posdash-journal-textarea {
   width: 100%;
   box-sizing: border-box;
   background: var(--bg-dark-800);
-  border: 1px solid #0ea5e9;
-  border-radius: 4px;
-  padding: 8px 10px;
+  border: 1px solid var(--accent-blue);
+  border-radius: var(--radius-sm);
+  padding: 9px 11px;
   color: var(--text-primary);
-  font-size: 12px;
-  line-height: 1.4;
+  font-family: inherit;
+  font-size: 12.5px;
+  line-height: 1.55;
   outline: none;
   resize: vertical;
+  box-shadow: var(--focus-ring);
 }
 
 .posdash-journal-edit-actions {
@@ -1002,7 +1318,7 @@
   display: flex;
   align-items: center;
   justify-content: space-between;
-  margin-top: 2px;
+  gap: 8px;
 }
 
 .posdash-journal-tags-row {
@@ -1010,24 +1326,28 @@
   align-items: center;
   flex-wrap: wrap;
   gap: 4px;
+  min-width: 0;
 }
 
 .posdash-journal-action-group {
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: 4px;
+  flex-shrink: 0;
 }
 
 .posdash-journal-action-btn {
   display: inline-flex;
   align-items: center;
   gap: 4px;
+  height: 24px;
   border: none;
   background: transparent;
   color: var(--text-muted);
-  font-size: 11px;
-  padding: 2px 6px;
-  border-radius: 4px;
+  font-family: inherit;
+  font-size: 11.5px;
+  padding: 0 8px;
+  border-radius: 6px;
   cursor: pointer;
   transition: all 0.15s ease;
 }
@@ -1038,11 +1358,11 @@
 }
 
 .posdash-journal-action-btn.highlight {
-  color: #0ea5e9;
+  color: var(--accent-blue);
 }
 
 .posdash-journal-action-btn.highlight:hover {
-  background: rgba(14, 165, 233, 0.12);
+  background: var(--accent-soft);
 }
 
 /* ============================================================
@@ -1061,14 +1381,74 @@
   font-size: 12.5px;
 }
 
+.posdash-empty-state svg {
+  opacity: 0.5;
+}
+
 .posrev-profit {
-  color: #0ea5e9 !important;
+  color: var(--accent-green) !important;
 }
 
 .posrev-loss {
-  color: #f43f5e !important;
+  color: var(--accent-red) !important;
 }
-.period-comparison { padding: 16px; margin-bottom: 12px; }
-.period-comparison table { width: 100%; text-align: left; font-size: 12px; }
-.period-comparison th, .period-comparison td { padding: 6px; }
-.period-comparison p { color: var(--text-muted); font-size: 12px; }
+
+/* ============================================================
+   响应式
+   ============================================================ */
+
+@container posdash (max-width: 1240px) {
+  .posdash-kpi-grid {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+
+  .posdash-kpi-card.hero {
+    grid-row: span 2;
+  }
+}
+
+@container posdash (max-width: 1080px) {
+  .posdash-grid-main {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .posdash-compare {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .posdash-compare-head {
+    border-right: 0;
+    border-bottom: 1px solid var(--border-color);
+  }
+}
+
+@container posdash (max-width: 860px) {
+  .posdash-grid-even {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .posdash-kpi-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .posdash-kpi-card.hero {
+    grid-row: auto;
+    grid-column: 1 / -1;
+  }
+
+  .posdash-compare-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .posdash-compare-metric:nth-child(3) {
+    border-left: 0;
+  }
+
+  .posdash-compare-metric:nth-child(n + 3) {
+    border-top: 1px solid var(--border-subtle);
+  }
+
+  .posdash-journal-list {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}

@@ -953,14 +953,6 @@ export function ChartWorkspace({
             onTogglePlay={handleTogglePlay}
             onSetSpeed={handleSetSpeed}
           />
-          <ReplayBookmarks market={market} symbol={activeSymbol} timeframe={activeTimeframe}
-            timestampMs={loading ? null : replayState.status === 'idle'
-              ? hoveredCandle?.timestampMs ?? lastPositionTimeMsRef.current ?? candles[candles.length - 1]?.timestampMs ?? null
-              : replayState.cursorTimeMs}
-            onJump={(bookmark) => {
-              setActiveTimeframe(bookmark.timeframe);
-              handleStartReplay(bookmark.symbol, bookmark.timestampMs);
-            }} />
         </div>
 
         <div className="review-toolbar-right">
@@ -975,25 +967,50 @@ export function ChartWorkspace({
             </span>
           </button>}
 
-          <TradingSessionControl value={sessionBands} onChange={setSessionBands} />
+          <details className="review-toolbar-more" onKeyDown={(event) => {
+            event.stopPropagation();
+            if (event.key === 'Escape') {
+              event.preventDefault();
+              event.currentTarget.open = false;
+              event.currentTarget.querySelector('summary')?.focus();
+            }
+          }}>
+            <summary className="ui-btn" title="时间书签、交易时段和图表显示选项">
+              更多 <ChevronDown size={13} />
+            </summary>
+            <div className="review-toolbar-options">
+              <ReplayBookmarks market={market} symbol={activeSymbol} timeframe={activeTimeframe}
+                timestampMs={loading ? null : replayState.status === 'idle'
+                  ? hoveredCandle?.timestampMs ?? lastPositionTimeMsRef.current ?? candles[candles.length - 1]?.timestampMs ?? null
+                  : replayState.cursorTimeMs}
+                onJump={(bookmark) => {
+                  setActiveTimeframe(bookmark.timeframe);
+                  handleStartReplay(bookmark.symbol, bookmark.timestampMs);
+                }} />
+              <div className="review-toolbar-display-options">
+                <TradingSessionControl value={sessionBands} onChange={setSessionBands} />
 
-          <button
-            type="button"
-            className={`ui-btn ${showWeekendBands ? 'ui-btn-active' : ''}`}
-            onClick={() => setShowWeekendBands((enabled) => !enabled)}
-            title="标注美盘周末（纽约周六 00:00–周一 00:00，自动适配夏令时）"
-            aria-pressed={showWeekendBands}
-          >
-            周末时段
-          </button>
+                <button
+                  type="button"
+                  className={`ui-btn ${showWeekendBands ? 'ui-btn-active' : ''}`}
+                  onClick={() => setShowWeekendBands((enabled) => !enabled)}
+                  title="标注美盘周末（纽约周六 00:00–周一 00:00，自动适配夏令时）"
+                  aria-pressed={showWeekendBands}
+                >
+                  周末时段
+                </button>
 
-          <button
-            type="button"
-            className={`ui-btn ${isLogScale ? 'ui-btn-active' : ''}`}
-            onClick={() => setIsLogScale(!isLogScale)}
-          >
-            LOG 对数坐标
-          </button>
+                <button
+                  type="button"
+                  className={`ui-btn ${isLogScale ? 'ui-btn-active' : ''}`}
+                  onClick={() => setIsLogScale(!isLogScale)}
+                  aria-pressed={isLogScale}
+                >
+                  LOG 对数坐标
+                </button>
+              </div>
+            </div>
+          </details>
         </div>
       </div>
 

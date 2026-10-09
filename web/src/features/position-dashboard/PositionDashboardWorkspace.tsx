@@ -184,7 +184,7 @@ export function PositionDashboardWorkspace({
   return (
     <CommonDashboardLayout
       comparisonSlot={<PeriodComparison positions={comparisonPositions} dateRange={dateRange} endMs={Date.now()} />}
-      title="仓位看盘 · 账户数据大屏"
+      title="账户看板"
       subtitle={
         <>
           已归集 <strong>{positions.length}</strong> 笔仓位 ·{' '}
@@ -219,7 +219,7 @@ export function PositionDashboardWorkspace({
 
           <button
             type="button"
-            className="posdash-btn"
+            className="posdash-btn primary"
             onClick={handleSync}
             disabled={syncing || !configured}
             title={configured ? '同步最新仓位' : '需在仓位复盘中配置 Bitget 或 Gate 密钥'}

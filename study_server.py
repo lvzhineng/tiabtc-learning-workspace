@@ -198,6 +198,14 @@ def initialize_database():
         }
         if "order_id" not in fill_columns:
             connection.execute("ALTER TABLE position_fills ADD COLUMN order_id TEXT")
+        position_columns = {
+            row["name"]
+            for row in connection.execute("PRAGMA table_info(exchange_positions)").fetchall()
+        }
+        if "contract_size" not in position_columns:
+            connection.execute(
+                "ALTER TABLE exchange_positions ADD COLUMN contract_size REAL"
+            )
         drawing_columns = {
             row["name"] for row in connection.execute("PRAGMA table_info(chart_drawings)").fetchall()
         }
@@ -1827,10 +1835,10 @@ def _upsert_exchange_position(connection, position, synced_at):
     connection.execute(
         """INSERT INTO exchange_positions (
                venue, position_id, unified_symbol, chart_symbol, side, status,
-               entry_price, exit_price, contracts, leverage, margin_mode, hedged,
+               entry_price, exit_price, contracts, contract_size, leverage, margin_mode, hedged,
                realized_pnl, net_pnl, funding, open_fee, close_fee,
                entry_time_ms, exit_time_ms, synced_at
-           ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+           ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
            ON CONFLICT(venue, position_id) DO UPDATE SET
              unified_symbol = excluded.unified_symbol,
              chart_symbol = excluded.chart_symbol,
@@ -1839,6 +1847,7 @@ def _upsert_exchange_position(connection, position, synced_at):
              entry_price = excluded.entry_price,
              exit_price = excluded.exit_price,
              contracts = excluded.contracts,
+             contract_size = COALESCE(excluded.contract_size, contract_size),
              leverage = COALESCE(excluded.leverage, leverage),
              margin_mode = excluded.margin_mode,
              hedged = excluded.hedged,
@@ -1860,6 +1869,7 @@ def _upsert_exchange_position(connection, position, synced_at):
             position.get("entryPrice"),
             position.get("exitPrice"),
             position.get("contracts"),
+            position.get("contractSize"),
             position.get("leverage"),
             position.get("marginMode"),
             1 if position.get("hedged") else 0,

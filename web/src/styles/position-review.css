@@ -5,28 +5,44 @@
 .posrev-view-switch {
   margin-left: auto;
   display: flex;
-  gap: 4px;
+  gap: 2px;
+  padding: 2px;
   flex-shrink: 0;
+  border: 1px solid var(--border-color);
+  border-radius: 9px;
+  background: var(--bg-dark-700);
 }
 
 .posrev-view-switch button {
   display: inline-flex;
   align-items: center;
-  gap: 4px;
-  height: 28px;
-  padding: 0 8px;
-  border: 1px solid var(--border-color);
-  border-radius: var(--radius-sm);
-  background: var(--bg-dark-800);
+  gap: 5px;
+  height: 24px;
+  padding: 0 9px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
   color: var(--text-muted);
-  font-size: 11px;
+  font-family: inherit;
+  font-size: 11.5px;
+  font-weight: 500;
   cursor: pointer;
+  transition: background 0.15s ease, color 0.15s ease, box-shadow 0.15s ease;
+}
+
+.posrev-view-switch button:hover:not(.active) {
+  color: var(--text-primary);
 }
 
 .posrev-view-switch button.active {
   color: var(--text-primary);
-  border-color: color-mix(in srgb, var(--accent-blue) 55%, var(--border-color));
-  background: color-mix(in srgb, var(--accent-blue) 16%, var(--bg-dark-800));
+  font-weight: 600;
+  background: var(--bg-dark-800);
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.25), 0 0 0 1px var(--border-active);
+}
+
+[data-theme='light'] .posrev-view-switch button.active {
+  box-shadow: 0 1px 2px rgba(15, 23, 42, 0.1), 0 0 0 1px var(--border-color);
 }
 
 .posrev-credentials {
@@ -35,10 +51,10 @@
   flex-shrink: 0;
   max-height: min(280px, 25vh);
   overflow-y: auto;
-  gap: 6px;
-  padding: 8px;
+  gap: 8px;
+  padding: 10px;
   border: 1px solid var(--border-color);
-  border-radius: var(--radius-sm);
+  border-radius: var(--radius-md);
   background: var(--bg-dark-700);
 }
 
@@ -46,10 +62,11 @@
   display: flex;
   flex-direction: column;
   gap: 6px;
-  padding: 8px;
+  padding: 10px;
   border: 1px solid var(--border-color);
   border-radius: var(--radius-sm);
   background: var(--bg-dark-800);
+  box-shadow: var(--shadow-card);
 }
 
 .posrev-credential-block strong {
@@ -91,10 +108,10 @@
 }
 
 .posrev-affiliate {
-  padding: 8px;
-  border: 1px solid color-mix(in srgb, var(--accent-blue) 35%, var(--border-color));
+  padding: 10px;
+  border: 1px solid var(--accent-line);
   border-radius: var(--radius-sm);
-  background: color-mix(in srgb, var(--accent-blue) 10%, var(--bg-dark-800));
+  background: linear-gradient(135deg, var(--accent-soft), transparent 80%), var(--bg-dark-800);
 }
 
 .posrev-affiliate p {
@@ -112,18 +129,18 @@
   width: fit-content;
   height: 28px;
   padding: 0 10px;
-  border: 1px solid color-mix(in srgb, var(--accent-blue) 45%, var(--border-color));
+  border: 1px solid var(--accent-blue);
   border-radius: var(--radius-sm);
-  background: color-mix(in srgb, var(--accent-blue) 16%, var(--bg-dark-800));
-  color: var(--accent-blue);
+  background: var(--accent-blue);
+  color: #fff;
   font-size: 12px;
   font-weight: 600;
   text-decoration: none;
+  transition: background 0.15s ease;
 }
 
 .posrev-invite-cta:hover {
-  color: var(--text-primary);
-  border-color: var(--border-active);
+  background: var(--accent-blue-hover);
 }
 
 .posrev-invite-empty {
@@ -143,11 +160,11 @@
 }
 
 .posrev-stale-banner {
-  padding: 6px 8px;
-  border: 1px solid color-mix(in srgb, #f59e0b 45%, var(--border-color));
+  padding: 7px 10px;
+  border: 1px solid color-mix(in srgb, var(--accent-orange) 40%, var(--border-color));
   border-radius: var(--radius-sm);
-  background: color-mix(in srgb, #f59e0b 12%, var(--bg-dark-700));
-  color: #f59e0b;
+  background: color-mix(in srgb, var(--accent-orange) 10%, var(--bg-dark-700));
+  color: var(--accent-orange);
   font-size: 11px;
   line-height: 1.4;
 }
@@ -157,12 +174,28 @@
 .posrev-credential-block input,
 .posrev-credential-block button {
   height: 30px;
-  padding: 0 8px;
+  padding: 0 9px;
   border: 1px solid var(--border-color);
   border-radius: var(--radius-sm);
-  background: var(--bg-dark-800);
+  background: var(--bg-dark-700);
   color: var(--text-primary);
+  font-family: inherit;
   font-size: 12px;
+  transition: border-color 0.15s ease, box-shadow 0.15s ease, background 0.15s ease;
+}
+
+.posrev-credentials input:focus,
+.posrev-credential-block input:focus {
+  outline: none;
+  border-color: var(--accent-blue);
+  box-shadow: var(--focus-ring);
+}
+
+.posrev-credentials button:hover:not(:disabled),
+.posrev-credential-block button:hover:not(:disabled) {
+  border-color: var(--border-active);
+  background: var(--bg-dark-600);
+  cursor: pointer;
 }
 
 /* Stats Bar */
@@ -171,8 +204,8 @@
   flex-wrap: wrap;
   justify-content: space-between;
   gap: 6px 12px;
-  padding: 6px 10px;
-  background: var(--bg-dark-800);
+  padding: 8px 12px;
+  background: var(--bg-dark-700);
   border: 1px solid var(--border-color);
   border-radius: var(--radius-sm);
   font-size: 12px;
@@ -185,35 +218,38 @@
 }
 
 .posrev-stat-item span {
-  font-size: 10px;
+  font-size: 10.5px;
   color: var(--text-muted);
 }
 
 .posrev-stat-item strong {
-  font-size: 12px;
+  font-size: 12.5px;
+  font-family: var(--font-mono);
+  font-weight: 600;
 }
 
 /* Trade List Row (Two-row layout) */
 .posrev-trade-row {
   display: flex !important;
   flex-direction: column !important;
-  gap: 5px !important;
-  padding: 9px 12px !important;
+  gap: 6px !important;
+  padding: 10px 14px 10px 11px !important;
   width: 100% !important;
   height: auto !important;
-  border-bottom: 1px solid var(--border-color);
+  border-bottom: 1px solid var(--border-subtle);
   transition: background-color 0.12s ease, border-left-color 0.12s ease;
   border-left: 3px solid transparent !important;
   text-align: left;
 }
 
 .posrev-trade-row:hover:not(.active) {
-  background: color-mix(in srgb, var(--bg-dark-700) 70%, transparent) !important;
+  background: var(--bg-dark-700) !important;
 }
 
 .posrev-trade-row.active {
-  background: color-mix(in srgb, var(--accent-blue) 12%, var(--bg-dark-800)) !important;
+  background: var(--accent-soft) !important;
   border-left: 3px solid var(--accent-blue) !important;
+  box-shadow: none !important;
 }
 
 .posrev-row-top,
@@ -235,11 +271,12 @@
 .posrev-side-badge {
   display: inline-flex;
   align-items: center;
-  padding: 1px 5px;
-  border-radius: 3px;
+  padding: 1px 6px;
+  border-radius: 4px;
   font-size: 10px;
   font-weight: 600;
   line-height: 14px;
+  letter-spacing: 0.02em;
 }
 
 .posrev-side-badge.long {
@@ -255,10 +292,10 @@
 .posrev-open-badge {
   display: inline-flex;
   align-items: center;
-  padding: 1px 4px;
-  border-radius: 3px;
-  background: color-mix(in srgb, #2563eb 20%, transparent);
-  color: #60a5fa;
+  padding: 1px 6px;
+  border-radius: 4px;
+  background: var(--accent-soft-strong);
+  color: var(--accent-blue);
   font-size: 10px;
   line-height: 14px;
 }
@@ -292,11 +329,11 @@
 
 .posrev-tag-pill {
   display: inline-block;
-  padding: 0 4px;
-  border: 1px solid currentColor;
-  border-radius: 3px;
+  padding: 0 5px;
+  border: 1px solid color-mix(in srgb, currentColor 55%, transparent);
+  border-radius: 4px;
   font-size: 10px;
-  line-height: 13px;
+  line-height: 14px;
   max-width: 60px;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -326,7 +363,7 @@
   display: flex;
   justify-content: center;
   align-items: center;
-  padding: 6px 8px;
+  padding: 7px 8px;
   font-size: 11px;
   color: var(--text-muted);
   border-top: 1px solid var(--border-color);
@@ -395,20 +432,28 @@
   justify-content: center;
   gap: 5px;
   flex-shrink: 0;
-  height: 32px;
-  padding: 0 10px;
+  height: 30px;
+  padding: 0 11px;
   border: 1px solid var(--border-color);
   border-radius: var(--radius-sm);
   background: var(--bg-dark-700);
   color: var(--text-secondary);
+  font-family: inherit;
   font-size: 12px;
+  font-weight: 600;
   cursor: pointer;
+  transition: border-color 0.15s ease, background 0.15s ease, color 0.15s ease;
 }
 
-.posrev-detail-toggle:hover,
+.posrev-detail-toggle:hover {
+  border-color: var(--border-active);
+  background: var(--bg-dark-600);
+  color: var(--text-primary);
+}
+
 .posrev-detail-toggle.active {
-  border-color: color-mix(in srgb, var(--accent-blue) 55%, var(--border-color));
-  background: color-mix(in srgb, var(--accent-blue) 14%, var(--bg-dark-700));
+  border-color: var(--accent-line);
+  background: var(--accent-soft);
   color: var(--text-primary);
 }
 
@@ -423,8 +468,20 @@
   width: min(420px, calc(100% - 24px));
   min-width: 0;
   border-left: 1px solid var(--border-color);
-  background: var(--bg-dark-800);
-  box-shadow: -12px 0 32px rgb(0 0 0 / 22%);
+  background: var(--surface-elevated);
+  box-shadow: -18px 0 40px -12px rgb(0 0 0 / 35%);
+  animation: posrevDrawerIn 0.24s var(--ease-out);
+}
+
+@keyframes posrevDrawerIn {
+  from {
+    opacity: 0;
+    transform: translateX(16px);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0);
+  }
 }
 
 .posrev-detail-drawer-header {
@@ -444,7 +501,8 @@
 }
 
 .posrev-detail-drawer-header strong {
-  font-size: 13px;
+  font-size: 13.5px;
+  font-weight: 650;
 }
 
 .posrev-detail-drawer-header span {
@@ -486,32 +544,46 @@
 
 .posrev-detail-tabs {
   position: sticky;
-  top: 0;
+  top: 10px;
   z-index: 2;
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 4px;
-  padding: 10px 12px;
-  border-bottom: 1px solid var(--border-color);
-  background: var(--bg-dark-800);
+  gap: 2px;
+  margin: 10px 12px;
+  padding: 2px;
+  border: 1px solid var(--border-color);
+  border-radius: 9px;
+  background: var(--bg-dark-700);
+  box-shadow: 0 0 0 10px var(--surface-elevated);
 }
 
 .posrev-detail-tabs button {
-  height: 30px;
+  height: 28px;
   padding: 0 6px;
-  border: 1px solid transparent;
-  border-radius: var(--radius-sm);
+  border: 0;
+  border-radius: 6px;
   background: transparent;
   color: var(--text-muted);
+  font-family: inherit;
   font-size: 12px;
+  font-weight: 500;
   cursor: pointer;
+  transition: background 0.15s ease, color 0.15s ease, box-shadow 0.15s ease;
 }
 
-.posrev-detail-tabs button:hover,
-.posrev-detail-tabs button.active {
-  border-color: color-mix(in srgb, var(--accent-blue) 45%, var(--border-color));
-  background: color-mix(in srgb, var(--accent-blue) 14%, var(--bg-dark-700));
+.posrev-detail-tabs button:hover {
   color: var(--text-primary);
+}
+
+.posrev-detail-tabs button.active {
+  background: var(--bg-dark-800);
+  color: var(--text-primary);
+  font-weight: 600;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.25), 0 0 0 1px var(--border-active);
+}
+
+[data-theme='light'] .posrev-detail-tabs button.active {
+  box-shadow: 0 1px 2px rgba(15, 23, 42, 0.1), 0 0 0 1px var(--border-color);
 }
 
 .posrev-detail-drawer .posrev-metrics-grid {
@@ -553,15 +625,35 @@
   overflow: hidden;
 }
 
+.posrev-chart-overlay-actions {
+  position: absolute;
+  top: 8px;
+  right: 10px;
+  z-index: 8;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.posrev-chart-overlay-actions .posrev-venue-badge,
+.posrev-chart-overlay-actions .posrev-copy-chart {
+  position: static;
+  flex: 0 0 auto;
+}
+
 .posrev-venue-badge {
   position: absolute;
   top: 40px;
   right: 10px;
   z-index: 7;
-  padding: 3px 8px;
+  display: inline-flex;
+  align-items: center;
+  height: 26px;
+  padding: 0 10px;
   border: 1px solid var(--border-color);
-  border-radius: var(--radius-sm);
-  background: color-mix(in srgb, var(--bg-dark-800) 88%, transparent);
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--surface-elevated) 90%, transparent);
+  backdrop-filter: blur(6px);
   color: var(--text-muted);
   font-size: 11px;
   pointer-events: none;
@@ -588,14 +680,17 @@
   align-items: center;
   gap: 5px;
   height: 26px;
-  padding: 0 9px;
+  padding: 0 10px;
   border: 1px solid var(--border-color);
   border-radius: var(--radius-sm);
-  background: color-mix(in srgb, var(--bg-dark-800) 92%, transparent);
+  background: color-mix(in srgb, var(--surface-elevated) 90%, transparent);
+  backdrop-filter: blur(6px);
   color: var(--text-secondary);
   font: inherit;
   font-size: 11px;
+  font-weight: 500;
   cursor: pointer;
+  transition: border-color 0.15s ease, color 0.15s ease, background 0.15s ease;
 }
 
 .posrev-chart-controls .posrev-copy-chart {
@@ -603,7 +698,8 @@
 }
 
 .posrev-copy-chart:hover:not(:disabled) {
-  border-color: var(--accent-blue);
+  border-color: var(--border-active);
+  background: var(--surface-elevated);
   color: var(--text-primary);
 }
 
@@ -617,10 +713,10 @@
 }
 
 .posrev-chart-controls .posrev-copy-chart.active {
-  background: color-mix(in srgb, var(--accent-blue) 22%, var(--bg-dark-800));
-  border-color: var(--accent-blue);
+  background: var(--accent-soft-strong);
+  border-color: var(--accent-line);
   color: var(--accent-blue);
-  font-weight: 500;
+  font-weight: 600;
 }
 
 /* Panel & Metrics */
@@ -693,33 +789,42 @@
   display: inline-flex;
   align-items: center;
   gap: 3px;
-  padding: 2px 7px;
+  height: 24px;
+  padding: 0 9px;
   border: 1px solid var(--border-color);
-  border-radius: 4px;
+  border-radius: 999px;
   background: var(--bg-dark-700);
   color: var(--text-secondary);
+  font-family: inherit;
   font-size: 11px;
   cursor: pointer;
   transition: all 0.15s ease;
 }
 
 .posrev-template-btn:hover {
-  background: var(--bg-dark-800);
+  background: var(--accent-soft);
   color: var(--text-primary);
-  border-color: #3b82f6;
+  border-color: var(--accent-line);
 }
 
 .posrev-annotate textarea {
   min-height: 80px;
   resize: vertical;
-  padding: 7px 8px;
+  padding: 9px 10px;
   border: 1px solid var(--border-color);
   border-radius: var(--radius-sm);
   background: var(--bg-dark-700);
   color: var(--text-primary);
   font: inherit;
-  font-size: 12px;
-  line-height: 1.5;
+  font-size: 12.5px;
+  line-height: 1.6;
+  transition: border-color 0.15s ease, box-shadow 0.15s ease;
+}
+
+.posrev-annotate textarea:focus {
+  outline: none;
+  border-color: var(--accent-blue);
+  box-shadow: var(--focus-ring);
 }
 
 .posrev-tags {
@@ -753,9 +858,14 @@
   transition: all 0.15s ease;
 }
 
+.posrev-tag-item:hover {
+  border-color: var(--border-active);
+}
+
 .posrev-tag-item.active {
   color: var(--text-primary);
-  background: var(--bg-dark-800);
+  background: color-mix(in srgb, currentColor 12%, var(--bg-dark-800));
+  border-color: color-mix(in srgb, currentColor 45%, var(--border-color));
 }
 
 .posrev-tag-select-btn {
@@ -798,12 +908,20 @@
 
 .posrev-tag-create input {
   height: 28px;
-  padding: 0 8px;
+  padding: 0 9px;
   border: 1px solid var(--border-color);
   border-radius: var(--radius-sm);
   background: var(--bg-dark-700);
   color: var(--text-primary);
+  font-family: inherit;
   font-size: 12px;
+  transition: border-color 0.15s ease, box-shadow 0.15s ease;
+}
+
+.posrev-tag-create input:focus {
+  outline: none;
+  border-color: var(--accent-blue);
+  box-shadow: var(--focus-ring);
 }
 
 .posrev-tag-create button {
@@ -818,13 +936,14 @@
 }
 
 .posrev-tag-create button:hover {
-  background: var(--bg-dark-800);
+  background: var(--bg-dark-600);
+  border-color: var(--border-active);
   color: var(--text-primary);
 }
 
 .posrev-fills {
   margin: 8px 0 4px;
-  padding: 8px;
+  padding: 10px;
   border: 1px solid var(--border-color);
   border-radius: var(--radius-sm);
   background: var(--bg-dark-700);

@@ -29,6 +29,7 @@ export interface ReviewPosition {
   entryPrice: number | null;
   exitPrice: number | null;
   contracts: number | null;
+  contractSize?: number | null;
   leverage: number | null;
   marginMode: string | null;
   hedged: boolean;

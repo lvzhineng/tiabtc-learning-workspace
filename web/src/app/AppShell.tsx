@@ -178,100 +178,69 @@ export function AppShell() {
       <header className="app-header">
         <div className="app-title">
           <span className="app-title-mark" aria-hidden="true">
-            <Activity size={16} />
+            <Activity size={15} strokeWidth={2.4} />
           </span>
-          <span className="app-title-text">TiaBTC Workspace</span>
-
-          <nav className="app-nav" aria-label="工作台导航">
-            <button
-              type="button"
-              className={`app-nav-btn ${activeTab === 'learning' ? 'active' : ''}`}
-              onClick={() => navigateToTab('learning')}
-            >
-              <BookOpen size={14} />
-              <span>顺序学习</span>
-            </button>
-
-            <button
-              type="button"
-              className={`app-nav-btn ${activeTab === 'review' ? 'active' : ''}`}
-              onClick={() => navigateToTab('review')}
-            >
-              <BarChart2 size={14} />
-              <span>行情复盘</span>
-            </button>
-
-            <button
-              type="button"
-              className={`app-nav-btn ${activeTab === 'cfd' ? 'active' : ''}`}
-              onClick={() => navigateToTab('cfd')}
-              aria-label="全球市场"
-              title="全球市场 · 黄金、纳斯达克100、日经225"
-            >
-              <Globe2 size={14} />
-              <span>全球市场</span>
-            </button>
-
-            <button
-              type="button"
-              className={`app-nav-btn ${activeTab === 'bitlang' ? 'active' : ''}`}
-              onClick={() => navigateToTab('bitlang')}
-            >
-              <ListChecks size={14} />
-              <span>bit浪浪实盘分析</span>
-            </button>
-            <button
-              type="button"
-              className={`app-nav-btn ${activeTab === 'positions' ? 'active' : ''}`}
-              onClick={() => navigateToTab('positions')}
-            >
-              <Tags size={14} />
-              <span>仓位复盘</span>
-            </button>
-          </nav>
+          <span className="app-title-text">
+            TiaBTC<em>Workspace</em>
+          </span>
         </div>
 
+        <nav className="app-nav" aria-label="工作台导航">
+          <button
+            type="button"
+            className={`app-nav-btn ${activeTab === 'learning' ? 'active' : ''}`}
+            onClick={() => navigateToTab('learning')}
+          >
+            <BookOpen size={14} />
+            <span>顺序学习</span>
+          </button>
+
+          <button
+            type="button"
+            className={`app-nav-btn ${activeTab === 'review' ? 'active' : ''}`}
+            onClick={() => navigateToTab('review')}
+          >
+            <BarChart2 size={14} />
+            <span>行情复盘</span>
+          </button>
+
+          <button
+            type="button"
+            className={`app-nav-btn ${activeTab === 'cfd' ? 'active' : ''}`}
+            onClick={() => navigateToTab('cfd')}
+            aria-label="全球市场"
+            title="全球市场 · 黄金、纳斯达克100、日经225"
+          >
+            <Globe2 size={14} />
+            <span>全球市场</span>
+          </button>
+
+          <button
+            type="button"
+            className={`app-nav-btn ${activeTab === 'bitlang' ? 'active' : ''}`}
+            onClick={() => navigateToTab('bitlang')}
+          >
+            <ListChecks size={14} />
+            <span>bit浪浪实盘分析</span>
+          </button>
+          <button
+            type="button"
+            className={`app-nav-btn ${activeTab === 'positions' ? 'active' : ''}`}
+            onClick={() => navigateToTab('positions')}
+          >
+            <Tags size={14} />
+            <span>仓位复盘</span>
+          </button>
+        </nav>
+
         <div className="app-header-actions">
-          <button
-            type="button"
-            className="app-icon-btn"
-            onClick={() => setShowSettings(true)}
-            title="设置"
-            aria-label="设置"
-          >
-            <Settings size={15} />
-          </button>
-          <button
-            type="button"
-            className="app-icon-btn"
-            onClick={() => setShowShortcuts(true)}
-            title="快捷键速查指南 (?)"
-            aria-label="快捷键速查指南"
-          >
-            <Keyboard size={15} />
-          </button>
-          <button
-            type="button"
-            className="app-icon-btn"
-            onClick={() =>
-              setThemeMode((current) =>
-                current === 'dark' ? 'light' : 'dark'
-              )
-            }
-            title={themeMode === 'dark' ? '切换到亮色主题' : '切换到暗色主题'}
-            aria-label={
-              themeMode === 'dark' ? '切换到亮色主题' : '切换到暗色主题'
-            }
-          >
-            {themeMode === 'dark' ? <Sun size={15} /> : <Moon size={15} />}
-          </button>
           <div className="app-status-badge">
             <span
               className={`app-status-dot ${
                 error ? 'error' : offlineMode ? 'offline' : ''
               }`}
             />
-            <span>
+            <span className="app-status-text">
               {loading
                 ? '连接中...'
                 : error
@@ -280,16 +249,51 @@ export function AppShell() {
                 ? '离线缓存模式'
                 : activeTab === 'cfd' ? 'Gate CFD 在线服务' : 'Bybit 在线服务'}
             </span>
+            <button
+              type="button"
+              className="app-status-refresh"
+              onClick={checkConnection}
+              title="刷新连接"
+              aria-label="刷新连接"
+            >
+              <RefreshCw size={12} className={loading ? 'spin' : ''} />
+            </button>
           </div>
-          <button
-            type="button"
-            className="app-icon-btn ghost"
-            onClick={checkConnection}
-            title="刷新连接"
-            aria-label="刷新连接"
-          >
-            <RefreshCw size={14} className={loading ? 'spin' : ''} />
-          </button>
+          <div className="app-tool-group">
+            <button
+              type="button"
+              className="app-icon-btn"
+              onClick={() => setShowSettings(true)}
+              title="设置"
+              aria-label="设置"
+            >
+              <Settings size={15} />
+            </button>
+            <button
+              type="button"
+              className="app-icon-btn"
+              onClick={() => setShowShortcuts(true)}
+              title="快捷键速查指南 (?)"
+              aria-label="快捷键速查指南"
+            >
+              <Keyboard size={15} />
+            </button>
+            <button
+              type="button"
+              className="app-icon-btn"
+              onClick={() =>
+                setThemeMode((current) =>
+                  current === 'dark' ? 'light' : 'dark'
+                )
+              }
+              title={themeMode === 'dark' ? '切换到亮色主题' : '切换到暗色主题'}
+              aria-label={
+                themeMode === 'dark' ? '切换到亮色主题' : '切换到暗色主题'
+              }
+            >
+              {themeMode === 'dark' ? <Sun size={15} /> : <Moon size={15} />}
+            </button>
+          </div>
         </div>
       </header>
 

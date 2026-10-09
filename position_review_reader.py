@@ -52,6 +52,7 @@ def _position_from_row(row):
         "venue": "venue", "positionId": "position_id", "unifiedSymbol": "unified_symbol",
         "chartSymbol": "chart_symbol", "side": "side", "status": "status",
         "entryPrice": "entry_price", "exitPrice": "exit_price", "contracts": "contracts",
+        "contractSize": "contract_size",
         "leverage": "leverage", "marginMode": "margin_mode", "realizedPnl": "realized_pnl",
         "netPnl": "net_pnl", "funding": "funding", "openFee": "open_fee", "closeFee": "close_fee",
         "entryTimeMs": "entry_time_ms", "exitTimeMs": "exit_time_ms",
