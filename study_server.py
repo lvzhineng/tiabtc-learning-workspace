@@ -1032,17 +1032,21 @@ def load_replay_candles(symbol, interval, cursor_timestamp, limit):
     latest_closed_timestamp = latest_closed_candle_timestamp(interval, now_timestamp)
     start_timestamp = cursor_timestamp - interval_milliseconds * 500
     end_timestamp = min(latest_closed_timestamp, cursor_timestamp + interval_milliseconds * limit)
+    # The initial replay window includes padding far from the cursor. A failed
+    # repair there must not discard usable cached bars around the replay time.
+    # Later requests stay strict; the client also stops at gaps in this window.
     candles, source, warning = load_candle_range(
         symbol,
         interval,
         start_timestamp,
         end_timestamp,
-        require_complete=True,
     )
     candles = [
         candle for candle in candles
         if int(candle["timestamp"]) + interval_milliseconds <= now_timestamp
     ]
+    if warning and candles:
+        warning = f"已显示可用缓存，部分区间可能不完整。{warning}"
     return {
         "candles": candles,
         "cursor": cursor_timestamp,

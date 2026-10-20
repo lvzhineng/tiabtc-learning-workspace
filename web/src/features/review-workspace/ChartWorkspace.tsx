@@ -36,6 +36,7 @@ import type { PaperTrade } from '@/domain/paper-trade';
 import { calculateRR } from '@/features/paper-trading/paper-trade-logic';
 import { PaperTradingPanel } from '@/features/paper-trading/PaperTradingPanel';
 import { useCandleWorkspaceData } from './useCandleWorkspaceData';
+import { useReplayPartialCandle } from './useReplayPartialCandle';
 import { useDrawingWorkspace } from './useDrawingWorkspace';
 import { usePaperTrading } from './usePaperTrading';
 import { ChartReadoutBar } from './ChartReadoutBar';
@@ -611,6 +612,12 @@ export function ChartWorkspace({
       return;
     }
 
+    if (!isCfd && nextCursorMs - replayState.cursorTimeMs > timeframeMs(activeTimeframe)) {
+      setReplayState((prev) => prev.status === 'idle' ? prev : { ...prev, status: 'paused' });
+      toast.warning('当前复盘时间附近存在 K 线缺口，已暂停推进，请重试加载。');
+      return;
+    }
+
     // Check TP/SL trigger on new candle
     const nextCandle = findCandleCompletingAt(
       candles,
@@ -637,6 +644,7 @@ export function ChartWorkspace({
   }, [
     activeTimeframe,
     candles,
+    isCfd,
     replayState,
     prefetchFutureCandles,
     checkOpenTradesTriggers,
@@ -748,19 +756,27 @@ export function ChartWorkspace({
   // Determine Visible Candles for Chart Canvas
   const replayCursorTimeMs =
     replayState.status === 'idle' ? null : replayState.cursorTimeMs;
+  const partialReplay = useReplayPartialCandle(
+    activeSymbol, activeTimeframe, market, replayCursorTimeMs, candles, loading
+  );
   const visibleCandles = useMemo(
-    () =>
-      replayCursorTimeMs !== null
-        ? filterVisibleCandles(
-            candles,
-            replayCursorTimeMs,
-            activeTimeframe
-          )
-        : candles,
-    [activeTimeframe, candles, replayCursorTimeMs]
+    () => {
+      if (replayCursorTimeMs === null) return candles;
+      const closed = filterVisibleCandles(candles, replayCursorTimeMs, activeTimeframe);
+      return partialReplay.candle ? [...closed, partialReplay.candle] : closed;
+    },
+    [activeTimeframe, candles, replayCursorTimeMs, partialReplay.candle]
+  );
+  const visibleCandleMap = useMemo(
+    () => new Map(visibleCandles.map((bar) => [bar.timestampMs, bar])),
+    [visibleCandles]
   );
   const displayCandle =
-    hoveredCandle || (visibleCandles.length > 0 ? visibleCandles[visibleCandles.length - 1] : null);
+    (hoveredCandle ? visibleCandleMap.get(hoveredCandle.timestampMs) : null) ||
+    (visibleCandles.length > 0 ? visibleCandles[visibleCandles.length - 1] : null);
+  const candleCountdownMs = replayCursorTimeMs !== null && partialReplay.candle
+    ? partialReplay.candle.timestampMs + timeframeMs(activeTimeframe) - replayCursorTimeMs
+    : null;
   const copyChart = useCallback(async () => {
     if (!chartAreaRef.current || copyingChart) return;
     if (!navigator.clipboard?.write || typeof ClipboardItem === 'undefined') {
@@ -1009,6 +1025,14 @@ export function ChartWorkspace({
         <div className="review-banner-warning">
           <AlertCircle size={14} />
           <span>{offlineWarning}</span>
+          <button
+            type="button"
+            className="review-retry-btn"
+            onClick={handleRetryLoad}
+            disabled={loading}
+          >
+            重试
+          </button>
         </div>
       )}
 
@@ -1071,9 +1095,16 @@ export function ChartWorkspace({
             <span>正在切换周期...</span>
           </div>
         )}
+        {!loading && (partialReplay.loading || partialReplay.warning) && (
+          <div className="review-chart-loading-chip" role="status">
+            {partialReplay.loading && <RefreshCw size={14} className="spin" />}
+            <span>{partialReplay.loading ? '正在还原未收盘 K 线...' : partialReplay.warning}</span>
+          </div>
+        )}
 
         <ChartCanvas
           candles={visibleCandles}
+          candleCountdownMs={candleCountdownMs}
           symbol={activeSymbol}
           interval={activeTimeframe}
           isLogScale={isLogScale}

@@ -35,6 +35,7 @@ import type {
 } from '@/features/drawings/drawing-types';
 import { ChartDrawingOverlay } from '@/features/drawings/ChartDrawingOverlay';
 import { UsSessionBandsOverlay } from '@/chart/UsSessionBandsOverlay';
+import { CandleCountdownOverlay } from '@/chart/CandleCountdownOverlay';
 import { candlePriceFormat, formatPrice } from './chart-price';
 import { preserveCandleViewport } from './candle-retention';
 import { TradePricePrimitive, type TradePricePoint } from './TradePricePrimitive';
@@ -80,6 +81,8 @@ interface ChartCanvasProps {
   showWeekendBands?: boolean;
   /** Optional connecting line series for position fills trajectory. */
   trajectoryPoints?: { time: UTCTimestamp; value: number }[] | null;
+  /** Replay-time duration remaining until the current candle closes. */
+  candleCountdownMs?: number | null;
 }
 
 function findNearestCandleIndex(
@@ -196,6 +199,7 @@ export const ChartCanvas = memo(function ChartCanvas({
   sessionBands = [],
   showWeekendBands = false,
   trajectoryPoints = null,
+  candleCountdownMs = null,
 }: ChartCanvasProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const chartRef = useRef<IChartApi | null>(null);
@@ -1004,6 +1008,20 @@ export const ChartCanvas = memo(function ChartCanvas({
               themeMode={themeMode}
               sessionBands={sessionBands}
               showWeekendBands={showWeekendBands}
+            />
+          )}
+        {chartReady &&
+          chartRef.current &&
+          seriesRef.current &&
+          candleCountdownMs !== null &&
+          candleCountdownMs > 0 &&
+          candles.length > 0 && (
+            <CandleCountdownOverlay
+              chart={chartRef.current}
+              series={seriesRef.current}
+              candle={candles[candles.length - 1]}
+              remainingMs={candleCountdownMs}
+              themeMode={themeMode}
             />
           )}
         {chartReady && chartRef.current && seriesRef.current && (
