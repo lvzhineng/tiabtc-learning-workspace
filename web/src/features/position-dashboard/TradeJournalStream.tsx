@@ -5,7 +5,7 @@ import {
   type PositionTag,
   type ReviewPosition,
 } from '@/api/position-review-api';
-import { positionKey, venueLabel } from '@/features/position-review/position-review-types';
+import { positionCurrencyLabel, positionKey, venueLabel, type ReviewCurrency } from '@/features/position-review/position-review-types';
 import { formatChartTime } from '@/chart/chart-time';
 import { toast } from '@/ui/feedback/toast';
 import {
@@ -36,7 +36,7 @@ function loadJournalUiState() {
 }
 
 interface Props {
-  currency?: 'USDT' | 'USD';
+  currency?: ReviewCurrency;
   positions: ReviewPosition[];
   tags: PositionTag[];
   onNavigateToPosition?: (positionId: string) => void;
@@ -44,7 +44,6 @@ interface Props {
 }
 
 export function TradeJournalStream({
-  currency = 'USDT',
   positions,
   tags,
   onNavigateToPosition,
@@ -177,7 +176,7 @@ export function TradeJournalStream({
               {/* 卡片头部 */}
               <div className="posdash-journal-card-header">
                 <div className="posdash-journal-identity">
-                  <span className="posdash-journal-symbol">{pos.chartSymbol}</span>
+                  <span className="posdash-journal-symbol">{pos.venue === 'exness' ? pos.unifiedSymbol : pos.chartSymbol}</span>
                   <span className={`posrev-exchange-badge ${pos.venue}`}>
                     {venueLabel(pos.venue)}
                   </span>
@@ -197,12 +196,13 @@ export function TradeJournalStream({
 
                 <div className="posdash-journal-pnl-chip">
                   <span
+                    title={pos.venue === 'exness' && !pos.currency ? '历史文件金额，币种待 Exness API 核对' : undefined}
                     className={`posdash-journal-pnl-num ${
                       isProfit ? 'posrev-profit' : 'posrev-loss'
                     }`}
                   >
                     {isProfit ? '+' : ''}
-                    {pnl.toFixed(2)} {currency}
+                    {pnl.toFixed(2)} {positionCurrencyLabel(pos)}
                   </span>
                 </div>
               </div>

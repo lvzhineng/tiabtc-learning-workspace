@@ -6,10 +6,12 @@ import {
   TIMEFRAME_SECONDS_MAP,
   type ReviewTimeframe,
 } from '@/domain/timeframe';
-import type { Candlestick } from '@/domain/candle';
+import { isCompleteMinuteSession, type Candlestick } from '@/domain/candle';
 import type { ReplayState } from '@/features/replay/replay-state';
 import { mergeCandleWindow } from '@/chart/candle-retention';
 import { getPrevCursorTimeMs } from '@/features/replay/free-replay-logic';
+import { aggregateUsSession } from '@/features/replay/us-day-replay';
+import { getFullUsEquitySession } from '@/features/replay/us-equity-session';
 import {
   createCandleEdgeLoadGuard,
   recordEarlierCandleLoad,
@@ -70,11 +72,12 @@ export function useCandleWorkspaceData(
     replayState.status === 'idle' ? 0 : replayState.startTimeMs;
   const chartAnchorTimeMs =
     replayState.status === 'idle' ? idleAnchorTimeMs : null;
+  const daySession = market === 'cfd' && replayState.status !== 'idle' ? replayState.daySession : undefined;
   // Idle switch anchors are one-shot fetch hints and must not stay in the
   // context key, otherwise live mode remains pinned to a historical window.
   const contextKey = useMemo(
-    () => `${market}:${symbol}:${timeframe}:${replayMode}:${replayAnchorTimeMs}`,
-    [market, replayAnchorTimeMs, replayMode, symbol, timeframe]
+    () => `${market}:${symbol}:${timeframe}:${replayMode}:${replayAnchorTimeMs}:${daySession?.date ?? ''}`,
+    [market, replayAnchorTimeMs, replayMode, symbol, timeframe, daySession?.date]
   );
 
   useEffect(() => {
@@ -104,7 +107,20 @@ export function useCandleWorkspaceData(
     failedEdgeRef.current = null;
 
     const request =
-      replayState.status === 'idle'
+      daySession
+        ? (async () => {
+            // Revalidate archives too, including entries supplied by older/external clients.
+            const expected = getFullUsEquitySession(daySession.date);
+            if (!expected || expected.fromMs !== daySession.fromMs || expected.toMs !== daySession.toMs) {
+              throw new Error('归档中的美股交易日不是完整交易日，请重新抽取');
+            }
+            const batch = await cfdApi.fetchUsSessionCandles(symbol, daySession.fromMs, daySession.toMs, controller.signal);
+            if (batch.warning || !isCompleteMinuteSession(batch.candles, daySession)) {
+              throw new Error(batch.warning || '该交易日分钟行情不完整，请重新抽取或重试加载');
+            }
+            return { ...batch, candles: aggregateUsSession(batch.candles, timeframe) };
+          })()
+        : replayState.status === 'idle'
         ? fetchChartCandles(
             symbol,
             timeframe,
@@ -174,6 +190,7 @@ export function useCandleWorkspaceData(
   }, [contextKey, reloadToken]);
 
   const loadEarlier = useCallback(() => {
+    if (replayStateRef.current.status !== 'idle' && replayStateRef.current.daySession) return;
     if (
       loading ||
       isLoadingEarlier ||
@@ -321,6 +338,7 @@ export function useCandleWorkspaceData(
   }, [loadEarlier, loadLater]);
 
   const prefetchFuture = useCallback((): Promise<number> => {
+    if (replayStateRef.current.status !== 'idle' && replayStateRef.current.daySession) return Promise.resolve(0);
     if (candles.length === 0) return Promise.resolve(0);
     if (futurePrefetchRef.current) return futurePrefetchRef.current;
 
@@ -397,6 +415,7 @@ export function useCandleWorkspaceData(
   const previousReplayCursor = useCallback(async (): Promise<number | null> => {
     const replay = replayStateRef.current;
     if (loading || replay.status === 'idle' || !candles.length) return null;
+    if (replay.daySession) return getPrevCursorTimeMs(candles, replay.cursorTimeMs, replay.startTimeMs, timeframe);
     const firstCompletion = candles[0].timestampMs + TIMEFRAME_SECONDS_MAP[timeframe] * 1000;
     if (replay.cursorTimeMs > firstCompletion || replay.cursorTimeMs <= replay.startTimeMs) {
       return getPrevCursorTimeMs(candles, replay.cursorTimeMs, replay.startTimeMs, timeframe);

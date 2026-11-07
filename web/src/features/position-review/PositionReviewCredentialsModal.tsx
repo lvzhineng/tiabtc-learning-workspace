@@ -9,6 +9,7 @@ import {
 
 interface PositionReviewCredentialsModalProps {
   isOpen: boolean;
+  embedded?: boolean;
   venues: PositionReviewVenues;
   savingVenue: ReviewVenue | null;
   auditingCache: boolean;
@@ -23,6 +24,7 @@ interface PositionReviewCredentialsModalProps {
 export const PositionReviewCredentialsModal = memo(
   function PositionReviewCredentialsModal({
     isOpen,
+    embedded = false,
     venues,
     savingVenue,
     auditingCache,
@@ -57,21 +59,31 @@ export const PositionReviewCredentialsModal = memo(
     if (!isOpen) return null;
 
     const handleSaveBitget = async () => {
-      await onSaveCredentials('bitget', {
-        apiKey: bitgetApiKey.trim(),
-        secret: bitgetSecret.trim(),
-        passphrase: bitgetPassphrase.trim(),
-      });
+      try {
+        await onSaveCredentials('bitget', {
+          apiKey: bitgetApiKey.trim(),
+          secret: bitgetSecret.trim(),
+          passphrase: bitgetPassphrase.trim(),
+        });
+      } catch {
+        // The workspace reports the failure through the global toast.
+        return;
+      }
       setBitgetApiKey('');
       setBitgetSecret('');
       setBitgetPassphrase('');
     };
 
     const handleSaveGate = async () => {
-      await onSaveCredentials('gate', {
-        apiKey: gateApiKey.trim(),
-        secret: gateSecret.trim(),
-      });
+      try {
+        await onSaveCredentials('gate', {
+          apiKey: gateApiKey.trim(),
+          secret: gateSecret.trim(),
+        });
+      } catch {
+        // The workspace reports the failure through the global toast.
+        return;
+      }
       setGateApiKey('');
       setGateSecret('');
     };
@@ -96,26 +108,23 @@ export const PositionReviewCredentialsModal = memo(
 
     return (
       <div className="posrev-credentials">
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+        {!embedded && <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
           <p style={{ margin: 0 }}>
             只需只读权限。Bitget、Gate 永续与 Gate CFD 可独立连接，同步后仓位汇聚到同一列表。密钥加密保存在本机，不会回传。
           </p>
-          <button
-            type="button"
-            className="shortcut-modal-close"
-            onClick={onClose}
-            title="关闭"
-          >
+          <button type="button" className="shortcut-modal-close" onClick={onClose} title="关闭">
             <X size={15} />
           </button>
-        </div>
+        </div>}
 
-        <div className="posrev-affiliate">
-          <p>{AFFILIATE_DISCLOSURE}</p>
-        </div>
-
-        <div className="posrev-credential-block">
-          <strong>Bitget UTA{venues.bitget ? ' · 已配置' : ''}</strong>
+        <details className="position-account-credential-details">
+          <summary>
+            <span>Bitget UTA</span>
+            <span>{venues.bitget ? '已配置' : '未连接'}</span>
+          </summary>
+          <div className="position-account-credential-body">
+          <div className="posrev-credential-block">
+          <p className="posrev-invite-disclosure">{AFFILIATE_DISCLOSURE}</p>
           {invites?.bitgetConfigured && invites.bitget ? (
             <a
               className="posrev-invite-cta"
@@ -138,6 +147,7 @@ export const PositionReviewCredentialsModal = memo(
             placeholder="API Key"
             type="password"
             autoComplete="new-password"
+            disabled={savingVenue !== null}
             spellCheck={false}
           />
           <input
@@ -146,6 +156,7 @@ export const PositionReviewCredentialsModal = memo(
             placeholder="Secret"
             type="password"
             autoComplete="new-password"
+            disabled={savingVenue !== null}
             spellCheck={false}
           />
           <input
@@ -154,6 +165,7 @@ export const PositionReviewCredentialsModal = memo(
             placeholder="Passphrase"
             type="password"
             autoComplete="new-password"
+            disabled={savingVenue !== null}
             spellCheck={false}
           />
           <button
@@ -168,10 +180,18 @@ export const PositionReviewCredentialsModal = memo(
           >
             {savingVenue === 'bitget' ? '保存中' : '保存 Bitget 密钥'}
           </button>
-        </div>
+          </div>
+          </div>
+        </details>
 
-        <div className="posrev-credential-block">
-          <strong>Gate USDT 永续{venues.gate ? ' · 已配置' : ''}</strong>
+        <details className="position-account-credential-details">
+          <summary>
+            <span>Gate USDT 永续</span>
+            <span>{venues.gate ? '已配置' : '未连接'}</span>
+          </summary>
+          <div className="position-account-credential-body">
+          <div className="posrev-credential-block">
+          <p className="posrev-invite-disclosure">{AFFILIATE_DISCLOSURE}</p>
           {invites?.gateConfigured && invites.gate ? (
             <a
               className="posrev-invite-cta"
@@ -194,6 +214,7 @@ export const PositionReviewCredentialsModal = memo(
             placeholder="API Key"
             type="password"
             autoComplete="new-password"
+            disabled={savingVenue !== null}
             spellCheck={false}
           />
           <input
@@ -202,6 +223,7 @@ export const PositionReviewCredentialsModal = memo(
             placeholder="Secret (Secret Key)"
             type="password"
             autoComplete="new-password"
+            disabled={savingVenue !== null}
             spellCheck={false}
           />
           <button
@@ -215,33 +237,42 @@ export const PositionReviewCredentialsModal = memo(
           >
             {savingVenue === 'gate' ? '保存中' : '保存 Gate 密钥'}
           </button>
-        </div>
+          </div>
+          </div>
+        </details>
 
-        <div className="posrev-credential-venue-header">
-          <strong>Gate CFD / TradFi{venues['gate-cfd'] ? ' · 已配置' : ''}</strong>
-        </div>
-        <p>
+        <details className="position-account-credential-details">
+          <summary>
+            <span>Gate CFD / TradFi</span>
+            <span>{venues['gate-cfd'] ? '已配置' : '未连接'}</span>
+          </summary>
+          <div className="position-account-credential-body">
+          <p>
           在 Gate 主账户开通 CFD，并填写具有 CFD / TradFi 读取权限的 API Key 与 Secret。
           可使用已保存的 Gate 永续密钥连接，也可填写另一组密钥。连接后点击「同步」，获取最近一个月历史仓位与当前持仓；
           已保存历史持续保留。盈亏和权益按 USD 展示，数量单位为手。
-        </p>
-        {venues.gate && !venues['gate-cfd'] && (
+          </p>
+          {venues.gate && !venues['gate-cfd'] && (
           <button type="button" onClick={handleReuseGateForCfd} disabled={savingVenue !== null}>
             {savingVenue === 'gate-cfd' ? '连接中' : '使用已保存的 Gate 密钥连接 CFD'}
           </button>
-        )}
-        <div className="posrev-credential-fields">
+          )}
+          <div className="posrev-credential-fields">
           <input value={cfdApiKey} onChange={(e) => setCfdApiKey(e.target.value)}
-            placeholder="CFD API Key" type="password" autoComplete="new-password" spellCheck={false} />
+            placeholder="CFD API Key" type="password" autoComplete="new-password" spellCheck={false} disabled={savingVenue !== null} />
           <input value={cfdSecret} onChange={(e) => setCfdSecret(e.target.value)}
-            placeholder="CFD Secret" type="password" autoComplete="new-password" spellCheck={false} />
+            placeholder="CFD Secret" type="password" autoComplete="new-password" spellCheck={false} disabled={savingVenue !== null} />
           <button type="button" onClick={handleSaveCfd}
             disabled={savingVenue !== null || !cfdApiKey.trim() || !cfdSecret.trim()}>
             {savingVenue === 'gate-cfd' ? '保存中' : '保存 Gate CFD 密钥'}
           </button>
-        </div>
+          </div>
+          </div>
+        </details>
 
-        <div className="posrev-credential-audit">
+        <details className="position-account-audit">
+          <summary>本机行情缓存</summary>
+          <div className="position-account-audit-content">
           <button
             type="button"
             className="posrev-audit-btn"
@@ -251,7 +282,8 @@ export const PositionReviewCredentialsModal = memo(
             {auditingCache ? <RefreshCw size={13} className="spin" /> : null}
             {auditingCache ? '正在审计...' : '只读审计交易所回退缓存'}
           </button>
-        </div>
+          </div>
+        </details>
       </div>
     );
   }

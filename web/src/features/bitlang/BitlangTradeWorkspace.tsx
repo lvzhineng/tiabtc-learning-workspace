@@ -38,6 +38,7 @@ import { BitlangTradeChart } from './BitlangTradeChart';
 import { BitlangTradePanel } from './BitlangTradePanel';
 import { ReviewQueueButton } from '@/features/review-workspace/ReviewQueueButton';
 import { writeLocalUiState } from '@/ui/persistence/local-ui-state';
+import { buildSymbolCountOptions } from '@/ui/symbol-count-options';
 import {
   BITLANG_UI_STORAGE_KEY,
   DATE_RANGE_MS_MAP,
@@ -244,7 +245,7 @@ export function BitlangTradeWorkspace({
     [annotatedTrades]
   );
 
-  const filteredTrades = useMemo(() => {
+  const symbolFilterCandidates = useMemo(() => {
     const keyword = deferredSearch.trim().toLowerCase();
     const holdingMinutesThreshold = Number(minimumHoldingMinutes);
     const hasHoldingMinutesThreshold =
@@ -256,7 +257,6 @@ export function BitlangTradeWorkspace({
     const tagId = tagFilter === 'all' ? null : Number(tagFilter);
     return annotatedTrades
       .filter((trade) => {
-        if (instrument !== 'all' && trade.instrument !== instrument) return false;
         if (direction !== 'all' && trade.direction !== direction) return false;
         if (result === 'profit' && trade.profit <= 0) return false;
         if (result === 'loss' && trade.profit >= 0) return false;
@@ -277,32 +277,36 @@ export function BitlangTradeWorkspace({
         return `${trade.sequence} ${trade.instrument} ${trade.sourceNote} ${trade.note} ${tagNames}`
           .toLowerCase()
           .includes(keyword);
-      })
-      .sort((left, right) => {
-        const leftValue = left[sortField];
-        const rightValue = right[sortField];
-        const comparison =
-          typeof leftValue === 'string'
-            ? leftValue.localeCompare(String(rightValue))
-            : Number(leftValue) - Number(rightValue);
-        return descending ? -comparison : comparison;
       });
   }, [
     annotatedTrades,
     dateRange,
     deferredSearch,
-    descending,
     direction,
-    instrument,
     minimumHoldingMinutes,
     noNote,
     noTag,
     result,
     snapshotEndMs,
-    sortField,
     tagFilter,
     tags,
   ]);
+
+  const instrumentOptions = useMemo(
+    () => buildSymbolCountOptions(symbolFilterCandidates, (trade) => trade.instrument, instruments),
+    [symbolFilterCandidates, instruments]
+  );
+
+  const filteredTrades = useMemo(() => symbolFilterCandidates
+    .filter((trade) => instrument === 'all' || trade.instrument === instrument)
+    .sort((left, right) => {
+      const leftValue = left[sortField];
+      const rightValue = right[sortField];
+      const comparison = typeof leftValue === 'string'
+        ? leftValue.localeCompare(String(rightValue))
+        : Number(leftValue) - Number(rightValue);
+      return descending ? -comparison : comparison;
+    }), [symbolFilterCandidates, instrument, sortField, descending]);
 
   useEffect(() => {
     if (previousFilterSignatureRef.current === filterSignature) return;
@@ -658,13 +662,14 @@ export function BitlangTradeWorkspace({
               <option value="90d">近 90 天</option>
             </select>
             <select
+              aria-label="交割单交易对"
               value={instrument}
               onChange={(event) => setInstrument(event.target.value)}
             >
-              <option value="all">全部交易对</option>
-              {instruments.map((item) => (
-                <option key={item} value={item}>
-                  {bybitSymbol(item)}
+              <option value="all">全部交易对（{symbolFilterCandidates.length}条）</option>
+              {instrumentOptions.map((item) => (
+                <option key={item.symbol} value={item.symbol}>
+                  {bybitSymbol(item.symbol)}（{item.count}条）
                 </option>
               ))}
             </select>

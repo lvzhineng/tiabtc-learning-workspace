@@ -4,10 +4,11 @@ import {
   type PositionTag,
   type ReviewPosition,
 } from '@/api/position-review-api';
+import { positionStatisticsCurrency, type ReviewCurrency } from '@/features/position-review/position-review-types';
 import { Tags } from 'lucide-react';
 
 interface Props {
-  currency?: 'USDT' | 'USD';
+  currency?: ReviewCurrency;
   positions: ReviewPosition[];
   tags: PositionTag[];
 }
@@ -21,11 +22,11 @@ interface TagStat {
   lossCount: number;
   flatCount: number;
   winRate: number;
-  totalPnl: number;
-  profitFactor: number | null;
+  pnlByCurrency: Record<string, number>;
+  profitFactorByCurrency: Record<string, number | null>;
 }
 
-export function TagAnalyticsCard({ positions, tags, currency = 'USDT' }: Props) {
+export function TagAnalyticsCard({ positions, tags }: Props) {
   const stats: TagStat[] = useMemo(() => {
     const byTagId = new Map<number, ReviewPosition[]>();
     const untagged: ReviewPosition[] = [];
@@ -49,20 +50,25 @@ export function TagAnalyticsCard({ positions, tags, currency = 'USDT' }: Props) 
     ): TagStat => {
       let winCount = 0;
       let lossCount = 0;
-      let totalWin = 0;
-      let totalLoss = 0;
-      let totalPnl = 0;
+      const winsByCurrency: Record<string, number> = {};
+      const lossesByCurrency: Record<string, number> = {};
+      const pnlByCurrency: Record<string, number> = {};
       for (const item of tagged) {
         const pnl = positionPnl(item);
-        totalPnl += pnl;
+        const unit = positionStatisticsCurrency(item);
+        pnlByCurrency[unit] = (pnlByCurrency[unit] || 0) + pnl;
         if (pnl > 0) {
           winCount += 1;
-          totalWin += pnl;
+          winsByCurrency[unit] = (winsByCurrency[unit] || 0) + pnl;
         } else if (pnl < 0) {
           lossCount += 1;
-          totalLoss += Math.abs(pnl);
+          lossesByCurrency[unit] = (lossesByCurrency[unit] || 0) + Math.abs(pnl);
         }
       }
+      const profitFactorByCurrency = Object.fromEntries(Object.keys(pnlByCurrency).map((unit) => [
+        unit,
+        (lossesByCurrency[unit] || 0) > 0 ? (winsByCurrency[unit] || 0) / lossesByCurrency[unit] : null,
+      ]));
       const count = tagged.length;
       const decided = winCount + lossCount;
       return {
@@ -74,8 +80,8 @@ export function TagAnalyticsCard({ positions, tags, currency = 'USDT' }: Props) 
         lossCount,
         flatCount: count - winCount - lossCount,
         winRate: decided > 0 ? (winCount / decided) * 100 : 0,
-        totalPnl,
-        profitFactor: totalLoss > 0 ? totalWin / totalLoss : null,
+        pnlByCurrency,
+        profitFactorByCurrency,
       };
     };
 
@@ -88,7 +94,7 @@ export function TagAnalyticsCard({ positions, tags, currency = 'USDT' }: Props) 
     if (untagged.length > 0) {
       list.push(toStat('untagged', '未打标仓位', '#64748b', untagged));
     }
-    return list.sort((left, right) => right.totalPnl - left.totalPnl);
+    return list.sort((left, right) => right.count - left.count);
   }, [positions, tags]);
 
   if (stats.length === 0) {
@@ -103,7 +109,6 @@ export function TagAnalyticsCard({ positions, tags, currency = 'USDT' }: Props) 
   return (
     <div className="posdash-tag-list">
       {stats.map((item) => {
-        const isProfit = item.totalPnl >= 0;
         const winPercent = item.winRate;
         const decided = item.winCount + item.lossCount;
         const lossPercent = decided > 0 ? (item.lossCount / decided) * 100 : 0;
@@ -121,19 +126,12 @@ export function TagAnalyticsCard({ positions, tags, currency = 'USDT' }: Props) 
               </div>
 
               <div className="posdash-tag-figures">
-                {item.profitFactor != null && (
-                  <span className="posdash-pf-badge" title="Profit Factor 盈亏比">
-                    PF {item.profitFactor.toFixed(2)}
+                {Object.entries(item.pnlByCurrency).map(([unit, amount]) => (
+                  <span key={unit} className={`posdash-tag-pnl-val ${amount >= 0 ? 'posrev-profit' : 'posrev-loss'}`}>
+                    {amount >= 0 ? '+' : ''}{amount.toFixed(2)} {unit === '未标注币种' ? '文件原值（未标注币种）' : unit}
+                    {item.profitFactorByCurrency[unit] != null && <small> · PF {item.profitFactorByCurrency[unit]!.toFixed(2)}</small>}
                   </span>
-                )}
-                <span
-                  className={`posdash-tag-pnl-val ${
-                    isProfit ? 'posrev-profit' : 'posrev-loss'
-                  }`}
-                >
-                  {isProfit ? '+' : ''}
-                  {item.totalPnl.toFixed(2)} {currency}
-                </span>
+                ))}
               </div>
             </div>
 

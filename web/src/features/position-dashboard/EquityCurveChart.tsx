@@ -1,6 +1,7 @@
 import { useEffect, useId, useMemo, useState } from 'react';
 import type { ReviewPosition } from '@/api/position-review-api';
 import { buildEquityCurve } from '@/features/position-review/position-stats';
+import type { ReviewCurrency } from '@/features/position-review/position-review-types';
 import { formatChartTime } from '@/chart/chart-time';
 import { TrendingDown, TrendingUp } from 'lucide-react';
 
@@ -16,7 +17,7 @@ interface Point {
 }
 
 interface Props {
-  currency?: 'USDT' | 'USD';
+  currency?: ReviewCurrency;
   positions: ReviewPosition[];
 }
 
@@ -359,14 +360,14 @@ export function EquityCurveChart({ positions, currency = 'USDT' }: Props) {
               <span className="posdash-tooltip-time">{formatChartTime(activePoint.timeMs)}</span>
             </div>
             <div className="posdash-tooltip-row">
-              <span className="posdash-tooltip-label">单笔净盈亏</span>
+              <span className="posdash-tooltip-label">单笔盈亏 / 已实现利润</span>
               <span className={`posdash-tooltip-value ${activePoint.pnl >= 0 ? 'profit' : 'loss'}`}>
                 {activePoint.pnl >= 0 ? '+' : ''}
                 {activePoint.pnl.toFixed(2)} {currency}
               </span>
             </div>
             <div className="posdash-tooltip-row">
-              <span className="posdash-tooltip-label">累计净值</span>
+              <span className="posdash-tooltip-label">累计盈亏 / 已实现利润</span>
               <span className={`posdash-tooltip-value ${activePoint.cumulative >= 0 ? 'profit' : 'loss'}`}>
                 {activePoint.cumulative >= 0 ? '+' : ''}
                 {activePoint.cumulative.toFixed(2)} {currency}
@@ -402,8 +403,8 @@ export function EquityCurveChart({ positions, currency = 'USDT' }: Props) {
         </div>
 
         <div className="posdash-summary-item">
-          <span className="posdash-summary-label" title="已平仓净盈亏累计，等于收益曲线终点">
-            当前净值
+          <span className="posdash-summary-label" title="以可用净盈亏累计；未提供净盈亏时沿用已实现利润">
+            累计盈亏 / 已实现利润
           </span>
           <span className={`posdash-summary-val ${equity.totalPnl >= 0 ? 'profit' : 'loss'}`}>
             {equity.totalPnl >= 0 ? '+' : ''}

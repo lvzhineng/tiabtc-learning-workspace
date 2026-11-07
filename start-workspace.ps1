@@ -23,6 +23,10 @@ function Get-ExpectedBackendVersionNeedle {
 
 $expectedBackendVersion = Get-ExpectedBackendVersionNeedle
 $frontendBaseUrl = "http://127.0.0.1:3000/"
+# Windows PowerShell 5.1 may misdecode UTF-8 HTML without an HTTP charset.
+# Match the app entry instead of the localized page title.
+# Vite may append an HMR timestamp (?t=...) to the entry URL.
+$frontendEntryNeedle = 'src="/src/main.tsx'
 $frontendUrl = if ($Page -eq "review") {
     "${frontendBaseUrl}?tab=review"
 } elseif ($Page -eq "bitlang") {
@@ -175,7 +179,7 @@ try {
         Wait-Endpoint -Uri $backendUrl -ExpectedText $expectedBackendVersion
     }
 
-    if (Test-Endpoint -Uri $frontendBaseUrl -ExpectedText "TiaBTC Workspace") {
+    if (Test-Endpoint -Uri $frontendBaseUrl -ExpectedText $frontendEntryNeedle) {
         Write-Host "前端已经运行，直接复用 3000 端口。" -ForegroundColor DarkGray
     } else {
         Write-Host "正在启动复盘界面..." -ForegroundColor Cyan
@@ -194,7 +198,7 @@ try {
             -PassThru
         Wait-Endpoint `
             -Uri $frontendBaseUrl `
-            -ExpectedText "TiaBTC Workspace"
+            -ExpectedText $frontendEntryNeedle
     }
 
     Write-Host ""

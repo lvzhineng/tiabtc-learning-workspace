@@ -10,8 +10,9 @@ import {
   Search,
 } from 'lucide-react';
 import type { PositionTag } from '@/api/position-review-api';
-import type { ReviewVenue } from './position-review-types';
+import type { PositionVenue } from './position-review-types';
 import { formatShanghaiTime } from '@/domain/formatters';
+import type { SymbolCountOption } from '@/ui/symbol-count-options';
 
 export type DateRangeFilter = '1d' | '3d' | '7d' | '30d' | '90d' | 'all';
 export type SideFilter = 'all' | 'long' | 'short';
@@ -26,7 +27,7 @@ interface PositionReviewToolbarProps {
   isSyncStale: boolean;
   error: string | null;
   onSync: () => void;
-  onToggleCredentials: () => void;
+  onManageAccounts: () => void;
 
   // Filter states & setters
   search: string;
@@ -41,14 +42,14 @@ interface PositionReviewToolbarProps {
   onNoNoteChange: (val: boolean) => void;
   noTag: boolean;
   onNoTagChange: (val: boolean) => void;
-  venueFilter: 'all' | ReviewVenue;
-  onVenueFilterChange: (venue: 'all' | ReviewVenue) => void;
+  venueFilter: 'all' | PositionVenue;
+  onVenueFilterChange: (venue: 'all' | PositionVenue) => void;
 
   dateRange: DateRangeFilter;
   onDateRangeChange: (range: DateRangeFilter) => void;
   symbolFilter: string;
   onSymbolFilterChange: (symbol: string) => void;
-  symbols: string[];
+  symbolOptions: SymbolCountOption[];
 
   sortField: SortField;
   onSortFieldChange: (field: SortField) => void;
@@ -78,7 +79,7 @@ export const PositionReviewToolbar = memo(function PositionReviewToolbar(
     isSyncStale,
     error,
     onSync,
-    onToggleCredentials,
+    onManageAccounts,
     search,
     onSearchChange,
     side,
@@ -97,7 +98,7 @@ export const PositionReviewToolbar = memo(function PositionReviewToolbar(
     onDateRangeChange,
     symbolFilter,
     onSymbolFilterChange,
-    symbols,
+    symbolOptions,
     sortField,
     onSortFieldChange,
     descending,
@@ -120,27 +121,19 @@ export const PositionReviewToolbar = memo(function PositionReviewToolbar(
           type="button"
           onClick={onSync}
           disabled={syncing || !configured}
+          title={!configured ? '请先在账户管理中连接账户' : syncedAt
+            ? `上次同步 ${formatShanghaiTime(Date.parse(syncedAt))}${isSyncStale ? '；已超过24小时' : ''}` : '手动同步历史交易与当前持仓'}
         >
           <RefreshCw size={14} className={syncing ? 'spin' : ''} />
           {syncing ? '同步中' : '同步'}
         </button>
-        <button type="button" onClick={onToggleCredentials}>
+        <button type="button" onClick={onManageAccounts}>
           <KeyRound size={14} />
-          密钥
+          账户管理
         </button>
       </div>
 
-      {syncedAt && (
-        <span className="posrev-synced">
-          上次同步 {formatShanghaiTime(Date.parse(syncedAt))}
-        </span>
-      )}
-      {isSyncStale && (
-        <span className="posrev-stale-banner">
-          数据可能不是最新（上次同步超过 24 小时），请手动同步。
-        </span>
-      )}
-      {error && <span className="posrev-error">{error}</span>}
+      {error && <details className="posrev-error posrev-operation-warning"><summary>账户操作有提示 · 查看详情</summary><p>{error}</p></details>}
 
       <label className="bitlang-search">
         <Search size={14} />
@@ -229,6 +222,13 @@ export const PositionReviewToolbar = memo(function PositionReviewToolbar(
         >
           Gate CFD
         </button>
+        <button
+          type="button"
+          className={venueFilter === 'exness' ? 'active' : ''}
+          onClick={() => onVenueFilterChange(venueFilter === 'exness' ? 'all' : 'exness')}
+        >
+          Exness
+        </button>
       </div>
 
       <div className="bitlang-filter-row">
@@ -244,13 +244,14 @@ export const PositionReviewToolbar = memo(function PositionReviewToolbar(
           <option value="90d">近 90 天</option>
         </select>
         <select
+          aria-label="仓位交易对"
           value={symbolFilter}
           onChange={(e) => onSymbolFilterChange(e.target.value)}
         >
-          <option value="all">全部交易对</option>
-          {symbols.map((item) => (
-            <option key={item} value={item}>
-              {item}
+          <option value="all">全部交易对（{symbolOptions.reduce((sum, item) => sum + item.count, 0)}条）</option>
+          {symbolOptions.map((item) => (
+            <option key={item.symbol} value={item.symbol}>
+              {item.symbol}（{item.count}条）
             </option>
           ))}
         </select>

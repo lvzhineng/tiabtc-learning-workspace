@@ -512,6 +512,10 @@
   background: color-mix(in srgb, var(--bg-dark-800) 92%, transparent);
 }
 
+.review-export-chart {
+  top: 44px;
+}
+
 .review-chart-loading {
   position: absolute;
   inset: 0;

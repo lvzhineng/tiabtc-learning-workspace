@@ -3,6 +3,7 @@
 import time
 from position_fill_assignment import FILL_MATCH_PAD_MS, assign_fills_to_positions
 from performance_metrics import measure_operation
+from exness_importer import read_exness_fills
 
 
 def read_positions(connection):
@@ -23,6 +24,8 @@ def read_positions(connection):
         now_ms = int(time.time() * 1000)
         scopes = {}
         for position in positions:
+            if position["venue"] == "exness":
+                continue
             key = (position["venue"], position["chartSymbol"])
             start = position["entryTimeMs"] - FILL_MATCH_PAD_MS
             end = (position["exitTimeMs"] or now_ms) + FILL_MATCH_PAD_MS
@@ -40,6 +43,7 @@ def read_positions(connection):
             fills.extend(_fill_from_row(row) for row in fill_rows)
         with measure_operation("position-review.assign-fills") as assignment:
             grouped = assign_fills_to_positions(positions, fills)
+            grouped.update(read_exness_fills(connection, positions))
             assignment.update(positionCount=len(positions), fillCount=len(fills))
         for position in positions:
             position["fills"] = grouped.get((position["venue"], position["positionId"]), [])

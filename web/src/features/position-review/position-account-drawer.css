@@ -1,0 +1,409 @@
+.position-account-drawer-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 9990;
+  display: flex;
+  justify-content: flex-end;
+  background: var(--surface-overlay);
+  backdrop-filter: blur(3px);
+  overscroll-behavior: contain;
+  animation: positionAccountDrawerFadeIn 0.16s ease-out;
+}
+
+.position-account-drawer {
+  width: min(520px, calc(100vw - 20px));
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  border-left: 1px solid var(--border-color);
+  background: var(--bg-dark-900);
+  color: var(--text-primary);
+  box-shadow: var(--shadow-pop);
+  animation: positionAccountDrawerSlideIn 0.2s var(--ease-out);
+  outline: none;
+}
+
+.position-account-drawer-header {
+  min-height: 68px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 12px 20px;
+  border-bottom: 1px solid var(--border-color);
+  background: var(--bg-dark-800);
+}
+
+.position-account-drawer-header h2 {
+  margin: 0;
+  font-size: 16px;
+  font-weight: 650;
+  line-height: 1.35;
+}
+
+.position-account-drawer-header p {
+  margin: 3px 0 0;
+  color: var(--text-muted);
+  font-size: 11px;
+}
+
+.position-account-drawer-close {
+  width: 34px;
+  height: 34px;
+  flex: 0 0 auto;
+  display: grid;
+  place-items: center;
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-sm);
+  background: var(--bg-dark-700);
+  color: var(--text-secondary);
+  cursor: pointer;
+}
+
+.position-account-drawer-close:hover:not(:disabled),
+.position-account-drawer-close:focus-visible {
+  border-color: var(--accent-line);
+  color: var(--text-primary);
+  outline: none;
+  box-shadow: var(--focus-ring);
+}
+
+.position-account-drawer-close:disabled {
+  cursor: wait;
+  opacity: 0.55;
+}
+
+.position-account-drawer-content {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding: 16px;
+}
+
+.position-account-drawer-content .posrev-credentials {
+  width: 100%;
+  max-height: none;
+  overflow: visible;
+  gap: 12px;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+}
+
+.posrev-account-overview {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 12px;
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-md);
+  background: var(--bg-dark-800);
+}
+
+.posrev-account-overview > p {
+  margin: 0;
+  color: var(--text-muted);
+  font-size: 10.5px;
+  line-height: 1.45;
+}
+
+.posrev-account-overview > span {
+  color: var(--text-primary);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.posrev-account-overview > small {
+  color: var(--text-muted);
+  font-size: 10px;
+  line-height: 1.45;
+}
+
+.posrev-account-section {
+  overflow: hidden;
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-md);
+  background: var(--bg-dark-800);
+  box-shadow: var(--shadow-card);
+}
+
+.posrev-account-section > summary,
+.posrev-account-file-tools > summary {
+  min-height: 46px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 9px 13px;
+  color: var(--text-primary);
+  font-size: 12px;
+  font-weight: 600;
+  list-style: none;
+  cursor: pointer;
+}
+
+.posrev-account-section > summary::-webkit-details-marker,
+.posrev-account-file-tools > summary::-webkit-details-marker {
+  display: none;
+}
+
+.posrev-account-section > summary::after,
+.posrev-account-file-tools > summary::after {
+  content: '⌄';
+  flex: 0 0 auto;
+  margin-left: auto;
+  color: var(--text-muted);
+  font-size: 15px;
+  transition: transform 0.15s ease;
+}
+
+.posrev-account-section[open] > summary,
+.posrev-account-file-tools[open] > summary {
+  border-bottom: 1px solid var(--border-color);
+}
+
+.posrev-account-section[open] > summary::after,
+.posrev-account-file-tools[open] > summary::after {
+  transform: rotate(180deg);
+}
+
+.posrev-account-section > summary:hover,
+.posrev-account-file-tools > summary:hover,
+.posrev-account-section > summary:focus-visible,
+.posrev-account-file-tools > summary:focus-visible {
+  color: var(--accent-blue);
+  outline: none;
+}
+
+.posrev-account-section > summary > span {
+  color: var(--text-muted);
+  font-size: 10px;
+  font-weight: 500;
+}
+
+.posrev-account-section > .exness-connection-panel {
+  margin: 10px;
+}
+
+.posrev-account-notice {
+  margin: 0;
+  padding: 7px 9px;
+  border: 1px solid color-mix(in srgb, var(--accent-orange) 40%, var(--border-color));
+  border-radius: var(--radius-sm);
+  background: color-mix(in srgb, var(--accent-orange) 10%, var(--bg-dark-700));
+  color: var(--accent-orange);
+  font-size: 10.5px;
+  line-height: 1.45;
+}
+
+.posrev-account-overview > .posrev-account-notice {
+  margin-top: 2px;
+}
+
+.posrev-account-section > .posrev-account-notice {
+  margin: 9px 10px 0;
+}
+
+.posrev-account-section > .posrev-account-notice:last-child {
+  margin-bottom: 10px;
+}
+
+.posrev-account-file-tools {
+  margin: 9px 10px 10px;
+  overflow: hidden;
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-sm);
+  background: var(--bg-dark-700);
+}
+
+.posrev-account-file-tools > summary {
+  min-height: 37px;
+  padding: 7px 10px;
+  font-size: 11px;
+}
+
+.posrev-account-file-tools > p {
+  margin: 0;
+  padding: 8px 10px 5px;
+  color: var(--text-muted);
+  font-size: 10.5px;
+  line-height: 1.45;
+}
+
+.posrev-account-file-tools > button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  min-height: 29px;
+  margin: 5px 10px 10px;
+  padding: 0 9px;
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-sm);
+  background: var(--bg-dark-800);
+  color: var(--text-primary);
+  font: inherit;
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.posrev-account-file-tools > button:hover:not(:disabled) {
+  border-color: var(--border-active);
+}
+
+.posrev-account-file-tools > button:disabled {
+  cursor: wait;
+  opacity: 0.55;
+}
+
+.position-account-credential-details {
+  overflow: hidden;
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-md);
+  background: var(--bg-dark-800);
+  box-shadow: var(--shadow-card);
+}
+
+.position-account-credential-details > summary,
+.position-account-audit > summary {
+  min-height: 48px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 9px 13px;
+  color: var(--text-primary);
+  font-size: 12px;
+  font-weight: 600;
+  list-style: none;
+  cursor: pointer;
+}
+
+.position-account-credential-details > summary::-webkit-details-marker,
+.position-account-audit > summary::-webkit-details-marker {
+  display: none;
+}
+
+.position-account-credential-details > summary::after,
+.position-account-audit > summary::after {
+  content: '⌄';
+  margin-left: auto;
+  color: var(--text-muted);
+  font-size: 15px;
+  transition: transform 0.15s ease;
+}
+
+.position-account-credential-details[open] > summary::after,
+.position-account-audit[open] > summary::after {
+  transform: rotate(180deg);
+}
+
+.position-account-credential-details > summary:hover,
+.position-account-audit > summary:hover,
+.position-account-credential-details > summary:focus-visible,
+.position-account-audit > summary:focus-visible {
+  color: var(--accent-blue);
+  outline: none;
+}
+
+.position-account-credential-details > summary > span:last-child {
+  color: var(--text-muted);
+  font-size: 10px;
+  font-weight: 500;
+}
+
+.position-account-credential-body {
+  display: flex;
+  flex-direction: column;
+  gap: 9px;
+  padding: 0 12px 13px;
+}
+
+.position-account-credential-body .posrev-credential-fields {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.position-account-credential-body .posrev-invite-disclosure {
+  margin: 0;
+  padding: 8px 9px;
+  border: 1px solid var(--accent-line);
+  border-radius: var(--radius-sm);
+  background: linear-gradient(135deg, var(--accent-soft), transparent 80%), var(--bg-dark-800);
+  color: var(--text-secondary);
+  font-size: 10.5px;
+  line-height: 1.45;
+}
+
+.position-account-credential-body > p {
+  color: var(--text-muted);
+  font-size: 11px;
+  line-height: 1.55;
+}
+
+.position-account-credential-body .posrev-credential-block {
+  border: 0;
+  border-radius: 0;
+  padding: 0;
+  background: transparent;
+  box-shadow: none;
+}
+
+.position-account-credential-body .posrev-credential-venue-header {
+  display: none;
+}
+
+.position-account-audit {
+  overflow: hidden;
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-md);
+  background: var(--bg-dark-800);
+}
+
+.position-account-audit-content {
+  padding: 0 12px 12px;
+}
+
+.position-account-drawer-content :focus-visible {
+  outline-color: var(--accent-line);
+}
+
+@keyframes positionAccountDrawerFadeIn {
+  from { background: transparent; }
+  to { background: var(--surface-overlay); }
+}
+
+@keyframes positionAccountDrawerSlideIn {
+  from { transform: translateX(16px); opacity: 0.92; }
+  to { transform: translateX(0); opacity: 1; }
+}
+
+@media (max-width: 520px) {
+  .position-account-drawer {
+    width: 100%;
+    border-left: 0;
+  }
+
+  .position-account-drawer-header {
+    padding-right: 14px;
+    padding-left: 14px;
+  }
+
+  .position-account-drawer-content {
+    padding: 12px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .position-account-drawer-overlay,
+  .position-account-drawer {
+    animation-duration: 0.01ms;
+  }
+}

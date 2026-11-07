@@ -10,7 +10,7 @@ import {
 import { ChartCanvas, findNearestCandle } from '@/chart/ChartCanvas';
 import type { TradePricePoint } from '@/chart/TradePricePrimitive';
 import { useChartExport } from '@/chart/useChartExport';
-import { mergeCandleWindow } from '@/chart/candle-retention';
+import { lowerBoundCandle, mergeCandleWindow } from '@/chart/candle-retention';
 import { formatPrice, pricePrecision } from '@/chart/chart-price';
 import {
   createCandleEdgeLoadGuard,
@@ -37,7 +37,7 @@ import { DrawingObjectTreePanel } from '@/features/drawings/DrawingObjectTreePan
 import { useDrawingWorkspace } from '@/features/review-workspace/useDrawingWorkspace';
 import { FILL_KIND_LABEL, formatNumber } from './position-review-format';
 import type { ReviewPosition } from './position-review-types';
-import { positionKey, venueLabel } from './position-review-types';
+import { positionKey, venueLabel, isCfdPosition } from './position-review-types';
 
 const EMPTY_CANDLES: Candlestick[] = [];
 
@@ -52,6 +52,7 @@ export function PositionReviewChart({
   showOtherPositions,
   onToggleOtherPositions,
   tagNames,
+  exnessMarketKey,
 }: {
   position: ReviewPosition;
   positions: ReviewPosition[];
@@ -63,6 +64,7 @@ export function PositionReviewChart({
   showOtherPositions: boolean;
   onToggleOtherPositions: () => void;
   tagNames: string[];
+  exnessMarketKey?: string | null;
 }) {
   const [hoveredCandle, setHoveredCandle] = useState<Candlestick | null>(null);
   const [loading, setLoading] = useState(true);
@@ -72,7 +74,7 @@ export function PositionReviewChart({
   const [error, setError] = useState<string | null>(null);
   const [warning, setWarning] = useState<string | null>(null);
   const [candleVenue, setCandleVenue] = useState(() =>
-    positionCandleCacheVenue(position.chartSymbol, position.venue)
+    positionCandleCacheVenue(position.chartSymbol, position.venue, exnessMarketKey)
   );
   const [reloadToken, setReloadToken] = useState(0);
   const chartRootRef = useRef<HTMLDivElement | null>(null);
@@ -84,7 +86,9 @@ export function PositionReviewChart({
   const entryTimeMs = position.entryTimeMs;
   const closedExitTimeMs = position.exitTimeMs;
   const symbol = position.chartSymbol;
-  const chartContextKey = `${symbol}:${timeframe}:${entryTimeMs}:${closedExitTimeMs ?? 'open'}:${positionKey(position)}`;
+  const displaySymbol = position.venue === 'exness' ? position.unifiedSymbol : symbol;
+  const candleScope = positionCandleCacheVenue(symbol, position.venue, exnessMarketKey);
+  const chartContextKey = `${symbol}:${timeframe}:${entryTimeMs}:${closedExitTimeMs ?? 'open'}:${positionKey(position)}:${candleScope}`;
   const [labelViewport, setLabelViewport] = useState({ contextKey: '', zoomed: false });
   const showOtherMarkerLabels =
     labelViewport.contextKey === chartContextKey && labelViewport.zoomed;
@@ -138,10 +142,10 @@ export function PositionReviewChart({
   );
 
   const { copyingChart, exportingCard, copyChart, exportCard } = useChartExport(chartRootRef, themeMode, {
-    symbol, timeframe: TIMEFRAME_DISPLAY_MAP[timeframe],
-    source: candleVenue === 'gate-cfd' ? 'Gate CFD' : candleVenue === 'bitget' ? 'Bitget' : candleVenue === 'gate' ? 'Gate' : 'Bybit',
+    symbol: displaySymbol, timeframe: TIMEFRAME_DISPLAY_MAP[timeframe],
+    source: candleVenueLabel(candleVenue).replace('K 线来源 ', ''),
   }, {
-    title: `${venueLabel(position.venue)} ${symbol} 仓位复盘`,
+    title: `${venueLabel(position.venue)} ${displaySymbol} 仓位复盘`,
     details: [position.side === 'long' ? '多' : '空', `开仓 ${formatChartTime(entryTimeMs, timeframe)}`,
       closedExitTimeMs ? `平仓 ${formatChartTime(closedExitTimeMs, timeframe)}` : '持仓中'],
     note: position.note, tags: tagNames,
@@ -165,7 +169,7 @@ export function PositionReviewChart({
     const exitForFetch = closedExitTimeMs ?? Date.now();
     // The API owns cache lookup and returns cached windows without a network request.
     setCandles(EMPTY_CANDLES);
-    setCandleVenue(positionCandleCacheVenue(symbol, position.venue));
+    setCandleVenue(candleScope);
     setLoadedContextKey('');
     setLoading(true);
 
@@ -175,16 +179,25 @@ export function PositionReviewChart({
       entryTimeMs,
       exitForFetch,
       controller.signal,
-      position.venue
+      position.venue,
+      exnessMarketKey
     )
       .then((batch) => {
         if (controller.signal.aborted || contextKeyRef.current !== chartContextKey) {
           return;
         }
-        setCandles(batch.candles);
+        const entryIndex = lowerBoundCandle(batch.candles, entryTimeMs + 1) - 1;
+        const entryCandle = batch.candles[entryIndex];
+        const entryCovered = entryCandle != null
+          && entryTimeMs < entryCandle.timestampMs + timeframeMs(timeframe);
+        const missingTradeWindow = position.venue === 'exness' && !entryCovered && Boolean(batch.warning);
+        // An old cached padding window must not masquerade as this trade's chart.
+        setCandles(missingTradeWindow ? EMPTY_CANDLES : batch.candles);
         setCandleVenue(batch.candleVenue);
         setWarning(batch.warning);
-        setError(!batch.candles.length ? '未返回该时间范围的 K 线' : null);
+        setError(missingTradeWindow ? `尚未取得这笔交易开仓时段的 K 线。${batch.warning}`
+          : !batch.candles.length ? '未返回该时间范围的 K 线' : null);
+        if (missingTradeWindow) failedEdgeRef.current = 'main';
         setLoadedContextKey(chartContextKey);
       })
       .catch((cause) => {
@@ -212,6 +225,8 @@ export function PositionReviewChart({
     };
   }, [
     chartContextKey,
+    candleScope,
+    exnessMarketKey,
     closedExitTimeMs,
     entryTimeMs,
     position.venue,
@@ -238,7 +253,8 @@ export function PositionReviewChart({
       earliestTimestamp,
       500,
       controller.signal,
-      position.venue
+      position.venue,
+      exnessMarketKey
     )
       .then((batch) => {
         if (!controller.signal.aborted && contextKeyRef.current === requestContextKey) {
@@ -266,7 +282,7 @@ export function PositionReviewChart({
           setIsLoadingEarlier(false);
         }
       });
-  }, [candles, isLoadingEarlier, loading, position.venue, symbol, timeframe]);
+  }, [candles, exnessMarketKey, isLoadingEarlier, loading, position.venue, symbol, timeframe]);
 
   const loadLater = useCallback(() => {
     if (loading || isLoadingLater || candles.length === 0 || laterRequestRef.current) {
@@ -286,7 +302,8 @@ export function PositionReviewChart({
       latestTimestamp,
       500,
       controller.signal,
-      position.venue
+      position.venue,
+      exnessMarketKey
     )
       .then((batch) => {
         if (!controller.signal.aborted && contextKeyRef.current === requestContextKey) {
@@ -315,7 +332,7 @@ export function PositionReviewChart({
           setIsLoadingLater(false);
         }
       });
-  }, [candles, isLoadingLater, loading, position.venue, symbol, timeframe]);
+  }, [candles, exnessMarketKey, isLoadingLater, loading, position.venue, symbol, timeframe]);
 
   const retryLoad = useCallback(() => {
     const kind = failedEdgeRef.current;
@@ -487,7 +504,8 @@ export function PositionReviewChart({
         </button>
       </div>
       <ChartCanvas
-        key={position.venue === 'gate-cfd' ? 'cfd' : 'perpetual'}
+        indicatorScope="position"
+        key={isCfdPosition(position) ? 'cfd' : 'perpetual'}
         candles={displayedCandles}
         symbol={symbol}
         interval={timeframe}
@@ -521,7 +539,7 @@ export function PositionReviewChart({
         onDeleteDrawing={deleteDrawingById}
         onToggleLockDrawing={toggleLockDrawing}
         onDrawingComplete={handleDrawingComplete}
-        showVolume={position.venue !== 'gate-cfd'}
+        showVolume={!isCfdPosition(position)}
         sessionBands={sessionBands}
         showWeekendBands={showWeekendBands}
       />
@@ -532,7 +550,7 @@ export function PositionReviewChart({
           <span>高 {formatPrice(hoveredCandle.high, displayedPricePrecision)}</span>
           <span>低 {formatPrice(hoveredCandle.low, displayedPricePrecision)}</span>
           <span>收 {formatPrice(hoveredCandle.close, displayedPricePrecision)}</span>
-          {position.venue !== 'gate-cfd' && <span>量 {formatNumber(hoveredCandle.volume)}</span>}
+          {!isCfdPosition(position) && <span>量 {formatNumber(hoveredCandle.volume)}</span>}
         </div>
       )}
       {((chartLoading && displayedCandles.length === 0) || chartError) && (
@@ -540,7 +558,7 @@ export function PositionReviewChart({
           {chartLoading && displayedCandles.length === 0 && (
             <RefreshCw size={17} className="spin" />
           )}
-          <span>{chartError || `正在加载 ${symbol} K 线...`}</span>
+          <span>{chartError || `正在加载 ${displaySymbol} K 线...`}</span>
           {chartError && (
             <button type="button" onClick={retryLoad}>
               重试
@@ -549,7 +567,14 @@ export function PositionReviewChart({
         </div>
       )}
       {chartWarning && !chartError && (
-        <div className="bitlang-chart-status warning">{chartWarning}</div>
+        <div className="bitlang-chart-status warning">
+          <span>{chartWarning}</span>
+          {position.venue === 'exness' && candleVenue.startsWith('exness:') && (
+            <button type="button" onClick={retryLoad}>
+              重试
+            </button>
+          )}
+        </div>
       )}
     </div>
   );
@@ -568,10 +593,10 @@ function buildPositionEvents(positions: ReviewPosition[]): PositionMarkerEvent[]
   const events: PositionMarkerEvent[] = [];
   for (const position of positions) {
     const key = positionKey(position);
-    const prefix = `${venueLabel(position.venue)} ${position.side === 'long' ? '多' : '空'}`;
+    const direction = position.side === 'long' ? '多' : '空';
     const push = (timeMs: number, price: number | null, label: string, side: 'buy' | 'sell') => {
       if (Number.isFinite(timeMs)) events.push({
-        timeMs, price, label: `${prefix} ${label}`, shortLabel: label, side, key,
+        timeMs, price, label: `${label}${direction}`, shortLabel: label, side, key,
       });
     };
     let hasOpen = false;
@@ -645,9 +670,9 @@ function buildPositionMarkers(
       position: isBuy ? 'belowBar' : 'aboveBar',
       color: isBuy ? '#089981' : '#f23645',
       shape: isBuy ? 'arrowUp' : 'arrowDown',
-      size: selected ? 2 : 1,
+      size: selected ? 1.5 : 1,
       text: selected
-        ? `【当前】${event.label} ${formatPrice(event.price, displayedPricePrecision)}`
+        ? `${event.label} ${formatPrice(event.price, displayedPricePrecision)}`
         : showOtherMarkerLabels ? event.shortLabel : '',
     });
   }

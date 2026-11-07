@@ -9,6 +9,7 @@ web/dist/
 web/test-results/
 web/playwright-report/
 .run/
+data/exness/*.csv
 config.local.json
 video-catalog.csv
 video-source.json

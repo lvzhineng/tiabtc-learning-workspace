@@ -1,0 +1,19 @@
+.review-archives { position: relative; }
+.review-archives summary { display: flex; align-items: center; gap: 5px; list-style: none; }
+.review-archives summary::-webkit-details-marker { display: none; }
+.review-archives-panel {
+  position: absolute; right: 0; top: calc(100% + 8px); z-index: 30;
+  width: min(440px, calc(100vw - 24px)); padding: 14px;
+  display: flex; flex-direction: column; gap: 10px; white-space: normal;
+  background: var(--bg-dark-800); color: var(--text-primary);
+  border: 1px solid var(--border-color); border-radius: var(--radius-sm);
+  box-shadow: var(--shadow-main); font-size: 12px;
+}
+.review-archives-panel > strong { overflow-wrap: anywhere; }
+.review-archives-panel > span, .review-archives-panel small { color: var(--text-muted); }
+.review-archives-actions { display: flex; gap: 8px; }
+.review-archives-actions input { min-width: 0; flex: 1; }
+.review-archives-panel label { display: flex; flex-direction: column; gap: 6px; }
+.review-archives-panel select { width: 100%; min-width: 0; padding: 6px; background: var(--bg-dark-900); color: var(--text-primary); border: 1px solid var(--border-color); }
+.review-archives-panel .review-archives-error { color: var(--accent-red); }
+.review-session-restoring { height: 100%; display: flex; align-items: center; justify-content: center; gap: 12px; color: var(--text-secondary); }

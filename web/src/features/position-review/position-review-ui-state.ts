@@ -6,7 +6,7 @@ import {
   storedInteger,
   storedString,
 } from '@/ui/persistence/local-ui-state';
-import type { ReviewVenue } from './position-review-types';
+import type { PositionVenue } from './position-review-types';
 
 export const POSITION_REVIEW_UI_STORAGE_KEY = 'tiabtc-position-review-ui-v1';
 
@@ -15,7 +15,7 @@ export type StatusFilter = 'all' | 'open' | 'closed';
 export type SideFilter = 'all' | 'long' | 'short';
 export type SortField = 'entryTimeMs' | 'netPnl';
 export type DateRangeFilter = 'all' | '1d' | '3d' | '7d' | '30d' | '90d';
-export type VenueFilter = 'all' | ReviewVenue;
+export type VenueFilter = 'all' | PositionVenue;
 
 export const DATE_RANGE_MS_MAP: Record<Exclude<DateRangeFilter, 'all'>, number> = {
   '1d': 1 * 24 * 60 * 60 * 1000,
@@ -69,6 +69,7 @@ export function loadPositionReviewUiState(): PositionReviewUiState {
       'bitget',
       'gate',
       'gate-cfd',
+      'exness',
     ]) as VenueFilter,
     side: storedString(stored.side, 'all', [
       'all',

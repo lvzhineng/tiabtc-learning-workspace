@@ -1240,3 +1240,48 @@
   color: #f23645;
 }
 .posrev-copy-chart.posrev-export-card { right: 130px; }
+
+.posrev-import-status {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 6px 10px;
+  padding: 10px 14px;
+  border-bottom: 1px solid var(--border-color);
+  font-size: 12px;
+}
+
+.posrev-import-status small { color: var(--text-muted); }
+.posrev-import-status small.loss { grid-column: 1 / -1; color: #f23645; }
+.posrev-import-status button {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 3px 7px;
+  border: 1px solid var(--border-color);
+  border-radius: 5px;
+  color: var(--text-primary);
+  background: var(--bg-secondary);
+  cursor: pointer;
+}
+.posrev-import-status button:disabled { opacity: 0.5; cursor: default; }
+
+.posrev-import-warning,
+.posrev-operation-warning {
+  padding: 7px 12px;
+  color: var(--accent-orange);
+  font-size: 11px;
+  line-height: 1.5;
+}
+
+.posrev-import-warning summary,
+.posrev-operation-warning summary {
+  cursor: pointer;
+}
+
+.posrev-import-warning p,
+.posrev-operation-warning p {
+  margin-top: 6px;
+  overflow-wrap: anywhere;
+  white-space: normal;
+}

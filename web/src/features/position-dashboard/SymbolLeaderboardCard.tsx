@@ -1,9 +1,10 @@
 import { useMemo } from 'react';
 import { positionPnl, type ReviewPosition } from '@/api/position-review-api';
 import { Layers } from 'lucide-react';
+import { positionStatisticsCurrency, type ReviewCurrency } from '@/features/position-review/position-review-types';
 
 interface Props {
-  currency?: 'USDT' | 'USD';
+  currency?: ReviewCurrency;
   positions: ReviewPosition[];
 }
 
@@ -13,14 +14,14 @@ interface SymbolStat {
   winCount: number;
   lossCount: number;
   winRate: number;
-  totalPnl: number;
+  pnlByCurrency: Record<string, number>;
 }
 
-export function SymbolLeaderboardCard({ positions, currency = 'USDT' }: Props) {
-  const { stats, maxAbsPnl } = useMemo(() => {
+export function SymbolLeaderboardCard({ positions }: Props) {
+  const { stats, maxCount } = useMemo(() => {
     const map = new Map<
       string,
-      { count: number; winCount: number; lossCount: number; totalPnl: number }
+      { count: number; winCount: number; lossCount: number; pnlByCurrency: Record<string, number> }
     >();
 
     for (const p of positions) {
@@ -29,23 +30,22 @@ export function SymbolLeaderboardCard({ positions, currency = 'USDT' }: Props) {
         count: 0,
         winCount: 0,
         lossCount: 0,
-        totalPnl: 0,
+        pnlByCurrency: {},
       };
       const pnl = positionPnl(p);
 
       current.count += 1;
       if (pnl > 0) current.winCount += 1;
       else if (pnl < 0) current.lossCount += 1;
-      current.totalPnl += pnl;
+      const unit = positionStatisticsCurrency(p);
+      current.pnlByCurrency[unit] = (current.pnlByCurrency[unit] || 0) + pnl;
       map.set(sym, current);
     }
 
     const list: SymbolStat[] = [];
-    let maxAbs = 1;
+    let max = 1;
     for (const [symbol, data] of map.entries()) {
-      if (Math.abs(data.totalPnl) > maxAbs) {
-        maxAbs = Math.abs(data.totalPnl);
-      }
+      max = Math.max(max, data.count);
       list.push({
         symbol,
         count: data.count,
@@ -55,14 +55,14 @@ export function SymbolLeaderboardCard({ positions, currency = 'USDT' }: Props) {
           data.winCount + data.lossCount > 0
             ? (data.winCount / (data.winCount + data.lossCount)) * 100
             : 0,
-        totalPnl: data.totalPnl,
+        pnlByCurrency: data.pnlByCurrency,
       });
     }
 
-    // Sort by totalPnl descending
+    // Put the most frequently traded symbols first; monetary amounts use separate currency units.
     return {
-      stats: list.sort((a, b) => b.totalPnl - a.totalPnl),
-      maxAbsPnl: maxAbs,
+      stats: list.sort((a, b) => b.count - a.count),
+      maxCount: max,
     };
   }, [positions]);
 
@@ -85,8 +85,8 @@ export function SymbolLeaderboardCard({ positions, currency = 'USDT' }: Props) {
   return (
     <div className="posdash-symbol-list">
       {stats.map((item, index) => {
-        const isProfit = item.totalPnl >= 0;
-        const barWidth = Math.min(100, (Math.abs(item.totalPnl) / maxAbsPnl) * 100);
+        const isProfit = item.winRate >= 50;
+        const barWidth = Math.min(100, (item.count / maxCount) * 100);
 
         return (
           <div key={item.symbol} className="posdash-symbol-card">
@@ -106,14 +106,11 @@ export function SymbolLeaderboardCard({ positions, currency = 'USDT' }: Props) {
               </div>
 
               <div className="posdash-symbol-right">
-                <span
-                  className={`posdash-symbol-pnl-val ${
-                    isProfit ? 'posrev-profit' : 'posrev-loss'
-                  }`}
-                >
-                  {isProfit ? '+' : ''}
-                  {item.totalPnl.toFixed(2)} {currency}
-                </span>
+                {Object.entries(item.pnlByCurrency).map(([unit, amount]) => (
+                  <span key={unit} className={`posdash-symbol-pnl-val ${amount >= 0 ? 'posrev-profit' : 'posrev-loss'}`}>
+                    {amount >= 0 ? '+' : ''}{amount.toFixed(2)} {unit === '未标注币种' ? '文件原值（未标注币种）' : unit}
+                  </span>
+                ))}
               </div>
             </div>
           </div>

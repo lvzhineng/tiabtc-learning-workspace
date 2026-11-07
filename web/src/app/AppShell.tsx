@@ -15,7 +15,7 @@ import {
 } from 'lucide-react';
 import { ShortcutHelpModal } from '@/ui/feedback/ShortcutHelpModal';
 import { SettingsModal } from '@/app/SettingsModal';
-import { ChartWorkspace } from '@/features/review-workspace/ChartWorkspace';
+import { ReviewSessionWorkspace as ChartWorkspace } from '@/features/review-workspace/ReviewSessionWorkspace';
 import { LearningWorkspace } from '@/features/learning/LearningWorkspace';
 import { BitlangTradeWorkspace } from '@/features/bitlang/BitlangTradeWorkspace';
 import { PositionReviewWorkspace } from '@/features/position-review/PositionReviewWorkspace';
@@ -97,6 +97,12 @@ export function AppShell() {
     useState<VideoReviewContext | null>(initialVideoReviewContext);
   const [showShortcuts, setShowShortcuts] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
+  const [showHeaderIntro, setShowHeaderIntro] = useState(true);
+
+  useEffect(() => {
+    const timer = window.setTimeout(() => setShowHeaderIntro(false), 1500);
+    return () => window.clearTimeout(timer);
+  }, []);
 
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
@@ -175,13 +181,20 @@ export function AppShell() {
 
   return (
     <div className="app-shell">
+      <div className={`app-header-dock${showHeaderIntro ? ' is-intro' : ''}`}>
+        <button
+          type="button"
+          className="app-header-reveal"
+          aria-label="显示顶部导航"
+          title="移到顶部显示导航"
+        />
       <header className="app-header">
         <div className="app-title">
           <span className="app-title-mark" aria-hidden="true">
             <Activity size={15} strokeWidth={2.4} />
           </span>
           <span className="app-title-text">
-            TiaBTC<em>Workspace</em>
+            观烛复盘
           </span>
         </div>
 
@@ -209,7 +222,7 @@ export function AppShell() {
             className={`app-nav-btn ${activeTab === 'cfd' ? 'active' : ''}`}
             onClick={() => navigateToTab('cfd')}
             aria-label="全球市场"
-            title="全球市场 · 黄金、纳斯达克100、日经225"
+            title="全球市场 · 黄金、白银、纳斯达克100、标普500、日经225"
           >
             <Globe2 size={14} />
             <span>全球市场</span>
@@ -296,6 +309,7 @@ export function AppShell() {
           </div>
         </div>
       </header>
+      </div>
 
       <main className="app-body">
         {activeTab === 'learning' ? (

@@ -41,6 +41,10 @@ export async function fetchPositionReviewState(): Promise<PositionReviewState> {
   return requestJson<PositionReviewState>('/api/position-review');
 }
 
+export function fetchExnessImportStatus(force = false): Promise<NonNullable<PositionReviewState['exnessImport']>> {
+  return requestJson(`/api/position-review/exness-import${force ? '?force=1' : ''}`);
+}
+
 export type VenueCacheAuditIssue = {
   venue: string;
   symbol: string;
@@ -232,7 +236,8 @@ async function requestPositionCandles(
   params: URLSearchParams,
   symbol: string,
   interval: ReviewTimeframe,
-  signal?: AbortSignal
+  signal?: AbortSignal,
+  exnessMarketKey?: string | null
 ): Promise<PositionCandleBatch> {
   const data = await requestJson<RawCandleResponse>(
     `/api/position-review/candles?${params}`,
@@ -241,6 +246,10 @@ async function requestPositionCandles(
   const truncated = Boolean(data.truncated);
   const rawWarning = (data.warning || '').trim() || null;
   const candleVenue = data.candleVenue || 'bybit';
+  const isReference = candleVenue === 'gate-cfd:exness-reference';
+  if (params.get('venue') === 'exness' && !isReference && (
+    !candleVenue.startsWith('exness:') || (exnessMarketKey && candleVenue !== exnessMarketKey)
+  )) throw new Error('Exness行情连接已变更，请重新加载图表');
   const candles = parseCandleRows(
     data.volumeAvailable === false ? data.candles.map((row) => ({ ...row, volume: 0 })) : data.candles,
     symbol, interval
@@ -256,7 +265,7 @@ async function requestPositionCandles(
   }
   return {
     candles,
-    warning: rawWarning || (truncated ? TRUNCATED_WINDOW_HINT : null),
+    warning: [rawWarning, truncated ? TRUNCATED_WINDOW_HINT : null].filter(Boolean).join('；') || null,
     candleVenue,
     truncated,
   };
@@ -268,10 +277,11 @@ export async function fetchPositionReviewCandles(
   entryTimeMs: number,
   exitTimeMs: number,
   signal?: AbortSignal,
-  venue?: string
+  venue?: string,
+  exnessMarketKey?: string | null
 ): Promise<PositionCandleBatch> {
   const window = boundedTradeWindowMs(entryTimeMs, exitTimeMs, interval);
-  const cacheVenue = positionCandleCacheVenue(symbol, venue);
+  const cacheVenue = positionCandleCacheVenue(symbol, venue, exnessMarketKey);
   const cached = sliceCachedCandleWindow(
     'position',
     symbol,
@@ -296,7 +306,7 @@ export async function fetchPositionReviewCandles(
     exit: String(exitTimeMs),
   });
   if (venue) params.set('venue', venue);
-  return requestPositionCandles(params, symbol, interval, signal);
+  return requestPositionCandles(params, symbol, interval, signal, exnessMarketKey);
 }
 
 export async function fetchPositionEarlierCandles(
@@ -305,12 +315,13 @@ export async function fetchPositionEarlierCandles(
   beforeMs: number,
   limit = 500,
   signal?: AbortSignal,
-  venue?: string
+  venue?: string,
+  exnessMarketKey?: string | null
 ): Promise<PositionCandleBatch> {
-  if (venue === 'gate-cfd') {
+  if (venue === 'gate-cfd' || venue === 'exness') {
     return requestPositionCandles(new URLSearchParams({
       symbol, interval, venue, before: String(beforeMs), limit: String(limit),
-    }), symbol, interval, signal);
+    }), symbol, interval, signal, exnessMarketKey);
   }
   const intervalMs = TIMEFRAME_SECONDS_MAP[interval] * 1000;
   const exitTimeMs = beforeMs - intervalMs;
@@ -334,12 +345,13 @@ export async function fetchPositionLaterCandles(
   afterMs: number,
   limit = 500,
   signal?: AbortSignal,
-  venue?: string
+  venue?: string,
+  exnessMarketKey?: string | null
 ): Promise<PositionCandleBatch> {
-  if (venue === 'gate-cfd') {
+  if (venue === 'gate-cfd' || venue === 'exness') {
     return requestPositionCandles(new URLSearchParams({
       symbol, interval, venue, after: String(afterMs), limit: String(limit),
-    }), symbol, interval, signal);
+    }), symbol, interval, signal, exnessMarketKey);
   }
   const intervalMs = TIMEFRAME_SECONDS_MAP[interval] * 1000;
   const entryTimeMs = afterMs + intervalMs;

@@ -1,0 +1,140 @@
+.exness-connection-panel {
+  display: flex;
+  min-height: 0;
+  overflow-y: auto;
+  flex-direction: column;
+  gap: 9px;
+  padding: 11px;
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-md);
+  background: var(--bg-dark-700);
+}
+
+.exness-connection-header,
+.exness-connection-header > div,
+.exness-connection-actions {
+  display: flex;
+  align-items: center;
+}
+
+.exness-connection-header {
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.exness-connection-header > div {
+  flex-wrap: wrap;
+  gap: 7px;
+}
+
+.exness-connection-header strong {
+  color: var(--text-primary);
+  font-size: 12px;
+}
+
+.exness-connection-status {
+  color: var(--text-muted);
+  font-size: 11px;
+}
+
+.exness-connection-status.is-connected {
+  color: var(--accent-green);
+}
+
+.exness-connection-close {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text-secondary);
+  cursor: pointer;
+}
+
+.exness-connection-note {
+  margin: 0;
+  color: var(--text-muted);
+  font-size: 11px;
+  line-height: 1.45;
+}
+
+.exness-connection-form {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.exness-connection-field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  color: var(--text-secondary);
+  font-size: 11px;
+}
+
+.exness-connection-field input {
+  box-sizing: border-box;
+  width: 100%;
+  min-width: 0;
+  height: 31px;
+  padding: 0 8px;
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-sm);
+  background: var(--bg-dark-800);
+  color: var(--text-primary);
+  font: inherit;
+  font-size: 12px;
+}
+
+.exness-connection-field input:focus,
+.exness-connection-close:focus-visible,
+.exness-connection-actions button:focus-visible {
+  outline: none;
+  border-color: var(--accent-blue);
+  box-shadow: var(--focus-ring);
+}
+
+.exness-connection-actions {
+  justify-content: flex-end;
+  gap: 7px;
+  padding-top: 2px;
+}
+
+.exness-connection-actions button {
+  min-height: 30px;
+  padding: 0 10px;
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-sm);
+  background: var(--bg-dark-800);
+  color: var(--text-primary);
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.exness-connection-actions button.primary {
+  border-color: var(--accent-blue);
+  background: var(--accent-blue);
+  color: #fff;
+  font-weight: 600;
+}
+
+.exness-connection-actions button:hover:not(:disabled),
+.exness-connection-close:hover:not(:disabled) {
+  border-color: var(--border-active);
+}
+
+.exness-connection-actions button.primary:hover:not(:disabled) {
+  border-color: var(--accent-blue-hover);
+  background: var(--accent-blue-hover);
+}
+
+.exness-connection-panel button:disabled,
+.exness-connection-field input:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}

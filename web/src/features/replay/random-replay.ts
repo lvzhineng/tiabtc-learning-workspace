@@ -5,14 +5,11 @@ import type { ReviewTimeframe } from '@/domain/timeframe';
 import { timeframeMs } from '@/chart/chart-time';
 
 const DAY_MS = 86_400_000;
-// Lower bound accepted by the existing earlier-candle API, not a lookback
-// preference. Scan until the source returns no earlier history.
-const EARLIER_API_MIN_TIME_MS = 1_000_000_000_000;
+const EARLIEST_REPLAY_MS = 1_500_000_000_000;
+const MAX_DAY_ATTEMPTS = 10;
 
-// Discover actual trading days first, then select a bar in that day. This
-// avoids sampling weekends or dates before a contract was listed, without
-// downloading years of minute bars. Daily discovery has no lookback or page
-// count cap; each request respects the API's 100–1000 bar limit.
+// Sample dates locally, then inspect only that day's closed bars. A bounded
+// retry handles weekends and missing source history without discovering it all.
 export async function pickRandomReplayTime(
   market: 'perpetual' | 'cfd',
   symbol: string,
@@ -23,12 +20,10 @@ export async function pickRandomReplayTime(
   const config = await marketApi.fetchChartConfig();
   signal.throwIfAborted();
   if (config.offlineMode) {
-    throw new Error('当前为仅本地模式，无法确认该品种的全部历史，请恢复在线模式后随机复盘');
+    throw new Error('当前为仅本地模式，请恢复在线模式后随机复盘');
   }
   const api = market === 'cfd' ? cfdApi : marketApi;
   const now = Date.now();
-  // Closed daily windows use a stable key so another random draw can reuse
-  // the existing request cache rather than download/parse the same history.
   const dailyBefore = Math.floor(now / DAY_MS) * DAY_MS;
   const stepMs = timeframeMs(timeframe);
 
@@ -40,9 +35,7 @@ export async function pickRandomReplayTime(
       const count = Math.min(1000, Math.max(100, Math.ceil((before - from) / intervalMs)));
       const batch = await api.fetchEarlierCandles(symbol, interval, before, count, signal);
       signal.throwIfAborted();
-      // A failed or incomplete scan must not silently turn "all history" into
-      // a random draw from just the latest cached pages.
-      if (batch.warning) throw new Error(`无法确认完整历史行情，请重试：${batch.warning}`);
+      if (batch.warning) throw new Error(`无法读取所抽日期的行情，请重试：${batch.warning}`);
       const past = batch.candles.filter((bar) => bar.timestampMs < before);
       if (past.length === 0) break;
       for (const bar of past) {
@@ -53,20 +46,17 @@ export async function pickRandomReplayTime(
     return [...rows.values()].sort((a, b) => a.timestampMs - b.timestampMs);
   };
 
-  const daily = await readRange('D', EARLIER_API_MIN_TIME_MS, dailyBefore);
-  const fromMs = daily[0]?.timestampMs ?? dailyBefore;
-  const candidates = daily.filter((bar) => bar.timestampMs + DAY_MS <= now);
-  // An incomplete lower-timeframe history may differ from daily history.
-  // Sample without replacement until a real bar is found, including history
-  // beyond any former 90-day / one-year / three-year window.
-  while (candidates.length > 0) {
+  const candidates: number[] = [];
+  for (let day = Math.ceil(EARLIEST_REPLAY_MS / DAY_MS) * DAY_MS; day < dailyBefore; day += DAY_MS) {
+    candidates.push(day);
+  }
+  let attempts = 0;
+  while (candidates.length > 0 && attempts++ < MAX_DAY_ATTEMPTS) {
+    signal.throwIfAborted();
     const index = Math.floor(Math.random() * candidates.length);
     const [day] = candidates.splice(index, 1);
-    if (timeframe === 'D') {
-      return { cursorTimeMs: day.timestampMs + stepMs };
-    }
-    const start = Math.max(fromMs, day.timestampMs - (stepMs > DAY_MS ? stepMs : 0));
-    const bars = await readRange(timeframe, start, day.timestampMs + DAY_MS);
+    const start = Math.max(EARLIEST_REPLAY_MS, day - (stepMs > DAY_MS ? stepMs : 0));
+    const bars = await readRange(timeframe, start, day + DAY_MS);
     const eligible = bars.filter((bar) =>
       bar.timestampMs >= start && bar.timestampMs + stepMs <= now
     );
@@ -77,5 +67,5 @@ export async function pickRandomReplayTime(
       return { cursorTimeMs: bar.timestampMs + stepMs };
     }
   }
-  throw new Error('该品种当前周期没有可用于随机复盘的历史 K 线，请切换周期后重试');
+  throw new Error('已尝试10个日期，暂未取得可用行情；请重试或切换品种、周期');
 }

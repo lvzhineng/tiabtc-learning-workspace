@@ -1,11 +1,12 @@
 import { Fragment, useMemo, useState, type CSSProperties } from 'react';
 import type { ReviewPosition } from '@/api/position-review-api';
-import { positionPnl } from '@/features/position-review/position-review-types';
+import { positionStatisticsCurrency, positionPnl } from '@/features/position-review/position-review-types';
+import type { ReviewCurrency } from '@/features/position-review/position-review-types';
 import { formatNumber } from '@/features/position-review/position-review-format';
 import '@/styles/trading-calendar-heatmap.css';
 
 interface TradingCalendarHeatmapProps {
-  currency?: 'USDT' | 'USD';
+  currency?: ReviewCurrency;
   positions: ReviewPosition[];
   selectedDate: string | null;
   onSelectDate: (date: string | null) => void;
@@ -15,7 +16,7 @@ interface TradingCalendarHeatmapProps {
 interface DayStats {
   dateStr: string;
   dayOfWeek: number; // 0: Sun, 1: Mon, ...
-  pnl: number;
+  pnlByCurrency: Record<string, number>;
   count: number;
   winCount: number;
   lossCount: number;
@@ -41,7 +42,6 @@ function formatShanghaiDate(timestampMs: number): string {
 }
 
 export function TradingCalendarHeatmap({
-  currency = 'USDT',
   positions,
   selectedDate,
   onSelectDate,
@@ -51,15 +51,17 @@ export function TradingCalendarHeatmap({
 
   // Group positions by Shanghai YYYY-MM-DD
   const dailyMap = useMemo(() => {
-    const map = new Map<string, { pnl: number; count: number; winCount: number; lossCount: number }>();
+    const map = new Map<string, { pnlByCurrency: Record<string, number>; count: number; winCount: number; lossCount: number }>();
     for (const p of positions) {
+      if (p.status !== 'closed') continue;
       const timeMs = p.exitTimeMs ?? p.entryTimeMs;
       if (!timeMs || Number.isNaN(timeMs)) continue;
       const dateStr = formatShanghaiDate(timeMs);
       if (!dateStr) continue;
       const pnl = positionPnl(p);
-      const current = map.get(dateStr) || { pnl: 0, count: 0, winCount: 0, lossCount: 0 };
-      current.pnl += pnl;
+      const current = map.get(dateStr) || { pnlByCurrency: {}, count: 0, winCount: 0, lossCount: 0 };
+      const currency = positionStatisticsCurrency(p);
+      current.pnlByCurrency[currency] = (current.pnlByCurrency[currency] || 0) + pnl;
       current.count += 1;
       if (pnl > 0) current.winCount += 1;
       else if (pnl < 0) current.lossCount += 1;
@@ -105,7 +107,7 @@ export function TradingCalendarHeatmap({
       currentWeek.push({
         dateStr,
         dayOfWeek,
-        pnl: stats?.pnl || 0,
+        pnlByCurrency: stats?.pnlByCurrency || {},
         count: stats?.count || 0,
         winCount: stats?.winCount || 0,
         lossCount: stats?.lossCount || 0,
@@ -122,26 +124,23 @@ export function TradingCalendarHeatmap({
   }, [anchorEndMs, dailyMap, positions]);
 
   const summary = useMemo(() => {
-    let maxAbsPnl = 0;
     let tradingDays = 0;
     let profitDays = 0;
     let lossDays = 0;
-    let totalPnl = 0;
     let best: DayStats | null = null;
     let worst: DayStats | null = null;
     for (const week of weeks) {
       for (const day of week) {
         if (day.count === 0) continue;
         tradingDays += 1;
-        totalPnl += day.pnl;
-        if (day.pnl > 0) profitDays += 1;
-        else if (day.pnl < 0) lossDays += 1;
-        maxAbsPnl = Math.max(maxAbsPnl, Math.abs(day.pnl));
-        if (!best || day.pnl > best.pnl) best = day;
-        if (!worst || day.pnl < worst.pnl) worst = day;
+        const netWins = day.winCount - day.lossCount;
+        if (netWins > 0) profitDays += 1;
+        else if (netWins < 0) lossDays += 1;
+        if (!best || day.winCount > best.winCount) best = day;
+        if (!worst || day.winCount < worst.winCount) worst = day;
       }
     }
-    return { maxAbsPnl, tradingDays, profitDays, lossDays, totalPnl, best, worst };
+    return { tradingDays, profitDays, lossDays, best, worst };
   }, [weeks]);
 
   const monthLabels = useMemo(
@@ -156,11 +155,15 @@ export function TradingCalendarHeatmap({
 
   const cellClassFor = (day: DayStats): string => {
     if (day.count === 0) return 'cal-cell-empty';
-    if (day.pnl === 0 || summary.maxAbsPnl === 0) return 'cal-cell-even';
-    const ratio = Math.abs(day.pnl) / summary.maxAbsPnl;
+    if (day.winCount === day.lossCount) return 'cal-cell-even';
+    const ratio = Math.abs(day.winCount - day.lossCount) / Math.max(1, day.count);
     const level = ratio > 0.66 ? 'high' : ratio > 0.33 ? 'mid' : 'low';
-    return `cal-cell-${day.pnl > 0 ? 'profit' : 'loss'}-${level}`;
+    return `cal-cell-${day.winCount > day.lossCount ? 'profit' : 'loss'}-${level}`;
   };
+
+  const dayPnl = (day: DayStats) => Object.entries(day.pnlByCurrency)
+    .sort(([left], [right]) => left.localeCompare(right))
+    .map(([unit, value]) => `${value >= 0 ? '+' : ''}${formatNumber(value)} ${unit === '未标注币种' ? '文件原值（未标注币种）' : unit}`);
 
   const focusDay = hoveredDay ?? (selectedDate ? weeks.flat().find((day) => day.dateStr === selectedDate) ?? null : null);
 
@@ -190,7 +193,7 @@ export function TradingCalendarHeatmap({
                   onMouseLeave={() => setHoveredDay(null)}
                   aria-label={
                     day.count > 0
-                      ? `${day.dateStr}: ${day.pnl >= 0 ? '+' : ''}${formatNumber(day.pnl)} ${currency} (${day.count} 笔)`
+                      ? `${day.dateStr}: ${dayPnl(day).join(' / ')} (${day.count} 笔，${day.winCount}胜 ${day.lossCount}负)`
                       : `${day.dateStr}: 无交易`
                   }
                 />
@@ -206,10 +209,7 @@ export function TradingCalendarHeatmap({
             focusDay.count > 0 ? (
               <>
                 <strong>{focusDay.dateStr}</strong>
-                <strong className={focusDay.pnl >= 0 ? 'posrev-profit' : 'posrev-loss'}>
-                  {focusDay.pnl >= 0 ? '+' : ''}
-                  {formatNumber(focusDay.pnl)} {currency}
-                </strong>
+                <span className="cal-currency-breakdown">{dayPnl(focusDay).join(' · ') || '—'}</span>
                 <span>
                   {focusDay.count} 笔 · {focusDay.winCount} 胜 {focusDay.lossCount} 负
                 </span>
@@ -218,7 +218,7 @@ export function TradingCalendarHeatmap({
               <span>{focusDay.dateStr} 无平仓交易</span>
             )
           ) : (
-            <span>悬停查看当日盈亏，点击格子筛选下方日记</span>
+          <span>颜色表示当日胜负笔数；金额按币种分别展示，点击筛选日记</span>
           )}
         </div>
         <div className="cal-heatmap-legend">
@@ -248,15 +248,15 @@ export function TradingCalendarHeatmap({
           </strong>
         </div>
         <div>
-          <span>最佳单日</span>
-          <strong className={summary.best && summary.best.pnl > 0 ? 'posrev-profit' : undefined}>
-            {summary.best ? `${summary.best.pnl >= 0 ? '+' : ''}${formatNumber(summary.best.pnl)}` : '—'}
+          <span>最高胜率日</span>
+          <strong className={summary.best ? 'posrev-profit' : undefined}>
+            {summary.best ? `${Math.round(summary.best.winCount / summary.best.count * 100)}%` : '—'}
           </strong>
         </div>
         <div>
-          <span>最差单日</span>
-          <strong className={summary.worst && summary.worst.pnl < 0 ? 'posrev-loss' : undefined}>
-            {summary.worst ? `${summary.worst.pnl >= 0 ? '+' : ''}${formatNumber(summary.worst.pnl)}` : '—'}
+          <span>最低胜率日</span>
+          <strong className={summary.worst ? 'posrev-loss' : undefined}>
+            {summary.worst ? `${Math.round(summary.worst.winCount / summary.worst.count * 100)}%` : '—'}
           </strong>
         </div>
       </div>

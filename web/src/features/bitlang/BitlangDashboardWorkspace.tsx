@@ -12,6 +12,7 @@ import {
   storedString,
   writeLocalUiState,
 } from '@/ui/persistence/local-ui-state';
+import { buildSymbolCountOptions } from '@/ui/symbol-count-options';
 import { BitlangJournalStream } from './BitlangJournalStream';
 import { bybitSymbol } from './bitlang-format';
 import type { AnnotatedBitlangTrade } from './bitlang-types';
@@ -126,24 +127,34 @@ export function BitlangDashboardWorkspace({
     });
   }, [dateRange, sideFilter, symbolFilter, tagFilter]);
 
-  const filteredTrades = useMemo(() => {
+  const baseFilteredTrades = useMemo(() => {
     const cutoffMs =
       dateRange === 'all' ? 0 : snapshotEndMs - DATE_RANGE_MS_MAP[dateRange];
     const targetTagId = tagFilter === 'all' ? null : Number(tagFilter);
     return trades.filter((trade) => {
       if (cutoffMs > 0 && Date.parse(trade.entryTime) < cutoffMs) return false;
-      if (
-        symbolFilter !== 'all' &&
-        bybitSymbol(trade.instrument) !== symbolFilter
-      ) {
-        return false;
-      }
       if (sideFilter === 'long' && trade.direction !== '多') return false;
       if (sideFilter === 'short' && trade.direction !== '空') return false;
       if (targetTagId != null && !trade.tagIds.includes(targetTagId)) return false;
       return true;
     });
-  }, [dateRange, sideFilter, snapshotEndMs, symbolFilter, tagFilter, trades]);
+  }, [dateRange, sideFilter, snapshotEndMs, tagFilter, trades]);
+
+  const symbolOptions = useMemo(
+    () => buildSymbolCountOptions(
+      baseFilteredTrades,
+      (trade) => bybitSymbol(trade.instrument),
+      symbols
+    ),
+    [baseFilteredTrades, symbols]
+  );
+
+  const filteredTrades = useMemo(
+    () => baseFilteredTrades.filter((trade) =>
+      symbolFilter === 'all' || bybitSymbol(trade.instrument) === symbolFilter
+    ),
+    [baseFilteredTrades, symbolFilter]
+  );
 
   const comparisonPositions = useMemo(() => trades.filter((trade) =>
     (symbolFilter === 'all' || bybitSymbol(trade.instrument) === symbolFilter)
@@ -205,7 +216,7 @@ export function BitlangDashboardWorkspace({
       dateRangeOptions={['7d', '30d', '90d', 'all']}
       symbolFilter={symbolFilter}
       onSymbolFilterChange={setSymbolFilter}
-      symbols={symbols}
+      symbolOptions={symbolOptions}
       sideFilter={sideFilter}
       onSideFilterChange={setSideFilter}
       tagFilter={tagFilter}

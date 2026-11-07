@@ -21,7 +21,13 @@ from bitget_position_provider import (
     BitgetUtaPositionProvider,
 )
 from gate_position_provider import GateUsdtPositionProvider
-from gate_cfd_provider import CFD_SYMBOLS, GateCfdMarketDataProvider, validate_cfd_position_scope
+from gate_cfd_provider import (
+    CFD_SYMBOLS,
+    GateCfdMarketDataProvider,
+    GateCfdSymbolCatalog,
+    validate_cfd_position_scope,
+    validate_cfd_scope,
+)
 from gate_cfd_position_provider import GateCfdPositionProvider
 from cfd_replay_data import CfdReplayData
 from market_data_provider import CcxtBybitMarketDataProvider
@@ -31,6 +37,11 @@ from performance_metrics import performance_snapshot
 import video_catalog
 import workspace_config
 from workspace_schema import WORKSPACE_TABLES_SQL
+from review_session_store import ReviewSessionNotFoundError, ReviewSessionStore
+from exness_importer import ExnessImporter
+from exness_market_provider import ExnessMarketDataProvider, market_scope, native_symbol, validate_credentials as validate_exness_credentials
+from exness_replay_data import ExnessReplayData
+from exness_position_sync import ExnessPositionSync, enrich_positions as enrich_exness_positions
 
 
 ROOT = Path(__file__).resolve().parent
@@ -40,7 +51,7 @@ DATABASE_FILE = DEFAULT_DATABASE_FILE
 SEED_DATABASE_FILE = ROOT / "data" / "tiabtc-review-seed.sqlite"
 HOST = "127.0.0.1"
 PORT = 8765
-API_VERSION = 15
+API_VERSION = 25
 VALID_STATUSES = {"unlearned", "learning", "learned"}
 VALID_SYMBOLS = {"BTCUSDT", "ETHUSDT", "SOLUSDT", "BNBUSDT", "DOGEUSDT", "XRPUSDT"}
 VALID_INTERVALS = {"1", "5", "15", "60", "240", "D", "W"}
@@ -184,7 +195,9 @@ def database():
         connection.close()
 
 
-CFD_REPLAY = CfdReplayData(database, DATABASE_LOCK, GateCfdMarketDataProvider())
+CFD_PROVIDER = GateCfdMarketDataProvider()
+CFD_CATALOG = GateCfdSymbolCatalog(CFD_PROVIDER, RUN_DIR / "cfd-symbols.json")
+CFD_REPLAY = CfdReplayData(database, DATABASE_LOCK, CFD_PROVIDER)
 
 
 def initialize_database():
@@ -226,6 +239,10 @@ def initialize_database():
         connection.execute(
             "CREATE INDEX IF NOT EXISTS idx_chart_drawings_scope ON chart_drawings (symbol)"
         )
+        CFD_CATALOG.remember(row[0] for row in connection.execute(
+            "SELECT DISTINCT symbol FROM cfd_candles UNION SELECT DISTINCT symbol FROM cfd_drawings "
+            "UNION SELECT DISTINCT symbol FROM review_sessions WHERE market='cfd'"
+        ))
 
 
 def get_offline_mode():
@@ -1153,6 +1170,26 @@ def validate_drawing(payload):
     return video_id, symbol, interval, drawing, encoded
 
 
+REVIEW_SESSIONS = ReviewSessionStore(
+    database,
+    DATABASE_LOCK,
+    _validate_drawing_content,
+    validate_market_scope,
+    validate_cfd_scope,
+    CFD_SYMBOLS.keys(),
+)
+
+
+def _review_session_path_parts(path):
+    prefix = "/api/review-sessions/"
+    if not path.startswith(prefix):
+        return None
+    parts = [unquote(part) for part in path[len(prefix):].split("/")]
+    if not parts or any(not part or "/" in part for part in parts):
+        return None
+    return parts
+
+
 def save_drawing(payload):
     video_id, symbol, interval, drawing, encoded = validate_drawing(payload)
     video_id = GLOBAL_DRAWING_SCOPE
@@ -1492,7 +1529,7 @@ def _validate_position_drawing_scope(venue, position_id, symbol, interval):
         raise ValueError("交易所无效")
     if not cleaned_position_id or len(cleaned_position_id) > 80:
         raise ValueError("仓位 ID 无效")
-    if cleaned_venue == "gate-cfd":
+    if cleaned_venue in {"gate-cfd", "exness"}:
         validate_cfd_position_scope(cleaned_symbol, cleaned_interval)
     elif not re.match(r"^[A-Z0-9]{3,20}USDT$", cleaned_symbol):
         raise ValueError("仓位合约格式无效")
@@ -1713,6 +1750,56 @@ def _set_app_setting(key, value):
         )
 
 
+EXNESS_SETTING_KEYS = ("exness_api_key_enc", "exness_secret_enc", "exness_account_id", "exness_gateway_host", "exness_currency")
+EXNESS_MARKET_PROVIDER = ExnessMarketDataProvider()
+
+
+def _exness_settings():
+    with DATABASE_LOCK, database() as connection:
+        return {row["key"]: row["value"] for row in connection.execute(
+            "SELECT key, value FROM app_settings WHERE key IN (?, ?, ?, ?, ?)", EXNESS_SETTING_KEYS)}
+
+
+def get_exness_connection_state(settings=None):
+    settings = _exness_settings() if settings is None else settings
+    configured = all(settings.get(key) for key in EXNESS_SETTING_KEYS[:4])
+    scope = market_scope({"accountId": settings["exness_account_id"], "gatewayHost": settings["exness_gateway_host"]}) if configured else None
+    return {"configured": configured, "currency": settings.get("exness_currency") or None, "marketKey": scope}
+
+
+def load_exness_credentials():
+    settings = _exness_settings()
+    if not get_exness_connection_state(settings)["configured"]:
+        raise RuntimeError("请先连接Exness账户，再同步交易或读取原生行情")
+    try:
+        return validate_exness_credentials({"accountId": settings["exness_account_id"],
+            "gatewayHost": settings["exness_gateway_host"], "apiKey": _decrypt_secret(settings["exness_api_key_enc"]),
+            "secret": _decrypt_secret(settings["exness_secret_enc"])})
+    except RuntimeError:
+        raise RuntimeError("Exness本机密钥无法解密，请重新保存连接") from None
+
+
+def save_exness_connection(payload):
+    credentials = validate_exness_credentials(payload)
+    currency = EXNESS_MARKET_PROVIDER.verify(credentials)
+    values = (("exness_api_key_enc", _encrypt_secret(credentials["apiKey"])),
+              ("exness_secret_enc", _encrypt_secret(credentials["secret"])),
+              ("exness_account_id", credentials["accountId"]), ("exness_gateway_host", credentials["gatewayHost"]),
+              ("exness_currency", currency or ""))
+    with CREDENTIAL_LOCK, DATABASE_LOCK, database() as connection:
+        previous = dict(connection.execute("SELECT key, value FROM app_settings WHERE key LIKE 'exness_%'").fetchall())
+        # Tag legacy snapshots before replacing credentials. A late sync from the
+        # previous account also carries its own scope and cannot become B's balance.
+        if "exness_balance_scope" not in previous:
+            previous_scope = get_exness_connection_state(previous)["marketKey"] or ""
+            connection.execute("INSERT INTO app_settings (key, value) VALUES ('exness_balance_scope', ?)", (previous_scope,))
+        connection.executemany("INSERT INTO app_settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value=excluded.value", values)
+    return get_exness_connection_state(dict(values))
+
+
+EXNESS_REPLAY = ExnessReplayData(database, DATABASE_LOCK, EXNESS_MARKET_PROVIDER, load_exness_credentials)
+
+
 def bitget_credentials_configured():
     return bool(
         _app_setting("bitget_api_key_enc")
@@ -1894,6 +1981,12 @@ def _upsert_exchange_position(connection, position, synced_at):
             synced_at,
         ),
     )
+
+
+EXNESS_IMPORTER = ExnessImporter(ROOT / "data" / "exness", database, DATABASE_LOCK, _upsert_exchange_position,
+                                 enabled=lambda: not get_exness_connection_state()["configured"])
+EXNESS_POSITION_SYNC = ExnessPositionSync(database, DATABASE_LOCK, EXNESS_MARKET_PROVIDER,
+                                         load_exness_credentials, _upsert_exchange_position)
 
 
 def _migrate_open_annotations(connection, closed_position, closed_positions=None):
@@ -2199,7 +2292,8 @@ def _sync_position_review():
     bitget_ready = bitget_credentials_configured()
     gate_ready = gate_credentials_configured()
     cfd_ready = gate_credentials_configured("gate-cfd")
-    if not bitget_ready and not gate_ready and not cfd_ready:
+    exness_ready = get_exness_connection_state()["configured"]
+    if not bitget_ready and not gate_ready and not cfd_ready and not exness_ready:
         raise ValueError("尚未配置只读 API")
     now_ms = int(time.time() * 1000)
     snapshots = []
@@ -2251,12 +2345,24 @@ def _sync_position_review():
             })
         except RuntimeError as error:
             sync_errors.append(f"Gate CFD: {error}")
-    if not snapshots and sync_errors:
+    exness_snapshot = None
+    if exness_ready:
+        try:
+            exness_snapshot = EXNESS_POSITION_SYNC.fetch(now_ms)
+        except (RuntimeError, ValueError) as error:
+            sync_errors.append(f"Exness: {error}")
+    if not snapshots and exness_snapshot is None and sync_errors:
         raise RuntimeError("；".join(sync_errors))
     synced_at = datetime.now().astimezone().isoformat()
     closed_count = 0
     open_count = 0
     with DATABASE_LOCK, database() as connection:
+        if exness_snapshot is not None:
+            exness_result = EXNESS_POSITION_SYNC.persist(connection, exness_snapshot, synced_at)
+            closed_count += exness_result.get("closedCount", 0)
+            open_count += exness_result.get("openCount", 0)
+            if exness_result.get("warning"):
+                sync_errors.append(exness_result["warning"])
         for snapshot in snapshots:
             _persist_venue_sync(
                 connection,
@@ -2705,7 +2811,9 @@ def delete_bitlang_drawings(query):
 
 
 def _read_position_review(connection):
-    return read_positions(connection)
+    positions = read_positions(connection)
+    enrich_exness_positions(connection, positions)
+    return positions
 
 
 def list_position_review():
@@ -2715,13 +2823,14 @@ def list_position_review():
 
 
 def get_position_review_state():
+    import_status = EXNESS_IMPORTER.status()
     with DATABASE_LOCK, database() as connection:
         connection.execute("BEGIN")
         settings = {
             row["key"]: row["value"]
             for row in connection.execute(
                 """SELECT key, value FROM app_settings
-                   WHERE key IN (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                   WHERE key IN (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) OR key LIKE 'exness_%'""",
                 (
                     "bitget_api_key_enc",
                     "bitget_api_secret_enc",
@@ -2763,6 +2872,11 @@ def get_position_review_state():
     gate_total = _parse_usdt(settings.get("gate_usdt_total"))
     cfd_configured = bool(settings.get("gate-cfd_api_key_enc") and settings.get("gate-cfd_api_secret_enc"))
     cfd_total = _parse_usdt(settings.get("gate-cfd_usd_total"))
+    exness_connection = get_exness_connection_state(settings)
+    exness_balance_matches = bool(exness_connection["configured"]) and (
+        "exness_balance_scope" not in settings or settings["exness_balance_scope"] == exness_connection["marketKey"]
+    )
+    exness_total = _parse_usdt(settings.get("exness_balance_total")) if exness_balance_matches else None
     combined = _combined_balance(
         [
             {"total": bitget_total} if bitget_total is not None else {},
@@ -2770,26 +2884,32 @@ def get_position_review_state():
         ]
     )
     return {
-        "configured": bitget_configured or gate_configured or cfd_configured,
+        "configured": bitget_configured or gate_configured or cfd_configured or exness_connection["configured"],
         "venues": {
             "bitget": bitget_configured,
             "gate": gate_configured,
             "gate-cfd": cfd_configured,
+            "exness": exness_connection["configured"],
         },
         "syncedAt": _later_timestamp(
             settings.get("position_review_last_synced_at"),
             settings.get("bitget_last_synced_at"),
             settings.get("gate_last_synced_at"),
             settings.get("gate-cfd_last_synced_at"),
+            settings.get("exness_last_synced_at") if exness_balance_matches else None,
         ),
         "balance": combined,
         "balances": {
             "bitget": {"total": bitget_total} if bitget_total is not None else None,
             "gate": {"total": gate_total} if gate_total is not None else None,
             "gate-cfd": {"total": cfd_total, "currency": "USD"} if cfd_total is not None else None,
+            "exness": {"total": exness_total, "currency": settings.get("exness_balance_currency") or None}
+                      if exness_total is not None else None,
         },
         "positions": positions,
         "tags": tags,
+        "exnessImport": import_status,
+        "exnessMarket": exness_connection,
     }
 
 
@@ -3059,17 +3179,57 @@ def load_venue_candle_range(venue, symbol, interval, start_timestamp, end_timest
     return candles, source, warning
 
 
+EXNESS_REFERENCE_SYMBOLS = {"USTEC": "NAS100", "NAS100": "NAS100", "US500": "US500", "JP225": "JPN225"}
+
+
+def _exness_native_symbol(symbol):
+    with DATABASE_LOCK, database() as connection:
+        row = connection.execute(
+            "SELECT unified_symbol FROM exchange_positions WHERE venue='exness' AND chart_symbol=? LIMIT 1", (symbol,)
+        ).fetchone()
+        if not row:
+            raise ValueError("请先同步该Exness品种的交易记录")
+    return native_symbol(row["unified_symbol"])
+
+
+def _exness_reference_symbol(symbol):
+    normalized = symbol.upper()
+    return EXNESS_REFERENCE_SYMBOLS.get(normalized) or EXNESS_REFERENCE_SYMBOLS.get(normalized[:-1] if normalized.endswith("M") else "")
+
+
+def _exness_reference_batch(batch, symbol):
+    hint = f"Exness {symbol} 使用 Gate CFD 参考行情；报价、点差和交易时段可能不同，成交标记与盈亏仍来自 Exness"
+    return {**batch, "candleVenue": "gate-cfd:exness-reference", "volumeAvailable": False,
+            "warning": "；".join(filter(None, [hint, batch.get("warning")]))}
+
+
 def load_position_review_candles(
     symbol, interval, entry_timestamp, exit_timestamp, preferred_venue=None
 ):
-    is_cfd = str(preferred_venue or "").strip().lower() == "gate-cfd"
+    preferred_venue = str(preferred_venue or "").strip().lower()
+    if preferred_venue == "exness":
+        actual_symbol = _exness_native_symbol(symbol)
+        if interval not in VALID_INTERVALS or entry_timestamp < 1_230_768_000_000:
+            raise ValueError("Exness K线周期或开仓时间无效")
+        now_timestamp = int(time.time() * 1000)
+        exit_timestamp = min(exit_timestamp or now_timestamp, now_timestamp)
+        if exit_timestamp < entry_timestamp:
+            raise ValueError("Exness平仓时间无效")
+        start, end, truncated = trade_candle_window(entry_timestamp, exit_timestamp, interval, now_timestamp)
+        reference_symbol = _exness_reference_symbol(actual_symbol)
+        batch = (_exness_reference_batch(CFD_REPLAY.load_position_window(reference_symbol, interval, start, end,
+                    offline=get_offline_mode()), actual_symbol) if reference_symbol else
+                 EXNESS_REPLAY.load_window(actual_symbol, interval, start, end, offline=get_offline_mode()))
+        return {**batch,
+                "truncated": truncated, "entry": entry_timestamp, "exit": exit_timestamp}
+    is_cfd = preferred_venue == "gate-cfd"
     if is_cfd:
         validate_cfd_position_scope(symbol, interval)
         with DATABASE_LOCK, database() as connection:
             if not connection.execute(
-                "SELECT 1 FROM exchange_positions WHERE venue='gate-cfd' AND chart_symbol=? LIMIT 1", (symbol,)
+                "SELECT 1 FROM exchange_positions WHERE venue=? AND chart_symbol=? LIMIT 1", (preferred_venue, symbol)
             ).fetchone():
-                raise ValueError("请先同步该 Gate CFD 品种的仓位")
+                raise ValueError("请先同步或导入该品种的仓位")
     elif not isinstance(symbol, str) or not re.fullmatch(r"[A-Z0-9]{3,20}USDT", symbol):
         raise ValueError("仓位交易对无法映射为 USDT 永续合约")
     if interval not in VALID_INTERVALS:
@@ -3088,6 +3248,7 @@ def load_position_review_candles(
     if is_cfd:
         return {
             **CFD_REPLAY.load_position_window(symbol, interval, start_timestamp, end_timestamp, offline=get_offline_mode()),
+            "candleVenue": "gate-cfd",
             "truncated": truncated, "entry": entry_timestamp, "exit": exit_timestamp,
         }
     candle_venue = resolve_position_candle_venue(symbol, preferred_venue)
@@ -3278,11 +3439,40 @@ class StudyHandler(BaseHTTPRequestHandler):
                         "gateCfdPositionReview",
                         "affiliateInvites",
                         "genericVideoImport",
+                        "reviewSessions",
                     ],
                 },
             )
+        if parsed.path == "/api/review-sessions":
+            try:
+                market = query.get("market", [None])[0]
+                if market is None:
+                    raise ValueError("必须指定复盘市场类型")
+                return self.send_json(
+                    HTTPStatus.OK,
+                    {"sessions": REVIEW_SESSIONS.list_sessions(market)},
+                )
+            except ValueError as error:
+                return self.send_json(HTTPStatus.BAD_REQUEST, {"error": str(error)})
+        review_session_parts = _review_session_path_parts(parsed.path)
+        if review_session_parts is not None:
+            try:
+                if len(review_session_parts) == 1:
+                    return self.send_json(
+                        HTTPStatus.OK,
+                        REVIEW_SESSIONS.get_session(review_session_parts[0]),
+                    )
+                if len(review_session_parts) == 2 and review_session_parts[1] == "drawings":
+                    return self.send_json(
+                        HTTPStatus.OK,
+                        {"drawings": REVIEW_SESSIONS.list_drawings(review_session_parts[0])},
+                    )
+            except ReviewSessionNotFoundError as error:
+                return self.send_json(HTTPStatus.NOT_FOUND, {"error": str(error)})
         if parsed.path == "/api/cfd/symbols":
-            return self.send_json(HTTPStatus.OK, {"symbols": list(CFD_SYMBOLS.values())})
+            return self.send_json(HTTPStatus.OK, CFD_CATALOG.get(
+                refresh=query.get("refresh", [""])[0] == "1", offline=get_offline_mode(),
+            ))
         if parsed.path == "/api/cfd/candles":
             try:
                 def optional_time(name):
@@ -3369,6 +3559,10 @@ class StudyHandler(BaseHTTPRequestHandler):
                 return self.send_json(HTTPStatus.BAD_REQUEST, {"error": str(error)})
             except RuntimeError as error:
                 return self.send_json(HTTPStatus.BAD_GATEWAY, {"error": str(error)})
+        if parsed.path == "/api/position-review/exness-import":
+            return self.send_json(HTTPStatus.OK, EXNESS_IMPORTER.scan(force=query.get("force", [""])[0] == "1"))
+        if parsed.path == "/api/position-review/exness-connection":
+            return self.send_json(HTTPStatus.OK, get_exness_connection_state())
         if parsed.path == "/api/position-review":
             return self.send_json(HTTPStatus.OK, get_position_review_state())
         if parsed.path == "/api/position-review/cache-audit":
@@ -3380,13 +3574,23 @@ class StudyHandler(BaseHTTPRequestHandler):
                 entry = int(query.get("entry", ["0"])[0])
                 exit_timestamp = int(query.get("exit", ["0"])[0])
                 preferred_venue = query.get("venue", [""])[0]
+                if preferred_venue == "exness" and ("before" in query or "after" in query):
+                    actual_symbol = _exness_native_symbol(symbol)
+                    reference_symbol = _exness_reference_symbol(actual_symbol)
+                    edge = dict(before=int(query["before"][0]) if "before" in query else None,
+                                after=int(query["after"][0]) if "after" in query else None,
+                                limit=int(query.get("limit", ["500"])[0]), offline=get_offline_mode())
+                    batch = (_exness_reference_batch(CFD_REPLAY.load(reference_symbol, interval, **edge,
+                                position_symbol=True), actual_symbol) if reference_symbol else
+                             EXNESS_REPLAY.load_edge(actual_symbol, interval, **edge))
+                    return self.send_json(HTTPStatus.OK, batch)
                 if preferred_venue == "gate-cfd" and ("before" in query or "after" in query):
                     validate_cfd_position_scope(symbol, interval)
                     with DATABASE_LOCK, database() as connection:
                         if not connection.execute(
-                            "SELECT 1 FROM exchange_positions WHERE venue='gate-cfd' AND chart_symbol=? LIMIT 1", (symbol,)
+                            "SELECT 1 FROM exchange_positions WHERE venue=? AND chart_symbol=? LIMIT 1", (preferred_venue, symbol)
                         ).fetchone():
-                            raise ValueError("请先同步该 Gate CFD 品种的仓位")
+                            raise ValueError("请先同步或导入该品种的仓位")
                     batch = CFD_REPLAY.load(
                         symbol, interval,
                         before=int(query["before"][0]) if "before" in query else None,
@@ -3476,6 +3680,18 @@ class StudyHandler(BaseHTTPRequestHandler):
         parsed = urlparse(self.path)
         try:
             payload = self.read_json_body()
+            if parsed.path == "/api/review-sessions":
+                return self.send_json(HTTPStatus.CREATED, REVIEW_SESSIONS.create_session(payload))
+            review_session_parts = _review_session_path_parts(parsed.path)
+            if (
+                review_session_parts is not None
+                and len(review_session_parts) == 2
+                and review_session_parts[1] == "drawings"
+            ):
+                return self.send_json(
+                    HTTPStatus.OK,
+                    REVIEW_SESSIONS.save_drawing(review_session_parts[0], payload),
+                )
             if parsed.path == "/api/symbols":
                 return self.send_json(HTTPStatus.CREATED, add_custom_symbol(payload.get("symbol")))
             if parsed.path == "/api/paper-trades":
@@ -3490,6 +3706,8 @@ class StudyHandler(BaseHTTPRequestHandler):
                 return self.send_json(
                     HTTPStatus.OK, save_position_review_credentials(payload)
                 )
+            if parsed.path == "/api/position-review/exness-connection":
+                return self.send_json(HTTPStatus.OK, save_exness_connection(payload))
             if parsed.path == "/api/position-review/sync":
                 return self.send_json(HTTPStatus.OK, sync_position_review())
             if parsed.path == "/api/videos/refresh":
@@ -3518,6 +3736,8 @@ class StudyHandler(BaseHTTPRequestHandler):
                 return self.send_json(HTTPStatus.OK, save_bitlang_drawing(payload))
         except SyncInProgressError as error:
             return self.send_json(HTTPStatus.CONFLICT, {"error": str(error)})
+        except ReviewSessionNotFoundError as error:
+            return self.send_json(HTTPStatus.NOT_FOUND, {"error": str(error)})
         except (ValueError, TypeError, OverflowError, AttributeError, json.JSONDecodeError) as error:
             return self.send_json(HTTPStatus.BAD_REQUEST, {"error": str(error)})
         except RuntimeError as error:
@@ -3526,6 +3746,24 @@ class StudyHandler(BaseHTTPRequestHandler):
 
     def do_PUT(self):
         path = urlparse(self.path).path
+        review_session_parts = _review_session_path_parts(path)
+        if review_session_parts is not None:
+            try:
+                payload = self.read_json_body()
+                if len(review_session_parts) == 1:
+                    return self.send_json(
+                        HTTPStatus.OK,
+                        REVIEW_SESSIONS.update_session(review_session_parts[0], payload),
+                    )
+                if len(review_session_parts) == 2 and review_session_parts[1] == "drawings":
+                    return self.send_json(
+                        HTTPStatus.OK,
+                        {"drawings": REVIEW_SESSIONS.replace_drawings(review_session_parts[0], payload)},
+                    )
+            except ReviewSessionNotFoundError as error:
+                return self.send_json(HTTPStatus.NOT_FOUND, {"error": str(error)})
+            except (ValueError, TypeError, OverflowError, AttributeError, json.JSONDecodeError) as error:
+                return self.send_json(HTTPStatus.BAD_REQUEST, {"error": str(error)})
         if path == "/api/cfd/drawings":
             try:
                 payload = self.read_json_body()
@@ -3586,6 +3824,11 @@ class StudyHandler(BaseHTTPRequestHandler):
         parsed = urlparse(self.path)
         try:
             query = parse_qs(parsed.query)
+            review_session_parts = _review_session_path_parts(parsed.path)
+            if review_session_parts is not None and len(review_session_parts) == 2 and review_session_parts[1] == "drawings":
+                drawing_id = query.get("id", [None])[0]
+                REVIEW_SESSIONS.delete_drawing(review_session_parts[0], drawing_id)
+                return self.send_json(HTTPStatus.OK, {"ok": True})
             if parsed.path == "/api/cfd/drawings":
                 CFD_REPLAY.delete_drawings(query)
                 return self.send_json(HTTPStatus.OK, {"ok": True})
@@ -3612,6 +3855,8 @@ class StudyHandler(BaseHTTPRequestHandler):
             return self.send_json(HTTPStatus.OK, {"ok": True})
         except (ValueError, TypeError) as error:
             return self.send_json(HTTPStatus.BAD_REQUEST, {"error": str(error)})
+        except ReviewSessionNotFoundError as error:
+            return self.send_json(HTTPStatus.NOT_FOUND, {"error": str(error)})
 
     def read_json_body(self):
         length = int(self.headers.get("Content-Length", "0"))
@@ -3642,6 +3887,8 @@ class StudyHandler(BaseHTTPRequestHandler):
 
 if __name__ == "__main__":
     initialize_database()
+    EXNESS_IMPORTER.scan()
+    threading.Thread(target=EXNESS_IMPORTER.watch, name="exness-file-import", daemon=True).start()
     if not get_offline_mode():
         threading.Thread(
             target=warm_up_market_provider,

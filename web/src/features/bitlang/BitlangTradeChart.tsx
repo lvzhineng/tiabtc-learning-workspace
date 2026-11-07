@@ -415,6 +415,7 @@ export function BitlangTradeChart({
         {exportingCard ? '导出中…' : '导出复盘卡片'}
       </button>
       <ChartCanvas
+        indicatorScope="bitlang"
         candles={displayedCandles}
         symbol={symbol}
         interval={timeframe}

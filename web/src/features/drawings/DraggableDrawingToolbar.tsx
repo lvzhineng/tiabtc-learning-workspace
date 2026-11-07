@@ -17,6 +17,7 @@ import {
   IconEyeOff,
   IconFibRetracement,
   IconHalfRetracement,
+  IconNegativeHalfRetracement,
   IconHorizontalRay,
   IconLayers,
   IconLock,
@@ -71,6 +72,11 @@ const QUICK_TOOLS: Array<{
   { tool: 'TrendLine', title: '趋势线 (Alt+T)', Icon: IconTrendLine },
   { tool: 'FibRetracement', title: '斐波那契回撤 (Alt+F)', Icon: IconFibRetracement },
   { tool: 'half-retracement', title: '0.5 回撤', Icon: IconHalfRetracement },
+  {
+    tool: 'negative-half-retracement',
+    title: '-0.5 延伸（0.5→1 风险，0.5→-0.5 目标，2:1）',
+    Icon: IconNegativeHalfRetracement,
+  },
   { tool: 'ShortPosition', title: '空头仓位', Icon: IconShortPosition },
   { tool: 'LongPosition', title: '多头仓位', Icon: IconLongPosition },
   {
@@ -276,7 +282,8 @@ export const DraggableDrawingToolbar = memo(function DraggableDrawingToolbar({
           disabled={disabled}
           className={`toolbar-btn ${magnetEnabled ? 'active-toggle' : ''}`}
           onClick={onToggleMagnet}
-          title={magnetEnabled ? '关闭磁吸' : '开启磁吸'}
+          aria-pressed={magnetEnabled}
+          title={`磁吸：${magnetEnabled ? '已开启' : '已关闭'}（点击切换常开；按住 Ctrl 临时开启）`}
         >
           <IconMagnet />
         </button>

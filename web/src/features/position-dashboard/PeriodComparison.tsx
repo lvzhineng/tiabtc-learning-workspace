@@ -1,6 +1,6 @@
 import { useMemo } from 'react';
 import { ArrowDownRight, ArrowUpRight, GitCompare, Minus } from 'lucide-react';
-import type { ReviewPosition } from '@/features/position-review/position-review-types';
+import type { ReviewCurrency, ReviewPosition } from '@/features/position-review/position-review-types';
 import { formatNumber } from '@/domain/formatters';
 import { compareReviewPeriods } from './period-comparison';
 
@@ -31,18 +31,23 @@ function ComparisonMetric({ label, current, previous, delta, deltaText, neutral 
   );
 }
 
-export function PeriodComparison({ positions, dateRange, endMs, useEntryTime, currency = 'USDT' }: {
-  currency?: 'USDT' | 'USD';
+export function PeriodComparison({ positions, amountPositions, dateRange, endMs, useEntryTime, currency = 'USDT' }: {
+  currency?: ReviewCurrency;
   positions: ReviewPosition[]; dateRange: string; endMs: number; useEntryTime?: boolean;
+  amountPositions?: ReviewPosition[];
 }) {
   const days = Number(dateRange.replace('d', ''));
   const comparison = useMemo(() => compareReviewPeriods(positions, endMs, days, useEntryTime), [positions, endMs, days, useEntryTime]);
+  const amountComparison = useMemo(() => compareReviewPeriods(amountPositions ?? positions, endMs, days, useEntryTime), [amountPositions, positions, endMs, days, useEntryTime]);
   if (![7, 30, 90].includes(days)) return null;
   const { current, previous } = comparison;
+  const { current: currentAmount, previous: previousAmount } = amountComparison;
   const bothSampled = current.closedCount > 0 && previous.closedCount > 0;
-  const pnlDelta = current.totalPnl - previous.totalPnl;
+  const pnlDelta = currentAmount.totalPnl - previousAmount.totalPnl;
   const winRateDelta = bothSampled ? current.winRate - previous.winRate : null;
-  const expectancyDelta = bothSampled ? current.expectancy - previous.expectancy : null;
+  const expectancyDelta = currentAmount.closedCount > 0 && previousAmount.closedCount > 0
+    ? currentAmount.expectancy - previousAmount.expectancy
+    : null;
   const countDelta = current.closedCount - previous.closedCount;
   const signedNumber = (value: number) => `${value > 0 ? '+' : ''}${formatNumber(value)}`;
 
@@ -52,14 +57,14 @@ export function PeriodComparison({ positions, dateRange, endMs, useEntryTime, cu
         <span className="posdash-card-icon blue"><GitCompare size={14} /></span>
         <div>
           <strong>近 {days} 天 vs 前 {days} 天</strong>
-          <span>沿用当前交易对、方向和标签筛选，仅统计已平仓样本</span>
+          <span>胜率与笔数统计全部币种；金额按所选币种计算</span>
         </div>
       </div>
       <div className="posdash-compare-grid">
         <ComparisonMetric
           label={`已实现盈亏 (${currency})`}
-          current={signedNumber(current.totalPnl)}
-          previous={signedNumber(previous.totalPnl)}
+          current={signedNumber(currentAmount.totalPnl)}
+          previous={signedNumber(previousAmount.totalPnl)}
           delta={pnlDelta}
           deltaText={signedNumber(pnlDelta)}
         />
@@ -72,8 +77,8 @@ export function PeriodComparison({ positions, dateRange, endMs, useEntryTime, cu
         />
         <ComparisonMetric
           label={`单笔期望 (${currency})`}
-          current={current.closedCount ? signedNumber(current.expectancy) : '—'}
-          previous={previous.closedCount ? signedNumber(previous.expectancy) : '—'}
+          current={currentAmount.closedCount ? signedNumber(currentAmount.expectancy) : '—'}
+          previous={previousAmount.closedCount ? signedNumber(previousAmount.expectancy) : '—'}
           delta={expectancyDelta}
           deltaText={expectancyDelta == null ? '样本不足' : signedNumber(expectancyDelta)}
         />

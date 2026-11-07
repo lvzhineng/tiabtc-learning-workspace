@@ -1,4 +1,5 @@
 import type { PositionFillKind, ReviewPosition } from './position-review-types';
+import { isCfdPosition } from './position-review-types';
 
 export const FILL_KIND_LABEL: Record<PositionFillKind, string> = {
   open: '开',
@@ -42,8 +43,8 @@ export function roiDisplayTitle(roi: number | null | undefined): string | undefi
 }
 
 export function calculatePositionRoi(position: ReviewPosition): number | null {
-  // MT5 quantity is lots; its margin cannot be derived with the swap formula.
-  if (position.venue === 'gate-cfd') return null;
+  // CFD quantities are not comparable with the perpetual initial-margin formula.
+  if (isCfdPosition(position)) return null;
   const pnl = position.netPnl ?? position.realizedPnl;
   const { entryPrice, contracts, contractSize, leverage } = position;
   if (pnl == null || !Number.isFinite(pnl)) return null;

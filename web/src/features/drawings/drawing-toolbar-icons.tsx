@@ -76,6 +76,31 @@ export function IconHalfRetracement(props: IconProps) {
   );
 }
 
+export function IconNegativeHalfRetracement(props: IconProps) {
+  return (
+    <DrawingIcon {...props}>
+      <line x1="5" y1="6" x2="23" y2="6" {...stroke} />
+      <line x1="5" y1="11" x2="23" y2="11" {...stroke} />
+      <line x1="5" y1="17" x2="23" y2="17" {...stroke} />
+      <line x1="5" y1="23" x2="23" y2="23" {...stroke} />
+      <text
+        x="14"
+        y="22"
+        textAnchor="middle"
+        fontSize="5.5"
+        fontWeight="600"
+        fill={ICON_COLOR}
+      >
+        -.5
+      </text>
+      <circle cx="5" cy="6" r="1.4" fill="var(--bg-dark-800, #ffffff)" stroke={ICON_COLOR} strokeWidth="1.1" />
+      <circle cx="23" cy="6" r="1.4" fill="var(--bg-dark-800, #ffffff)" stroke={ICON_COLOR} strokeWidth="1.1" />
+      <circle cx="5" cy="23" r="1.4" fill="var(--bg-dark-800, #ffffff)" stroke={ICON_COLOR} strokeWidth="1.1" />
+      <circle cx="23" cy="23" r="1.4" fill="var(--bg-dark-800, #ffffff)" stroke={ICON_COLOR} strokeWidth="1.1" />
+    </DrawingIcon>
+  );
+}
+
 export function IconShortPosition(props: IconProps) {
   return (
     <DrawingIcon {...props}>

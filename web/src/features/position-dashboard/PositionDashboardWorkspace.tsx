@@ -8,16 +8,19 @@ import { CommonDashboardLayout } from './CommonDashboardLayout';
 import { PeriodComparison } from './PeriodComparison';
 import { TradeJournalStream } from './TradeJournalStream';
 import { toast } from '@/ui/feedback/toast';
+import { buildSymbolCountOptions } from '@/ui/symbol-count-options';
 import {
   readLocalUiState,
   storedString,
   writeLocalUiState,
 } from '@/ui/persistence/local-ui-state';
 import { summarizePositions, formatDurationMinutes } from '@/features/position-review/position-stats';
+import { isCfdPosition, positionStatisticsCurrency, isExnessUsdPosition, EXNESS_USD_STATISTICS_HINT, type ReviewCurrency } from '@/features/position-review/position-review-types';
 import { RefreshCw, Wallet } from 'lucide-react';
 import '@/styles/position-dashboard.css';
 
 type DateRangeFilter = '7d' | '30d' | '90d' | 'all';
+type DashboardMarket = 'all' | 'crypto' | 'cfd' | 'exness';
 const POSITION_DASHBOARD_UI_STORAGE_KEY = 'tiabtc-position-dashboard-ui-v1';
 
 const DATE_RANGE_MS_MAP: Record<Exclude<DateRangeFilter, 'all'>, number> = {
@@ -29,15 +32,18 @@ const DATE_RANGE_MS_MAP: Record<Exclude<DateRangeFilter, 'all'>, number> = {
 function loadDashboardUiState() {
   const stored = readLocalUiState(POSITION_DASHBOARD_UI_STORAGE_KEY);
   const tagFilter = storedString(stored.tagFilter, 'all', undefined, 32);
+  const storedMarket = storedString(stored.market, 'all', ['all', 'crypto', 'cfd', 'exness']);
+  const isOverviewV2 = stored.overviewVersion === 2;
   return {
-    dateRange: storedString(stored.dateRange, '90d', [
+    dateRange: (isOverviewV2 ? storedString(stored.dateRange, 'all', [
       '7d',
       '30d',
       '90d',
       'all',
-    ]) as DateRangeFilter,
+    ]) : 'all') as DateRangeFilter,
     symbolFilter: storedString(stored.symbolFilter, 'all', undefined, 40),
-    market: storedString(stored.market, 'crypto', ['crypto', 'cfd']) as 'crypto' | 'cfd',
+    market: (isOverviewV2 ? storedMarket : 'all') as DashboardMarket,
+    moneyCurrency: storedString(stored.moneyCurrency, '', undefined, 24),
     sideFilter: storedString(stored.sideFilter, 'all', [
       'all',
       'long',
@@ -55,6 +61,8 @@ interface Props {
   configured: boolean;
   balanceTotal: number | null;
   cfdBalanceTotal?: number | null;
+  exnessBalanceTotal?: number | null;
+  exnessBalanceCurrency?: string | null;
   syncing?: boolean;
   onSync?: () => void | Promise<void>;
   onNoteUpdated?: (positionId: string, note: string) => void;
@@ -67,6 +75,8 @@ export function PositionDashboardWorkspace({
   configured,
   balanceTotal,
   cfdBalanceTotal,
+  exnessBalanceTotal,
+  exnessBalanceCurrency,
   syncing = false,
   onSync,
   onNoteUpdated,
@@ -74,10 +84,14 @@ export function PositionDashboardWorkspace({
 }: Props) {
   const [initialUiState] = useState(loadDashboardUiState);
   const [market, setMarket] = useState(initialUiState.market);
-  const currency = market === 'cfd' ? 'USD' : 'USDT';
-  const marketPositions = useMemo(() => positions.filter((p) =>
-    (p.venue === 'gate-cfd') === (market === 'cfd')
-  ), [positions, market]);
+  const currency: ReviewCurrency = market === 'cfd' ? 'USD' : market === 'exness'
+    ? positionStatisticsCurrency({ venue: 'exness', currency: exnessBalanceCurrency }) : 'USDT';
+  const marketPositions = useMemo(() => positions.filter((position) => {
+    if (market === 'all') return true;
+    if (market === 'cfd') return position.venue === 'gate-cfd';
+    if (market === 'exness') return position.venue === 'exness';
+    return !isCfdPosition(position);
+  }), [positions, market]);
   const [dateRange, setDateRange] = useState<DateRangeFilter>(
     initialUiState.dateRange
   );
@@ -86,6 +100,7 @@ export function PositionDashboardWorkspace({
     initialUiState.sideFilter
   );
   const [tagFilter, setTagFilter] = useState(initialUiState.tagFilter);
+  const [moneyCurrency, setMoneyCurrency] = useState(initialUiState.moneyCurrency);
 
   const handleSync = async () => {
     if (onSync) {
@@ -134,14 +149,16 @@ export function PositionDashboardWorkspace({
     writeLocalUiState(POSITION_DASHBOARD_UI_STORAGE_KEY, {
       market,
       dateRange,
+      overviewVersion: 2,
       symbolFilter,
       sideFilter,
       tagFilter,
+      moneyCurrency,
     });
-  }, [dateRange, sideFilter, symbolFilter, tagFilter, market]);
+  }, [dateRange, sideFilter, symbolFilter, tagFilter, market, moneyCurrency]);
 
-  // Filtered positions based on active filters
-  const filteredPositions = useMemo(() => {
+  // Apply every active filter except the symbol filter to the option counts.
+  const baseFilteredPositions = useMemo(() => {
     const cutoffMs =
       dateRange === 'all' ? 0 : Date.now() - DATE_RANGE_MS_MAP[dateRange];
     const targetTagId = tagFilter === 'all' ? null : Number(tagFilter);
@@ -151,16 +168,42 @@ export function PositionDashboardWorkspace({
         const time = p.exitTimeMs || p.entryTimeMs;
         if (time < cutoffMs) return false;
       }
-      if (symbolFilter !== 'all' && p.chartSymbol !== symbolFilter) return false;
       if (sideFilter !== 'all' && p.side !== sideFilter) return false;
       if (targetTagId != null && !p.tagIds.includes(targetTagId)) return false;
       return true;
     });
-  }, [dateRange, marketPositions, sideFilter, symbolFilter, tagFilter]);
+  }, [dateRange, marketPositions, sideFilter, tagFilter]);
+
+  const symbolOptions = useMemo(
+    () => buildSymbolCountOptions(
+      baseFilteredPositions,
+      (position) => position.chartSymbol,
+      symbols
+    ),
+    [baseFilteredPositions, symbols]
+  );
+
+  const filteredPositions = useMemo(
+    () => baseFilteredPositions.filter((position) =>
+      symbolFilter === 'all' || position.chartSymbol === symbolFilter
+    ),
+    [baseFilteredPositions, symbolFilter]
+  );
 
   const performancePositions = useMemo(
     () => filteredPositions.filter((position) => position.status === 'closed'),
     [filteredPositions]
+  );
+  const currencies = useMemo(() => [...new Set(performancePositions.map(positionStatisticsCurrency))].sort(), [performancePositions]);
+  const preferredMoneyCurrency = currencies.includes('USDT') ? 'USDT' : currencies[0] || currency;
+  const effectiveMoneyCurrency = currencies.includes(moneyCurrency) ? moneyCurrency : preferredMoneyCurrency;
+  useEffect(() => {
+    if (currencies.length === 0) setMoneyCurrency('');
+    else if (!currencies.includes(moneyCurrency)) setMoneyCurrency(preferredMoneyCurrency);
+  }, [currencies, moneyCurrency, preferredMoneyCurrency]);
+  const moneyPositions = useMemo(
+    () => performancePositions.filter((position) => positionStatisticsCurrency(position) === effectiveMoneyCurrency),
+    [performancePositions, effectiveMoneyCurrency]
   );
 
   const [selectedCalendarDate, setSelectedCalendarDate] = useState<string | null>(null);
@@ -190,15 +233,43 @@ export function PositionDashboardWorkspace({
     };
   }, [performancePositions]);
 
+  const rawBalanceItems = market === 'all'
+    ? [
+      ...(balanceTotal == null ? [] : [{ venue: 'bitget', source: '永续', currency: 'USDT', total: balanceTotal }]),
+      ...(cfdBalanceTotal == null ? [] : [{ venue: 'gate-cfd', source: 'Gate CFD', currency: 'USD', total: cfdBalanceTotal }]),
+      ...(exnessBalanceTotal == null ? [] : [{ venue: 'exness', source: 'Exness', currency: exnessBalanceCurrency || '未标注币种', total: exnessBalanceTotal }]),
+    ]
+    : market === 'cfd'
+      ? (cfdBalanceTotal == null ? [] : [{ venue: 'gate-cfd', source: 'Gate CFD', currency: 'USD', total: cfdBalanceTotal }])
+      : market === 'exness'
+        ? (exnessBalanceTotal == null ? [] : [{ venue: 'exness', source: 'Exness', currency: exnessBalanceCurrency || '未标注币种', total: exnessBalanceTotal }])
+        : (balanceTotal == null ? [] : [{ venue: 'bitget', source: '永续', currency: 'USDT', total: balanceTotal }]);
+  const balanceGroups = new Map<string, { currency: string; total: number; sources: string[]; includesExnessUsd: boolean }>();
+  for (const item of rawBalanceItems) {
+    const unit = positionStatisticsCurrency(item);
+    const group = balanceGroups.get(unit) ?? { currency: unit, total: 0, sources: [], includesExnessUsd: false };
+    group.total += item.total;
+    group.sources.push(`${item.source} ${item.total.toFixed(2)} ${item.currency}`);
+    group.includesExnessUsd ||= isExnessUsdPosition(item);
+    balanceGroups.set(unit, group);
+  }
+  const balanceItems = [...balanceGroups.values()];
+  const includesExnessUsd = marketPositions.some(isExnessUsdPosition) || balanceItems.some((item) => item.includesExnessUsd);
+
   return (
     <CommonDashboardLayout
       currency={currency}
-      comparisonSlot={<PeriodComparison currency={currency} positions={comparisonPositions} dateRange={dateRange} endMs={Date.now()} />}
+      comparisonSlot={<PeriodComparison currency={effectiveMoneyCurrency} positions={comparisonPositions} amountPositions={comparisonPositions.filter((position) => positionStatisticsCurrency(position) === effectiveMoneyCurrency)} dateRange={dateRange} endMs={Date.now()} />}
+      moneyCurrency={effectiveMoneyCurrency}
+      moneyCurrencies={currencies}
+      onMoneyCurrencyChange={setMoneyCurrency}
+      moneyPositions={moneyPositions}
       title="账户看板"
       subtitle={
         <>
-          {market === 'cfd' ? 'Gate CFD' : '加密永续'} · 已归集 <strong>{marketPositions.length}</strong> 笔仓位 ·{' '}
+          {market === 'all' ? '全部平台' : market === 'cfd' ? 'Gate CFD' : market === 'exness' ? 'Exness' : '加密永续'} · 共 <strong>{marketPositions.length}</strong> 笔交易 ·{' '}
           <strong>{tags.length}</strong> 个策略标签
+          {includesExnessUsd && <span className="posdash-statistics-note" title={EXNESS_USD_STATISTICS_HINT}> · 含 Exness USD ⓘ</span>}
         </>
       }
       dateRange={dateRange}
@@ -206,7 +277,7 @@ export function PositionDashboardWorkspace({
       dateRangeOptions={['7d', '30d', '90d', 'all']}
       symbolFilter={symbolFilter}
       onSymbolFilterChange={setSymbolFilter}
-      symbols={symbols}
+      symbolOptions={symbolOptions}
       sideFilter={sideFilter}
       onSideFilterChange={setSideFilter}
       tagFilter={tagFilter}
@@ -220,27 +291,29 @@ export function PositionDashboardWorkspace({
       extraHeader={
         <>
           <select className="posdash-select" aria-label="账户市场" value={market} onChange={(event) => {
-            setMarket(event.target.value as 'crypto' | 'cfd');
+            setMarket(event.target.value as DashboardMarket);
             setSymbolFilter('all');
             setSelectedCalendarDate(null);
           }}>
+            <option value="all">全部平台</option>
             <option value="crypto">加密永续 · USDT</option>
             <option value="cfd">Gate CFD · USD</option>
+            <option value="exness">Exness</option>
           </select>
-          {(market === 'cfd' ? cfdBalanceTotal : balanceTotal) != null && (
-            <div className="posdash-balance-chip" title="已配置交易所账户权益合计">
+          {balanceItems.map((item) => (
+            <div key={item.currency} className="posdash-balance-chip" title={`${item.sources.join(' + ')}${item.includesExnessUsd ? `；${EXNESS_USD_STATISTICS_HINT}` : ''}`}>
               <span className="posdash-live-dot" />
               <Wallet size={13} />
-              <span>{(market === 'cfd' ? cfdBalanceTotal : balanceTotal)?.toFixed(2)} {currency}</span>
+              <span>权益 · {item.total.toFixed(2)} {item.currency}</span>
             </div>
-          )}
+          ))}
 
           <button
             type="button"
             className="posdash-btn primary"
             onClick={handleSync}
             disabled={syncing || !configured}
-            title={configured ? '同步最新仓位' : '需在仓位复盘中配置 Bitget 或 Gate 密钥'}
+            title={configured ? '同步最新交易记录' : '需在仓位复盘中配置账户密钥'}
           >
             <RefreshCw size={13} className={syncing ? 'spin' : ''} />
             {syncing ? '同步中' : '同步'}
@@ -249,7 +322,7 @@ export function PositionDashboardWorkspace({
       }
       journalSlot={
         <TradeJournalStream
-          currency={currency}
+          currency={effectiveMoneyCurrency}
           positions={journalPositions}
           tags={tags}
           onNavigateToPosition={onNavigateToPosition}

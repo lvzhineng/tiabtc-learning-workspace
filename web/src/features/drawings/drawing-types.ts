@@ -15,6 +15,7 @@ export type LegacyToolType =
 
 export type EnhancedToolType =
   | 'half-retracement'
+  | 'negative-half-retracement'
   | 'date-price-range'
   | 'path'
   | 'text-annotation'
@@ -52,6 +53,7 @@ export const ANCHOR_COUNTS: Record<string, number> = {
   VerticalLine: 1,
   FibRetracement: 2,
   'half-retracement': 2,
+  'negative-half-retracement': 2,
   ExtendedLine: 2,
   Arrow: 2,
   Rectangle: 2,

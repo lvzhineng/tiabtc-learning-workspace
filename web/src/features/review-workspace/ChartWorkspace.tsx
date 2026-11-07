@@ -1,5 +1,8 @@
 import { TradingSessionControl } from '@/chart/TradingSessionControl';
-import { useEffect, useState, useCallback, useMemo, useRef } from 'react';
+import { useEffect, useState, useCallback, useMemo, useRef, type ReactNode } from 'react';
+import type { ReviewSession, ReviewSessionState } from '@/api/review-session-api';
+import type { ReviewArchiveSnapshot } from './ReviewSessionWorkspace';
+import { serializeDrawing } from '@/features/drawings/drawing-engine';
 import {
   REVIEW_TIMEFRAMES,
   TIMEFRAME_DISPLAY_MAP,
@@ -13,7 +16,8 @@ import {
   type PerpetualSymbolSearchItem,
 } from '@/api/market-api';
 import { ChartCanvas } from '@/chart/ChartCanvas';
-import { CFD_SYMBOLS, fetchCfdSymbols } from '@/api/cfd-api';
+import { CFD_SYMBOLS, fetchCfdCatalog, type CfdSymbol } from '@/api/cfd-api';
+import { CfdSymbolPicker } from './CfdSymbolPicker';
 import { captureChartPng } from '@/chart/capture-chart-png';
 import { candlePricePrecision } from '@/chart/chart-price';
 import { computeReadoutInfo, type ReadoutInfo } from '@/chart/candlestick-readout';
@@ -26,6 +30,7 @@ import {
 } from '@/features/replay/free-replay-logic';
 import { FreeReplayPanel } from '@/features/replay/FreeReplayPanel';
 import { RandomReplayControl } from '@/features/replay/RandomReplayControl';
+import { US_DAY_TIMEFRAMES, type UsDayReplay } from '@/features/replay/us-day-replay';
 import { ReplayBookmarks } from '@/features/replay/ReplayBookmarks';
 import { DraggableDrawingToolbar } from '@/features/drawings/DraggableDrawingToolbar';
 import { DrawingObjectTreePanel } from '@/features/drawings/DrawingObjectTreePanel';
@@ -37,6 +42,7 @@ import { calculateRR } from '@/features/paper-trading/paper-trade-logic';
 import { PaperTradingPanel } from '@/features/paper-trading/PaperTradingPanel';
 import { useCandleWorkspaceData } from './useCandleWorkspaceData';
 import { useReplayPartialCandle } from './useReplayPartialCandle';
+import { usePreviousDayCandles } from './usePreviousDayCandles';
 import { useDrawingWorkspace } from './useDrawingWorkspace';
 import { usePaperTrading } from './usePaperTrading';
 import { ChartReadoutBar } from './ChartReadoutBar';
@@ -50,6 +56,7 @@ import {
   AlertCircle,
   ChevronDown,
   Copy,
+  Download,
   RefreshCw,
   Search,
   Video,
@@ -67,32 +74,55 @@ interface ChartWorkspaceProps {
   initialVideoContext?: VideoReviewContext | null;
   themeMode?: 'dark' | 'light';
   market?: 'perpetual' | 'cfd';
+  initialSession?: ReviewSession | null;
+  archiveControls?: ReactNode;
+  onArchiveSnapshotChange?: (snapshot: ReviewArchiveSnapshot) => void;
+  onBeginArchive?: (state: ReviewSessionState) => Promise<void>;
+  archiveBusy?: boolean;
 }
 
 export function ChartWorkspace({
   initialVideoContext,
   themeMode = 'dark',
   market = 'perpetual',
+  initialSession = null,
+  archiveControls,
+  onArchiveSnapshotChange,
+  onBeginArchive,
+  archiveBusy = false,
 }: ChartWorkspaceProps) {
   const isCfd = market === 'cfd';
+  const workspaceRootRef = useRef<HTMLDivElement | null>(null);
+  useEffect(() => {
+    workspaceRootRef.current?.toggleAttribute('inert', archiveBusy);
+    if (archiveBusy) setReplayState((current) => current.status === 'playing' ? { ...current, status: 'paused' } : current);
+  }, [archiveBusy]);
   const [retiredGc] = useState(() => !isCfd && readLocalUiState(REVIEW_UI_STORAGE_KEY).symbol === 'GC');
   const [initialLocation] = useState<StoredReviewLocation | null>(
-    () => loadStoredReviewLocation(market)
+    () => initialSession ? {
+      timeframe: initialSession.state.timeframe, timestampMs: initialSession.state.timestampMs,
+      visibleSpan: initialSession.state.visibleSpan, replay: initialSession.state.replay,
+    } : loadStoredReviewLocation(market)
   );
-  const [initialUiPreferences] = useState(() => loadReviewUiPreferences(market));
+  const [initialUiPreferences] = useState(() => ({ ...loadReviewUiPreferences(market), ...initialSession?.state }));
   useEffect(() => {
     if (retiredGc) writeLocalUiState(REVIEW_LOCATION_STORAGE_KEY, {});
   }, [retiredGc]);
-  const restoredTimestampMs = initialVideoContext
+  const restoredTimestampMs = initialSession ? initialSession.state.timestampMs : initialVideoContext
     ? null
     : initialLocation?.timestampMs ?? null;
-  const restoredFreeReplay = initialVideoContext
+  const restoredFreeReplay = initialSession ? initialSession.state.replay : initialVideoContext
     ? null
     : initialLocation?.replay ?? null;
   const restoredFocusTimeMs = restoredFreeReplay && initialLocation
-    ? restoredFreeReplay.cursorTimeMs - timeframeMs(initialLocation.timeframe)
+    ? restoredFreeReplay.cursorTimeMs - (initialSession ? 1 : timeframeMs(initialLocation.timeframe))
     : restoredTimestampMs;
   const [symbols, setSymbols] = useState<string[]>(isCfd ? CFD_SYMBOLS.map((item) => item.symbol) : ['BTCUSDT']);
+  const [cfdSymbols, setCfdSymbols] = useState<CfdSymbol[]>(CFD_SYMBOLS);
+  const [catalogLoading, setCatalogLoading] = useState(isCfd);
+  const [catalogWarning, setCatalogWarning] = useState<string | null>(null);
+  const [catalogTrusted, setCatalogTrusted] = useState(false);
+  const [catalogRefresh, setCatalogRefresh] = useState(0);
   const [activeSymbol, setActiveSymbol] = useState<string>(
     initialVideoContext?.symbol || initialUiPreferences.symbol
   );
@@ -108,6 +138,7 @@ export function ChartWorkspace({
   const [showWeekendBands, setShowWeekendBands] = useState(
     initialUiPreferences.showWeekendBands
   );
+  const [showBarCount, setShowBarCount] = useState(initialUiPreferences.showBarCount);
   const [chartFocusTimeMs, setChartFocusTimeMs] = useState<number | null>(
     restoredFocusTimeMs
   );
@@ -122,6 +153,10 @@ export function ChartWorkspace({
   const pendingLocationRef = useRef<StoredReviewLocation | null>(null);
   const persistLocationTimerRef = useRef<number | null>(null);
   const replayMemoryRef = useRef<StoredFreeReplay | null>(restoredFreeReplay);
+  const [archiveViewport, setArchiveViewport] = useState(() => ({
+    timestampMs: restoredTimestampMs ?? Date.now(),
+    visibleSpan: initialLocation?.visibleSpan ?? DEFAULT_REVIEW_VISIBLE_SPAN,
+  }));
 
   const flushStoredReviewLocation = useCallback(() => {
     if (persistLocationTimerRef.current !== null) {
@@ -173,19 +208,24 @@ export function ChartWorkspace({
       isLogScale,
       sessionBands,
       showWeekendBands,
+      showEma20: initialUiPreferences.showEma20,
+      showBarCount,
     });
   }, [
     activeSymbol,
     initialUiPreferences.symbol,
+    initialUiPreferences.showEma20,
     initialVideoContext,
     isLogScale,
     sessionBands,
     showWeekendBands,
+    showBarCount,
     isCfd,
   ]);
 
   const [hoveredCandle, setHoveredCandle] = useState<Candlestick | null>(null);
   const [copyingChart, setCopyingChart] = useState(false);
+  const [exportingChart, setExportingChart] = useState(false);
   const chartAreaRef = useRef<HTMLDivElement | null>(null);
 
   const [showSymbolSearch, setShowSymbolSearch] = useState<boolean>(false);
@@ -196,7 +236,7 @@ export function ChartWorkspace({
 
   // Replay State Machine
   const [replayState, setReplayState] = useState<ReplayState>(() => {
-    if (initialVideoContext) {
+    if (initialVideoContext && !initialSession) {
       return {
         status: 'ready',
         context: initialVideoContext,
@@ -208,8 +248,8 @@ export function ChartWorkspace({
     }
     if (restoredFreeReplay) {
       return {
-        status: 'paused',
-        context: {
+        status: restoredFreeReplay.daySession && restoredFreeReplay.cursorTimeMs >= restoredFreeReplay.daySession.toMs ? 'completed' : 'paused',
+        context: initialSession?.state.videoContext ?? {
           mode: 'free',
           symbol: activeSymbol,
           anchorTimeMs: restoredFreeReplay.startTimeMs,
@@ -218,10 +258,12 @@ export function ChartWorkspace({
         progressTimeMs: restoredFreeReplay.cursorTimeMs,
         cursorTimeMs: restoredFreeReplay.cursorTimeMs,
         speed: restoredFreeReplay.speed,
+        ...(isCfd && restoredFreeReplay.daySession ? { daySession: restoredFreeReplay.daySession } : {}),
       };
     }
     return { status: 'idle' };
   });
+  const daySession = isCfd && replayState.status !== 'idle' ? replayState.daySession : undefined;
 
   useEffect(() => {
     if (replayState.status === 'idle') return;
@@ -231,6 +273,7 @@ export function ChartWorkspace({
             startTimeMs: replayState.startTimeMs,
             cursorTimeMs: replayState.cursorTimeMs,
             speed: replayState.speed,
+            ...(replayState.daySession ? { daySession: replayState.daySession } : {}),
           }
         : null;
     lastPositionTimeMsRef.current = replayState.cursorTimeMs;
@@ -240,6 +283,7 @@ export function ChartWorkspace({
   const handleViewportAnchorChange = useCallback(
     (timestampMs: number, visibleSpan: number) => {
       lastPositionTimeMsRef.current = timestampMs;
+      setArchiveViewport({ timestampMs, visibleSpan: normalizeReviewVisibleSpan(visibleSpan) });
       scheduleStoredReviewLocation(
         activeTimeframe,
         timestampMs,
@@ -268,6 +312,9 @@ export function ChartWorkspace({
     timeframeSwitchAnchorTimeMs,
     market
   );
+  // Gate serializes public requests; give today's candles priority.
+  const previousDay = usePreviousDayCandles(activeSymbol, activeTimeframe, daySession?.date ?? null,
+    !loading);
 
   // One-shot anchor for the timeframe switch fetch; clear once data arrives so
   // subsequent live requests are not pinned to a historical window.
@@ -330,7 +377,31 @@ export function ChartWorkspace({
     toggleLockSelected: handleToggleLockSelected,
     undo: handleUndo,
     redo: handleRedo,
-  } = useDrawingWorkspace(activeSymbol, activeTimeframe, isCfd ? 'cfd' : 'server');
+    flushDrawingSaves,
+    savingDrawings,
+  } = useDrawingWorkspace(activeSymbol, activeTimeframe,
+    initialSession ? 'session' : isCfd ? 'cfd' : 'server',
+    initialSession ? { reviewSessionId: initialSession.id } : undefined,
+    archiveBusy
+  );
+  const archiveState = useMemo<ReviewSessionState>(() => ({
+    symbol: activeSymbol, timeframe: activeTimeframe,
+    timestampMs: Math.min(Date.now(), replayState.status === 'idle'
+      ? archiveViewport.timestampMs : replayState.cursorTimeMs),
+    visibleSpan: archiveViewport.visibleSpan,
+    replay: replayState.status === 'idle' ? null : {
+      startTimeMs: replayState.startTimeMs, cursorTimeMs: replayState.cursorTimeMs, speed: replayState.speed,
+      ...(replayState.daySession ? { daySession: replayState.daySession } : {}),
+    },
+    isLogScale, sessionBands, showWeekendBands,
+    videoContext: replayState.status !== 'idle' && replayState.context.mode === 'video' ? replayState.context : null,
+  }), [activeSymbol, activeTimeframe, archiveViewport, replayState, isLogScale, sessionBands, showWeekendBands]);
+  useEffect(() => {
+    onArchiveSnapshotChange?.({
+      state: archiveState, drawings: allDrawings.map(serializeDrawing),
+      ready: drawingReady && !loading, flushDrawings: flushDrawingSaves, savingDrawings,
+    });
+  }, [archiveState, allDrawings, drawingReady, loading, flushDrawingSaves, savingDrawings, onArchiveSnapshotChange]);
   const handleDrawingComplete = useCallback(() => {
     setActiveTool('select');
   }, [setActiveTool]);
@@ -348,6 +419,7 @@ export function ChartWorkspace({
 
   const handleTimeframeChange = useCallback(
     (nextTimeframe: ReviewTimeframe) => {
+      if (daySession && !US_DAY_TIMEFRAMES.includes(nextTimeframe)) return;
       if (nextTimeframe === activeTimeframe) return;
       const selectedDrawing = drawings.find(
         (drawing) => drawing.id === selectedDrawingId
@@ -373,6 +445,7 @@ export function ChartWorkspace({
     },
     [
       activeTimeframe,
+      daySession,
       chartFocusTimeMs,
       drawings,
       replayState,
@@ -384,8 +457,20 @@ export function ChartWorkspace({
   const handleSymbolChange = useCallback(
     (nextSymbol: string, options?: { resetToLatest?: boolean }) => {
       if (nextSymbol === activeSymbol) return;
+      if (initialSession && onBeginArchive) {
+        void onBeginArchive({
+          ...archiveState, symbol: nextSymbol, videoContext: null,
+          timestampMs: options?.resetToLatest && replayState.status === 'idle' ? Date.now() : archiveState.timestampMs,
+          replay: archiveState.replay ? {
+            ...archiveState.replay, startTimeMs: archiveState.replay.cursorTimeMs,
+          } : null,
+          ...(daySession ? { replay: null } : {}),
+        });
+        return;
+      }
       if (isCfd) {
-        setReplayState((current) => current.status === 'idle' ? current : {
+        if (daySession) replayMemoryRef.current = null;
+        setReplayState((current) => current.status === 'idle' || current.daySession ? { status: 'idle' } : {
           ...current,
           status: 'paused',
           context: { mode: 'free', symbol: nextSymbol, anchorTimeMs: current.startTimeMs },
@@ -424,12 +509,16 @@ export function ChartWorkspace({
       replayState,
       scheduleStoredReviewLocation,
       isCfd,
+      initialSession,
+      onBeginArchive,
+      archiveState,
+      daySession,
     ]
   );
 
   // Sync initialVideoContext if passed from parent
   useEffect(() => {
-    if (initialVideoContext) {
+    if (initialVideoContext && !initialSession) {
       setActiveSymbol(initialVideoContext.symbol || 'BTCUSDT');
       setReplayState({
         status: 'ready',
@@ -440,23 +529,61 @@ export function ChartWorkspace({
         speed: 1,
       });
     }
-  }, [initialVideoContext]);
+  }, [initialVideoContext, initialSession]);
 
   // Load symbol list on mount
   useEffect(() => {
-    (isCfd ? fetchCfdSymbols() : fetchSymbols())
+    let cancelled = false;
+    if (isCfd) {
+      setCatalogLoading(true);
+      void fetchCfdCatalog(catalogRefresh > 0).then((catalog) => {
+        if (cancelled) return;
+        setCfdSymbols(catalog.symbols);
+        setSymbols(catalog.symbols.map((item) => item.symbol));
+        setCatalogWarning(catalog.warning);
+        setCatalogTrusted(!catalog.stale && !catalog.warning);
+      }).catch((cause: unknown) => {
+        if (!cancelled) {
+          setCatalogTrusted(false);
+          setCatalogWarning(cause instanceof Error ? cause.message : '品种目录加载失败，使用已有目录');
+        }
+      }).finally(() => { if (!cancelled) setCatalogLoading(false); });
+      return () => { cancelled = true; };
+    }
+    void fetchSymbols()
       .then((list) => {
+        if (cancelled) return;
         if (list && list.length > 0) {
           setSymbols(list);
           setActiveSymbol((current) =>
-            list.includes(current) ? current : list[0]
+            initialSession || list.includes(current) ? current : list[0]
           );
         }
       })
       .catch((err) => {
         console.warn('拉取 Symbol 列表失败:', err);
       });
-  }, [isCfd]);
+    return () => { cancelled = true; };
+  }, [isCfd, initialSession?.id, catalogRefresh]);
+
+  useEffect(() => {
+    // The server includes known historical scopes. A symbol absent from a
+    // successful fresh directory and local history is an orphaned preference.
+    // Offline/stale directories and archived sessions must retain their scope.
+    if (!isCfd || catalogLoading || !catalogTrusted || initialSession ||
+      cfdSymbols.some((item) => item.symbol === activeSymbol)) return;
+    const fallback = cfdSymbols.find((item) => item.symbol === 'XAUUSD') ?? cfdSymbols[0];
+    if (!fallback) return;
+    const now = Date.now();
+    replayMemoryRef.current = null;
+    setReplayState({ status: 'idle' });
+    setTimeframeSwitchAnchorTimeMs(null);
+    setChartFocusTimeMs(null);
+    lastPositionTimeMsRef.current = now;
+    setActiveSymbol(fallback.symbol);
+    scheduleStoredReviewLocation(activeTimeframe, now);
+    toast.warning(`上次选择的品种已失效，已切换到 ${fallback.name}。`);
+  }, [activeSymbol, activeTimeframe, catalogLoading, catalogTrusted, cfdSymbols, initialSession, isCfd, scheduleStoredReviewLocation]);
 
   useEffect(() => {
     setHoveredCandle(null);
@@ -489,8 +616,16 @@ export function ChartWorkspace({
   }, []);
 
   // Replay Actions
-  const handleStartReplay = (symbol: string, startTimeMs: number) => {
+  const handleStartReplay = (symbol: string, startTimeMs: number, timeframe = activeTimeframe, session?: UsDayReplay) => {
+    if (onBeginArchive) {
+      void onBeginArchive({
+        ...archiveState, symbol, timeframe, timestampMs: startTimeMs, videoContext: null,
+        replay: { startTimeMs, cursorTimeMs: startTimeMs, speed: 1, ...(session ? { daySession: session } : {}) },
+      });
+      return;
+    }
     setActiveSymbol(symbol);
+    setActiveTimeframe(timeframe);
     setTimeframeSwitchAnchorTimeMs(null);
     lastPositionTimeMsRef.current = startTimeMs;
     setChartFocusTimeMs(startTimeMs);
@@ -505,25 +640,34 @@ export function ChartWorkspace({
       progressTimeMs: startTimeMs,
       cursorTimeMs: startTimeMs,
       speed: 1,
+      ...(session ? { daySession: session } : {}),
     });
   };
 
   const handleStartReplayFromCurrentPosition = useCallback(() => {
-    if (loading || candles.length === 0) return;
+    if (archiveBusy || loading || candles.length === 0) return;
 
     const firstCandleTimeMs = candles[0].timestampMs;
     const lastCandleTimeMs = candles[candles.length - 1].timestampMs;
     const requestedAnchorTimeMs =
       lastPositionTimeMsRef.current ?? chartFocusTimeMs ?? lastCandleTimeMs;
     const anchorTimeMs = Math.min(
-      lastCandleTimeMs,
+      Date.now(), lastCandleTimeMs,
       Math.max(firstCandleTimeMs, requestedAnchorTimeMs)
     );
-    const nextCursorTimeMs = getNextCursorTimeMs(
+    const nextCursorTimeMs = Math.min(Date.now(), getNextCursorTimeMs(
       candles,
       anchorTimeMs,
       activeTimeframe
-    );
+    ));
+
+    if (onBeginArchive) {
+      void onBeginArchive({
+        ...archiveState, timestampMs: nextCursorTimeMs, videoContext: null,
+        replay: { startTimeMs: anchorTimeMs, cursorTimeMs: nextCursorTimeMs, speed: 1 },
+      });
+      return;
+    }
 
     setChartFocusTimeMs(anchorTimeMs);
     setReplayState({
@@ -538,7 +682,7 @@ export function ChartWorkspace({
       cursorTimeMs: nextCursorTimeMs,
       speed: 1,
     });
-  }, [activeSymbol, activeTimeframe, candles, chartFocusTimeMs, loading]);
+  }, [activeSymbol, activeTimeframe, candles, chartFocusTimeMs, loading, archiveState, onBeginArchive, archiveBusy]);
 
   const handleStopReplay = () => {
     const lastReplayTimeMs =
@@ -565,6 +709,22 @@ export function ChartWorkspace({
       // cannot start in the future, so keep that edge on the latest valid
       // instant while preserving the exact clicked period for past data.
       const cutInTimeMs = Math.min(timestampMs + intervalMs, Date.now());
+      if (daySession) {
+        const cursor = Math.max(daySession.fromMs, Math.min(daySession.toMs, cutInTimeMs));
+        setChartFocusTimeMs(cursor - intervalMs);
+        setReplayState((current) => current.status === 'idle' ? current : {
+          ...current, status: cursor === daySession.toMs ? 'completed' : 'paused',
+          cursorTimeMs: cursor, progressTimeMs: Math.max(current.progressTimeMs, cursor),
+        });
+        return;
+      }
+      if (onBeginArchive) {
+        void onBeginArchive({
+          ...archiveState, timestampMs: cutInTimeMs, videoContext: null,
+          replay: { startTimeMs: cutInTimeMs, cursorTimeMs: cutInTimeMs, speed: 1 },
+        });
+        return;
+      }
       setChartFocusTimeMs(cutInTimeMs - intervalMs);
       setReplayState({
         status: 'ready',
@@ -579,11 +739,12 @@ export function ChartWorkspace({
         speed: 1,
       });
     },
-    [activeSymbol, activeTimeframe]
+    [activeSymbol, activeTimeframe, archiveState, onBeginArchive, daySession]
   );
 
   const handleNextBar = useCallback(() => {
-    if (replayState.status === 'idle') return;
+    if (replayState.status === 'idle' || archiveBusy || loading) return;
+    if (daySession && replayState.cursorTimeMs >= daySession.toMs) return;
     const nextCursorMs = getNextCursorTimeMs(
       candles,
       replayState.cursorTimeMs,
@@ -632,7 +793,7 @@ export function ChartWorkspace({
       if (prev.status === 'idle') return prev;
       return {
         ...prev,
-        status: prev.status === 'completed' ? 'paused' : prev.status,
+        status: daySession && nextCursorMs >= daySession.toMs ? 'completed' : prev.status === 'completed' ? 'paused' : prev.status,
         cursorTimeMs: nextCursorMs,
         progressTimeMs: Math.max(prev.progressTimeMs, nextCursorMs),
       };
@@ -648,10 +809,13 @@ export function ChartWorkspace({
     replayState,
     prefetchFutureCandles,
     checkOpenTradesTriggers,
+    archiveBusy,
+    loading,
+    daySession,
   ]);
 
   const handlePrevBar = useCallback(() => {
-    if (replayState.status === 'idle') return;
+    if (replayState.status === 'idle' || archiveBusy) return;
     const cursor = replayState.cursorTimeMs;
     const start = replayState.startTimeMs;
     setReplayState((prev) => prev.status === 'idle' ? prev : { ...prev, status: 'paused' });
@@ -660,15 +824,17 @@ export function ChartWorkspace({
       setReplayState((prev) => prev.status === 'idle' || prev.cursorTimeMs !== cursor || prev.startTimeMs !== start
         ? prev : { ...prev, status: 'paused', cursorTimeMs: previous });
     });
-  }, [previousReplayCursor, replayState]);
+  }, [previousReplayCursor, replayState, archiveBusy]);
 
   const handleTogglePlay = useCallback(() => {
+    if (archiveBusy) return;
     setReplayState((prev) => {
       if (prev.status === 'idle') return prev;
+      if (prev.daySession && prev.cursorTimeMs >= prev.daySession.toMs) return prev;
       const nextStatus = prev.status === 'playing' ? 'paused' : 'playing';
       return { ...prev, status: nextStatus };
     });
-  }, []);
+  }, [archiveBusy]);
 
   const handleSetSpeed = useCallback((speed: number) => {
     setReplayState((prev) => {
@@ -757,20 +923,42 @@ export function ChartWorkspace({
   const replayCursorTimeMs =
     replayState.status === 'idle' ? null : replayState.cursorTimeMs;
   const partialReplay = useReplayPartialCandle(
-    activeSymbol, activeTimeframe, market, replayCursorTimeMs, candles, loading
+    activeSymbol, activeTimeframe, market, daySession ? null : replayCursorTimeMs, candles, loading
   );
-  const visibleCandles = useMemo(
+  const revealedCandles = useMemo(
     () => {
       if (replayCursorTimeMs === null) return candles;
       const closed = filterVisibleCandles(candles, replayCursorTimeMs, activeTimeframe);
+      if (daySession) return closed.filter((bar) => bar.interval === activeTimeframe &&
+        bar.timestampMs >= daySession.fromMs && bar.timestampMs + timeframeMs(activeTimeframe) <= daySession.toMs);
       return partialReplay.candle ? [...closed, partialReplay.candle] : closed;
     },
-    [activeTimeframe, candles, replayCursorTimeMs, partialReplay.candle]
+    [activeTimeframe, candles, replayCursorTimeMs, partialReplay.candle, daySession]
   );
+  // EMA and candles share this regular-session sequence; no overnight bars or hidden future bars.
+  const visibleCandles = useMemo(() => daySession
+    ? [...previousDay.candles, ...revealedCandles] : revealedCandles,
+    [daySession, previousDay.candles, revealedCandles]);
   const visibleCandleMap = useMemo(
     () => new Map(visibleCandles.map((bar) => [bar.timestampMs, bar])),
     [visibleCandles]
   );
+  const dayPriceRange = useMemo(() => {
+    if (!daySession) return undefined;
+    let minValue = Infinity;
+    let maxValue = -Infinity;
+    for (const bar of revealedCandles) {
+      if (bar.interval !== activeTimeframe || bar.timestampMs < daySession.fromMs ||
+          bar.timestampMs + timeframeMs(activeTimeframe) > daySession.toMs) continue;
+      minValue = Math.min(minValue, bar.low);
+      maxValue = Math.max(maxValue, bar.high);
+    }
+    for (const bar of previousDay.candles) {
+      minValue = Math.min(minValue, bar.low);
+      maxValue = Math.max(maxValue, bar.high);
+    }
+    return Number.isFinite(minValue) && Number.isFinite(maxValue) ? { minValue, maxValue } : undefined;
+  }, [revealedCandles, activeTimeframe, daySession, previousDay.candles]);
   const displayCandle =
     (hoveredCandle ? visibleCandleMap.get(hoveredCandle.timestampMs) : null) ||
     (visibleCandles.length > 0 ? visibleCandles[visibleCandles.length - 1] : null);
@@ -805,9 +993,38 @@ export function ChartWorkspace({
       setCopyingChart(false);
     }
   }, [activeSymbol, activeTimeframe, copyingChart, hoveredCandle, themeMode, visibleCandles, isCfd]);
+  const exportChart = useCallback(async () => {
+    if (!chartAreaRef.current || exportingChart) return;
+    const chartTimeMs = hoveredCandle?.timestampMs ?? lastPositionTimeMsRef.current ??
+      visibleCandles[visibleCandles.length - 1]?.timestampMs;
+    setExportingChart(true);
+    try {
+      const png = await captureChartPng(chartAreaRef.current, themeMode, {
+        symbol: activeSymbol,
+        time: chartTimeMs === undefined ? undefined : `北京时间 ${formatChartTime(chartTimeMs, activeTimeframe)}`,
+        timeframe: TIMEFRAME_DISPLAY_MAP[activeTimeframe],
+        source: 'Gate CFD',
+      });
+      const url = URL.createObjectURL(png);
+      const anchor = document.createElement('a');
+      anchor.href = url;
+      anchor.download = `Gate-CFD-${activeSymbol}-${TIMEFRAME_DISPLAY_MAP[activeTimeframe]}-${Date.now()}.png`;
+      anchor.click();
+      window.setTimeout(() => URL.revokeObjectURL(url), 1000);
+      toast.success('图表图片已导出');
+    } catch (cause) {
+      toast.error(`导出图片失败: ${cause instanceof Error ? cause.message : '图片生成失败'}`);
+    } finally {
+      setExportingChart(false);
+    }
+  }, [activeSymbol, activeTimeframe, exportingChart, hoveredCandle, themeMode, visibleCandles]);
+  const cfdPricePrecision = isCfd ? cfdSymbols.find((item) => item.symbol === activeSymbol)?.pricePrecision : undefined;
+  const pickerSymbols = useMemo(() => cfdSymbols.some((item) => item.symbol === activeSymbol)
+    ? cfdSymbols : [...cfdSymbols, { symbol: activeSymbol, name: activeSymbol, categoryId: -1,
+      categoryName: '历史品种', status: 'unavailable', isBase: true }], [activeSymbol, cfdSymbols]);
   const displayedPricePrecision = useMemo(
-    () => candlePricePrecision(visibleCandles),
-    [visibleCandles]
+    () => cfdPricePrecision ?? candlePricePrecision(visibleCandles),
+    [visibleCandles, cfdPricePrecision]
   );
   const readoutInfo: ReadoutInfo | null = useMemo(() => {
     if (!displayCandle) return null;
@@ -872,7 +1089,7 @@ export function ChartWorkspace({
       />;
 
   return (
-    <div className={`review-workspace${isCfd ? ' review-workspace-cfd' : ''}`}>
+    <div ref={workspaceRootRef} aria-busy={archiveBusy} className={`review-workspace${isCfd ? ' review-workspace-cfd' : ''}`}>
       {!isCfd && showSymbolSearch && (
         <PerpetualSymbolSearchDialog
           activeSymbol={activeSymbol}
@@ -892,16 +1109,14 @@ export function ChartWorkspace({
       <div className="review-toolbar">
         <div className="review-toolbar-left">
           {isCfd ? (
-            <select
-              className="review-symbol-trigger"
-              aria-label="全球市场品种"
+            <CfdSymbolPicker
+              symbols={pickerSymbols}
               value={activeSymbol}
-              onChange={(event) => handleSymbolChange(event.target.value)}
-            >
-              {CFD_SYMBOLS.map((item) => (
-                <option key={item.symbol} value={item.symbol}>{item.name} · {item.symbol}</option>
-              ))}
-            </select>
+              onChange={handleSymbolChange}
+              loading={catalogLoading}
+              warning={catalogWarning}
+              onRefresh={() => setCatalogRefresh((value) => value + 1)}
+            />
           ) : <button
             type="button"
             className="review-symbol-trigger"
@@ -923,6 +1138,8 @@ export function ChartWorkspace({
                 key={tf}
                 type="button"
                 className={activeTimeframe === tf ? 'active' : ''}
+                disabled={Boolean(daySession && !US_DAY_TIMEFRAMES.includes(tf))}
+                title={daySession && !US_DAY_TIMEFRAMES.includes(tf) ? '美股单日复盘支持1m、5m、15m；退出回放后可使用全部周期' : undefined}
                 onClick={() => handleTimeframeChange(tf)}
               >
                 {TIMEFRAME_DISPLAY_MAP[tf]}
@@ -938,8 +1155,11 @@ export function ChartWorkspace({
             symbol={activeSymbol}
             timeframe={activeTimeframe}
             disabled={loading}
+            prefetchEnabled={!loading && !archiveBusy && !previousDay.loading}
             onBegin={() => setReplayState((current) => current.status === 'idle' ? current : { ...current, status: 'paused' })}
             onStart={handleStartReplay}
+            onStartDay={(symbol, session) => handleStartReplay(symbol, session.fromMs,
+              US_DAY_TIMEFRAMES.includes(activeTimeframe) ? activeTimeframe : '1', session)}
           />
           <FreeReplayPanel
             replayState={replayState}
@@ -956,6 +1176,7 @@ export function ChartWorkspace({
         </div>
 
         <div className="review-toolbar-right">
+          {archiveControls}
           {!isCfd && <button
             type="button"
             className={`ui-btn ${showPaperPanel ? 'ui-btn-active' : ''}`}
@@ -985,9 +1206,16 @@ export function ChartWorkspace({
                   : replayState.cursorTimeMs}
                 onJump={(bookmark) => {
                   setActiveTimeframe(bookmark.timeframe);
-                  handleStartReplay(bookmark.symbol, bookmark.timestampMs);
+                  handleStartReplay(bookmark.symbol, bookmark.timestampMs, bookmark.timeframe);
                 }} />
               <div className="review-toolbar-display-options">
+                {isCfd && <button type="button" className={`ui-btn ${showBarCount ? 'ui-btn-active' : ''}`}
+                  aria-pressed={showBarCount} disabled={!daySession}
+                  onClick={() => setShowBarCount((shown) => !shown)}
+                  title="美股单日复盘：纽约09:30起编号，显示2、4、6、8…；切周期后重新计数">
+                  Bar count · 偶数
+                </button>}
+                {!daySession && <>
                 <TradingSessionControl value={sessionBands} onChange={setSessionBands} />
 
                 <button
@@ -999,6 +1227,7 @@ export function ChartWorkspace({
                 >
                   周末时段
                 </button>
+                </>}
 
                 <button
                   type="button"
@@ -1083,10 +1312,32 @@ export function ChartWorkspace({
           {copyingChart ? <RefreshCw size={13} className="spin" /> : <Copy size={13} />}
           <span>{copyingChart ? '复制中' : '复制图表'}</span>
         </button>
+        {isCfd && <button
+          type="button"
+          className="ui-btn review-copy-chart review-export-chart"
+          onClick={exportChart}
+          disabled={exportingChart || loading || visibleCandles.length === 0}
+          title="下载当前 K 线图为 PNG 图片"
+        >
+          {exportingChart ? <RefreshCw size={13} className="spin" /> : <Download size={13} />}
+          <span>{exportingChart ? '导出中' : '导出图片'}</span>
+        </button>}
         {loading && candles.length === 0 && (
           <div className="review-chart-loading">
             <RefreshCw size={20} className="spin" color="var(--accent-blue)" />
             <span>加载 K 线数据中...</span>
+          </div>
+        )}
+        {daySession && !loading && !error && revealedCandles.length === 0 && (
+          <div className="review-chart-loading-chip" role="status">
+            纽约 {daySession.date} 09:30 开盘 · 按右方向键或播放，揭示第一根已收盘 K 线
+          </div>
+        )}
+        {daySession && (previousDay.loading || previousDay.warning || previousDay.emaLoading || previousDay.emaWarning) && (
+          <div className="review-chart-loading-chip" role="status" style={{ top: 58 }}>
+            <span>{previousDay.loading ? '正在加载前一交易日K线与高低点…' : previousDay.warning ||
+              (previousDay.emaLoading ? '正在预热 EMA 20 / 60 / 120…' : previousDay.emaWarning)}</span>
+            {(previousDay.warning || previousDay.emaWarning) && <button type="button" className="ui-btn" onClick={previousDay.retry}>重试</button>}
           </div>
         )}
         {loading && candles.length > 0 && (
@@ -1104,12 +1355,22 @@ export function ChartWorkspace({
 
         <ChartCanvas
           candles={visibleCandles}
+          pricePrecision={cfdPricePrecision}
           candleCountdownMs={candleCountdownMs}
           symbol={activeSymbol}
           interval={activeTimeframe}
           isLogScale={isLogScale}
           themeMode={themeMode}
           focusTimeMs={chartFocusTimeMs}
+          focusAnchorRatio={daySession ? 0.15 : undefined}
+          indicatorScope={market}
+          emaReady={!daySession || (!previousDay.loading && !previousDay.warning && !previousDay.emaLoading && previousDay.candles.length > 0)}
+          emaLoading={Boolean(daySession && previousDay.emaLoading)}
+          emaWarning={daySession ? previousDay.warning || previousDay.emaWarning : null}
+          emaWarmupCandles={daySession ? previousDay.emaCandles : undefined}
+          previousDayCandles={daySession ? previousDay.candles : undefined}
+          barCountSession={showBarCount ? daySession : undefined}
+          fixedPriceRange={dayPriceRange}
           initialVisibleSpan={
             initialLocation?.visibleSpan ?? DEFAULT_REVIEW_VISIBLE_SPAN
           }
@@ -1117,7 +1378,7 @@ export function ChartWorkspace({
           onCrosshairMove={setHoveredCandle}
           onDoubleClickTime={handleDoubleClickTime}
           onViewportAnchorChange={handleViewportAnchorChange}
-          onLoadEarlier={handleLoadEarlier}
+          onLoadEarlier={daySession ? undefined : handleLoadEarlier}
           isLoadingEarlier={isLoadingEarlier}
           onLoadLater={replayState.status === 'idle' ? handleLoadLater : undefined}
           isLoadingLater={isLoadingLater}
@@ -1132,8 +1393,8 @@ export function ChartWorkspace({
           onToggleLockDrawing={toggleLockDrawing}
           onDrawingComplete={handleDrawingComplete}
           showVolume={!isCfd}
-          sessionBands={sessionBands}
-          showWeekendBands={showWeekendBands}
+          sessionBands={daySession ? [] : sessionBands}
+          showWeekendBands={!daySession && showWeekendBands}
         />
       </div>
     </div>

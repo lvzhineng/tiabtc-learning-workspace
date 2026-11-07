@@ -1,5 +1,20 @@
 """SQLite tables for the current workspace features."""
 
+REVIEW_SESSIONS_SCHEMA_SQL = """
+CREATE TABLE IF NOT EXISTS review_sessions (
+    id TEXT PRIMARY KEY,
+    title TEXT NOT NULL,
+    market TEXT NOT NULL CHECK (market IN ('perpetual', 'cfd')),
+    symbol TEXT NOT NULL,
+    state_json TEXT NOT NULL,
+    drawings_json TEXT NOT NULL DEFAULT '[]',
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_review_sessions_market_updated_at
+    ON review_sessions (market, updated_at DESC);
+"""
+
 WORKSPACE_TABLES_SQL = """
 CREATE TABLE IF NOT EXISTS app_settings (
     key TEXT PRIMARY KEY,
@@ -157,6 +172,57 @@ CREATE TABLE IF NOT EXISTS position_fills (
 );
 CREATE INDEX IF NOT EXISTS idx_position_fills_symbol_time
     ON position_fills (venue, chart_symbol, time_ms);
+CREATE TABLE IF NOT EXISTS exness_api_deals (
+    scope TEXT NOT NULL,
+    deal_id TEXT NOT NULL,
+    position_id TEXT,
+    event_time_ms INTEGER NOT NULL,
+    payload_json TEXT NOT NULL,
+    PRIMARY KEY (scope, deal_id)
+);
+CREATE INDEX IF NOT EXISTS idx_exness_api_deals_position
+    ON exness_api_deals (scope, position_id, event_time_ms);
+CREATE TABLE IF NOT EXISTS exness_api_positions (
+    scope TEXT NOT NULL,
+    native_position_id TEXT NOT NULL,
+    position_id TEXT NOT NULL UNIQUE,
+    currency TEXT,
+    PRIMARY KEY (scope, native_position_id)
+);
+CREATE TABLE IF NOT EXISTS exness_import_files (
+    path TEXT PRIMARY KEY,
+    digest TEXT NOT NULL,
+    imported_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS exness_trade_legs (
+    id TEXT PRIMARY KEY,
+    position_id TEXT NOT NULL,
+    exit_time_ms INTEGER NOT NULL,
+    payload_json TEXT NOT NULL,
+    source_modified INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_exness_legs_position_time
+    ON exness_trade_legs (position_id, exit_time_ms);
+CREATE TABLE IF NOT EXISTS exness_market_candles (
+    scope TEXT NOT NULL,
+    symbol TEXT NOT NULL,
+    interval TEXT NOT NULL,
+    timestamp INTEGER NOT NULL,
+    open REAL NOT NULL,
+    high REAL NOT NULL,
+    low REAL NOT NULL,
+    close REAL NOT NULL,
+    PRIMARY KEY (scope, symbol, interval, timestamp)
+);
+CREATE TABLE IF NOT EXISTS exness_market_cache_ranges (
+    scope TEXT NOT NULL,
+    symbol TEXT NOT NULL,
+    interval TEXT NOT NULL,
+    start_timestamp INTEGER NOT NULL,
+    end_timestamp INTEGER NOT NULL,
+    fetched_at REAL NOT NULL,
+    PRIMARY KEY (scope, symbol, interval, start_timestamp, end_timestamp)
+);
 CREATE TABLE IF NOT EXISTS venue_market_candles (
     venue TEXT NOT NULL,
     symbol TEXT NOT NULL,
@@ -209,4 +275,4 @@ CREATE INDEX IF NOT EXISTS idx_bitlang_trade_drawings_scope
     ON bitlang_trade_drawings (trade_id, created_at);
 CREATE INDEX IF NOT EXISTS idx_exchange_positions_entry
     ON exchange_positions (entry_time_ms DESC);
-"""
+""" + REVIEW_SESSIONS_SCHEMA_SQL

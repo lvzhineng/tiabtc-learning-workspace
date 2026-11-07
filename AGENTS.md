@@ -10,7 +10,7 @@
 2. **行情复盘**：查看 Bybit 永续合约历史 K 线、成交量、自由回放、持久化画图和模拟交易。
 3. **bit浪浪实盘分析**：读取导入的历史交割单，左侧选择交易，右侧显示对应 K 线、成交量和开平仓标记。
 4. **仓位复盘**：读取本机保存的 Bitget UTA / Gate 永续 / Gate CFD 只读密钥，手动同步历史仓位与当前持仓，所有交易所仓位汇聚在同一列表，右侧显示对应 K 线、开平仓标记，并支持备注与标签。
-5. **全球市场**：独立读取 Gate 公共 TradFi 行情，首期提供黄金 XAUUSD、纳斯达克100 NAS100、日经225 JPN225，支持自由回放和持久化画图；不显示成交量，不提供模拟交易。数据来源标注「Gate CFD」，内部 tab / API / 缓存键仍使用 `cfd`。
+5. **全球市场**：独立读取 Gate 公共 TradFi 行情，动态读取品种/分类目录，提供分类、跨分类搜索与本机自选收藏；默认隐藏杠杆档位变体。原有黄金 XAUUSD、白银 XAGUSD、纳斯达克100 NAS100、标普500 US500、日经225 JPN225 作为无目录时的回退。支持自由回放和持久化画图；不显示成交量，不提供模拟交易。数据来源标注「Gate CFD」，内部 tab / API / 缓存键仍使用 `cfd`。
 
 默认入口是顺序学习。项目只保留 React/Vite 前端入口，不要重新引入旧版独立 HTML 页面。不要把仓位复盘与 bit浪浪交割单、模拟交易混为一类。
 
@@ -53,10 +53,11 @@ Python 后端是纯 API 服务。禁止恢复项目目录静态文件服务；�
 
 - **加密货币行情复盘 / bit浪浪 / 顺序学习进复盘** 的 K 线唯一在线来源仍是 **CCXT 封装的 Bybit USDT 永续合约**。这些 K 线不得改走非 CCXT 源。
 - **GC 黄金期货已退役**：不恢复入口、样本自动下载或运行时 GC 分支；旧 `gc_candles` 与 GC 画线保留，不迁移成 CFD。
-- **全球市场（CFD）** 独立顶部入口读取 Gate 公共 `/tradfi/symbols/{symbol}/klines`，不走 Gate 永续或私有账户接口；只写 `cfd_candles` / `cfd_cache_ranges`，休市空区间记为已查询范围，不作为加密连续行情缺口修复。每页最多500根，单次响应最多3000根；5m 优先原生，只有明确不支持时才由1m聚合。
+- **全球市场（CFD）** 独立顶部入口读取 Gate 公共 `/tradfi/symbols/{symbol}/klines`，不走 Gate 永续或私有账户接口；只写 `cfd_candles` / `cfd_cache_ranges`，休市空区间记为已查询范围，不作为加密连续行情缺口修复。每页最多500根，单次响应最多3000根；5m 优先原生，只有明确不支持时才由1m聚合。品种目录走公共 `/tradfi/symbols` 与 `/tradfi/symbols/categories`，共用行情请求锁/限频，缓存一小时、手动刷新间隔至少60秒；`.run/cfd-symbols.json` 保存最近目录及历史已知品种，不引入数据库迁移。不得按休市状态删除品种，不推断或截断杠杆后缀；单字母股票代码有效。目录扩展必须同步兼容画线、书签、偏好及复盘档案校验。
 - **OI/CVD 已退役**：不要恢复行情复盘 OI/CVD 开关、副图、`GET /api/chart/flow` 或启动预热。旧 `market_oi_*` / `market_cvd_*` 表若已存在则保留历史数据；新库不再创建，也不再自动更新。
 - 上述三个入口的 K 线共用 `market_candles` 和 `market_cache_ranges`。
 - **仓位复盘** K 线规则：
+  - Exness 文件导入仓位优先走独立 Exness 原生行情，见下文；BTCUSD 不走 Bybit；
   - `BTCUSDT` / `ETHUSDT` 走 Bybit（现有 `market_candles` / `market_cache_ranges`）；
   - 其余合约走该仓位所属交易所（Bitget 或 Gate），写入独立表 `venue_market_candles` / `venue_market_cache_ranges`，禁止与 Bybit 缓存混写；
   - 本所拉取失败且 Bybit 目录确认有该合约时，再回退 Bybit 并在响应 `warning` 中说明；前端窗口缓存 key 必须带 candle venue，避免 Bitget/Gate 同名合约混写。
@@ -89,6 +90,8 @@ Python 后端是纯 API 服务。禁止恢复项目目录静态文件服务；�
 - 双击 K 线用于定位对应时间，不要覆盖该交互。
 - 进入行情复盘页面并完成首屏 K 线加载后，键盘 `ArrowRight` 必须可以直接开始或推进自由回放，不要求先点击图表、工具栏或回放按钮获取焦点。
 - 尚未进入回放时，首次按 `ArrowRight` 应以图表当前定位时间为起点进入自由回放；已有回放上下文时，每次按键推进下一根 K 线。焦点位于输入框、文本域或下拉框时不得触发该快捷键。
+- 共享图表指标为 EMA 20 / 60 / 120，由 `EmaIndicators.tsx` 管理三条线与十字线数值，图例支持逐条/全部显隐及折叠，偏好按 perpetual/cfd/position/bitlang 隔离保存。兼容旧 `showEma20`，不得记忆加载或错误状态。显隐只更改系列 visible，不重建图表、不恢复旧视口；图例避让 OHLC 读数与悬浮画图工具栏，交互不得误触回放或画图。
+- EMA 仅计算调用方传入的已揭示 K 线；追加增量计算，回退/历史更正/裁切重算，十字线取值为 O(1) 时间查询。美股单日预热使用此前常规时段同周期K线，目标120根、最多10个交易时段，兼容半日；缺失不跳过凑数，不含当日未来、盘前或盘后。预热线只作为种子，不向图表新增时间点，12000根活动图表上限继续生效。
 
 ### 3.4 画图
 
@@ -115,12 +118,23 @@ Python 后端是纯 API 服务。禁止恢复项目目录静态文件服务；�
 - 画图按交割单 `id` 持久化到 `bitlang_trade_drawings`；刷新后仍在，切换周期保留，切换交易隔离。禁止写入 `chart_drawings` / `position_drawings`。
 - 看板时间窗按快照最晚开仓时间裁切，不要用 `Date.now()`。
 
-### 3.6 仓位复盘（Bitget UTA + Gate）
+### 3.6 仓位复盘（Bitget UTA + Gate + Exness文件）
+
+- **Exness 本机CSV（兼容入口）**：`exness_importer.py` 在未连接API时于启动时及每30秒检查项目相对目录 `data/exness/*.csv`，可手动「检查文件」；API连接后停止自动扫描。只读取单一账户的 Exness UTC 导出，交易记录导入本机。`venue=exness`，按 ticket 聚合仓位、按实际平仓明细保留分批平仓；文件哈希与明细签名去重，异常文件整笔事务回滚，原始文件只读且 gitignore。无成交ID时无法可靠识别历史明细的价格/时间更正，冲突需人工核对，不删除旧明细。
+- Exness 新增 `exness_import_files` / `exness_trade_legs` 两张表；仓位、备注、标签、画线复用既有表并按 `(exness, position_id)` 隔离。停用导入代码即可回滚功能，保留导入数据；不影响其他来源。
+- **Exness API 交易同步**：`exness_position_sync.py` 复用已保存连接和签名 GET 通道，读取 limits、成交历史与当前持仓快照；统一手动同步，沿用409锁，无后台私有账户轮询。按平台历史年龄/时间窗限制分页增量读取，成交ID去重，分批平仓按原生position_id归属。新增 `exness_api_deals` / `exness_api_positions` 辅助表，不删除旧仓位、备注、标签、画线或文件；旧CSV仅严格核对ID、品种、方向、开仓时间/价格/手数后关联。连接后停用自动文件扫描，已API关联的仓位不得被CSV覆盖。回滚停用同步代码，保留两表和已同步数据。
+- **Exness 原生行情**：`exness_market_provider.py` 仅签名 GET，不含交易写接口。按实际品种请求原生 Bid K线，不硬编码仅支持BTC/黄金。官方暂不支持的指数通过明确映射（USTEC→NAS100、US500→US500、JP225→JPN225）使用 Gate CFD 参考行情，缓存只写CFD表，响应与界面持续说明报价差异；成交价和盈亏仍属Exness。其它品种不猜测映射、不回退Bybit。`BTCUSDT` / `NAS100` 仅作为已有仓位/画线的内部别名保留，不更写历史行；界面显示原始 Exness 品种。
+- Exness 连接走 `/api/position-review/exness-connection`，验证成功后沿用 Fernet 将密钥写入 `app_settings`；GET 仅返回 configured/currency/marketKey。Gateway 仅接受官方 API 管理页主/替代域名，发现后只允许 HTTPS Exness 接入点，不转发鉴权重定向。全局请求串行限频，429不自动循环重试；前端独立连接面板，连接后加入统一手动同步。
+- Exness 余额快照通过 `app_settings.exness_balance_scope` 标注账户来源，状态只展示当前连接匹配的权益；旧快照在首次保存连接前补记原账户范围，兼容已有数据，也防止旧账户延迟同步串入新账户。不新增表、不改历史仓位；回滚可停用范围判断并保留该设置键。
+- `exness_replay_data.py` 只增量写 `exness_market_candles` / `exness_market_cache_ranges`，按账户网关派生scope、原始品种、周期隔离；前端缓存使用响应的 `exness:` scope，禁止与其它平台混写。最多1000根分页、单次3000根、图表12000根；只取交易附近和指标预热窗口，休市空段不补造。未收盘原生K线可显示、30秒复用，但不记为永久覆盖范围；过滤上游多返的结束边界K线。停用接入代码即可回滚功能，已有行情与画线保留。
+- Exness 图表隐藏成交量，成交时间/价格沿用真实成交，Bid图与Ask成交可有点差。API记录携带账户币种，未关联CSV显示文件原值/未标注币种；不推算净盈亏、杠杆、保证金或ROI，连接账户币种不擅自视为所有CSV的币种。CSV或API只有部分平仓时不将仓位标成已完全平仓。
+- **Exness USD 统计特例**：按用户约定，明确标注为 USD 的 Exness 交易及账户权益按 1 USD = 1 USDT 并入 USDT 汇总。仅统计分组使用 `positionStatisticsCurrency`，原币种显示继续使用 `positionCurrency` / `positionCurrencyLabel`；禁止回写原始币种、盈亏、费用或数据库。侧栏总计、看板金额及曲线、周期对比、日历、标签、品种榜与权益采用一致口径，并提供说明。Gate CFD 的 USD、Exness 其它币种及币种未知的 CSV 继续单列，不擅自推算未知数据。无需迁移；回滚前端代码即可恢复原币种分组。
+- 仓位复盘连接配置统一放在「账户管理」抽屉，平台配置、本机文件检查和缓存审计按需展开；Exness 已配置状态和笔数不常驻侧栏。抽屉打开时背景 inert、焦点限制在抽屉内，关闭后恢复焦点并清空未保存凭据；不记忆弹窗或密钥草稿。同步时间放按钮提示，异常保留简短入口查看详情。
 
 - **Gate CFD / TradFi** 为独立仓位来源 `venue=gate-cfd`，复用仓位复盘入口与既有仓位表，不新增顶部入口。私有账户适配在 `gate_cfd_position_provider.py`，仅调用签名 GET `/tradfi/positions`、`/tradfi/positions/history`、`/tradfi/users/assets`；当前 CCXT 不支持 TradFi，使用 Gate APIv4 HMAC-SHA512 鉴权，无账户写接口。
 - CFD 密钥单独 Fernet 加密保存为 `gate-cfd_api_key_enc` / `gate-cfd_api_secret_enc`，不隐式启用已配置的 Gate 永续密钥；GET 只返回 `venues['gate-cfd']`。历史查询最多一个月，已同步记录持续保留；手动同步与现有 409 锁共用。
-- CFD 仓位 K 线只走 Gate 公共 TradFi，复用 `cfd_candles` / `cfd_cache_ranges`，允许已同步仓位的其它 CFD 品种；全球市场仍保留三个品种目录。休市不补造 K 线、不修复连续缺口、无成交量、不回退 Bybit；3000 根响应与 12000 根图表上限继续生效。
-- CFD 数量为手，盈亏及账户权益为 USD；列表与看板不得与 USDT 汇总相加。看板按加密永续 / CFD 分开统计。未知历史杠杆 / 保证金不推算，CFD 不套用永续 ROI 公式。不从开平仓摘要合成分批成交。
+- CFD 仓位 K 线只走 Gate 公共 TradFi，复用 `cfd_candles` / `cfd_cache_ranges`，允许已同步仓位的其它 CFD 品种；全球市场使用公共动态品种目录并保留历史已知品种。休市不补造 K 线、不修复连续缺口、无成交量、不回退 Bybit；3000 根响应与 12000 根图表上限继续生效。
+- CFD 数量为手，盈亏及账户权益为 USD；列表与看板不得与 USDT 汇总相加。看板默认全部平台、全部历史，交易统一展示，金额按实际币种统计，金额图表可选币种，不能按平台默认隐藏交易。未知历史杠杆 / 保证金不推算，CFD 不套用永续 ROI 公式。不从开平仓摘要合成分批成交。
 - CFD 仓位沿用稳定 MT5 `position_id`，禁止按近似开仓时间迁移其他 CFD 仓位的备注。备注 / 标签 / 画图均按 `(gate-cfd, position_id)` 保存；画图写 `position_drawings`，禁止写全球市场 `cfd_drawings`。无需建表或迁移历史数据；回滚停用代码即可，新记录保留。
 
 - 仓位复盘顶部入口由 `AppShell.tsx` 的 `positions` tab 管理；默认入口仍是顺序学习。
@@ -137,7 +151,7 @@ Python 后端是纯 API 服务。禁止恢复项目目录静态文件服务；�
 - 领域对象需带 `venue`；图表 symbol 使用紧凑 USDT 形式（如 `BTCUSDT`、`INTCUSDT`）。
 - Gate 开仓杠杆优先读 `lever`，否则逐仓读 `leverage`、全仓读 `cross_leverage_limit`。已平仓历史接口不含杠杆时允许为空，并从匹配的开仓行继承。
 - 仓位画图走 `/api/position-review/drawings`，写入 `position_drawings`；禁止写入 `chart_drawings` / `bitlang_trade_drawings`。
-- 不做 CSV 导入或 AI 分析；再扩展其他交易所前必须单独评估 CCXT 能力与鉴权差异。
+- 除上述 Exness 本机CSV外，不扩展其它文件导入或 AI 分析；再扩展其他交易所前必须单独评估 CCXT 能力与鉴权差异。
 
 ## 4. 数据安全
 
@@ -189,6 +203,8 @@ Python 后端是纯 API 服务。禁止恢复项目目录静态文件服务；�
 | `performance_metrics.py` | 后端最多 200 条的内存性能记录，不保存载荷或密钥 |
 | `market_data_provider.py` | CCXT Bybit 行情适配、代理、限频与永续目录 |
 | `gate_cfd_provider.py` | Gate 公共 CFD 行情适配、限频与原生周期/5m备用聚合 |
+| `exness_market_provider.py` | Exness只读Ed25519签名、账户接入点发现和原生Bid K线 |
+| `exness_replay_data.py` | Exness按账户/品种/周期隔离的窗口缓存、分页与左右延展 |
 | `cfd_replay_data.py` | CFD 独立行情范围缓存、历史分页与按品种持久化画图 |
 | `bitget_position_provider.py` | CCXT Bitget UTA 只读仓位/余额与仓位复盘 K 线 |
 | `gate_position_provider.py` | CCXT Gate USDT 永续只读仓位/余额、杠杆与仓位复盘 K 线 |
@@ -197,6 +213,8 @@ Python 后端是纯 API 服务。禁止恢复项目目录静态文件服务；�
 | `workspace_config.py` | Gate/Bitget 邀请链接：defaults、local、env、设置页覆盖 |
 | `web/src/app/AppShell.tsx` | 五个工作台导航、主题和连接状态 |
 | `web/src/chart/ChartCanvas.tsx` | K 线、成交量、视口、十字线和边界加载 |
+| `web/src/chart/EmaIndicators.tsx` / `ema.ts` / `ema-preferences.ts` | EMA 20/60/120 的增量计算、显隐、十字线值与分工作台偏好 |
+| `web/src/chart/EmaIndicatorLegend.tsx` | 指标图例、逐条/全部显隐、折叠与画图工具栏避让 |
 | `web/src/chart/chart-time.ts` | 毫秒/秒边界转换和北京时间格式化 |
 | `web/src/features/review-workspace/ChartWorkspace.tsx` | 行情与视频复盘组合 |
 | `web/src/features/review-workspace/useDrawingWorkspace.ts` | server/memory/position/bitlang/cfd 五种画图模式 |
@@ -264,13 +282,13 @@ Python 后端是纯 API 服务。禁止恢复项目目录静态文件服务；�
 15. 仓位复盘账户看板可进入；日记跳转切回 K 线并居中。
 16. 过长 1m 仓位出现截断提示，不一次拉全历史。
 17. 同步进行中再次同步显示冲突（409），页面不被打挂。
-18. 密钥面板「审计回退缓存」只读、不改库。
+18. 账户管理内「审计回退缓存」只读、不改库。
 19. 全局确认框打开时后台不可操作。
 20. bit浪浪：点击交易后开平仓区间居中；复盘详情抽屉可开关；复制图表可用；画图按交易持久化，刷新后仍在。
 21. bit浪浪：本机备注/标签可保存且不覆盖交割单原始备注；看板可进入；日记跳转切回 K 线并居中。
 22. 列表翻页、筛选、排序、周期和内部视图在刷新/重启后恢复；失效的交易对、标签或越界页码安全回退，且本机存储中不出现密钥和编辑草稿。
 23. 行情复盘双击切入自由复盘后，刷新仍保留回放起点、当前揭示时间和速度（自动播放按暂停恢复），未来 K 线继续隐藏；退出自由回放后刷新不得重新进入回放。
 24. 顺序学习可粘贴非 Tia 频道/播放列表并导入为按发布时间排序的清单；Tia 是「示例模板 / Tia」一键填入，不是唯一入口。同一来源刷新增量合并，已有标题与发布时间不被覆盖。
-25. 仓位复盘连接密钥面板显示邀请披露（不只写「支持作者」）；CTA 链接随设置 / `config.local.json` / 环境变量变化。未配置时说明如何填写。README 有 MIT 许可与支持作者说明。
+25. 仓位复盘账户管理中，平台连接展开后显示邀请披露（不只写「支持作者」）；CTA 链接随设置 / `config.local.json` / 环境变量变化。未配置时说明如何填写。README 有 MIT 许可与支持作者说明。
 26. 仓位列表极端 ROI（`|roi| ≥ 999%`）只改展示为 `>±999%`，不改盈亏数字。
-27. CFD 三个品种与七个周期可切换；无成交量副图/读数、无模拟交易入口或请求；休市不造 K 线，右方向键推进实际行情；画图刷新/跨周期保留、切品种隔离；CFD 记忆与永续隔离；GC 不再触发样本下载。
+27. CFD 动态目录各分类与七个周期可切换；下拉支持跨分类搜索、自选收藏与本机记忆，杠杆变体默认隐藏，单字母股票可收藏；目录离线/失败回退，历史品种仍可读；无成交量副图/读数、无模拟交易入口或请求；休市不造 K 线，右方向键推进实际行情；画图刷新/跨周期保留、切品种隔离；CFD 记忆与永续隔离；GC 不再触发样本下载。

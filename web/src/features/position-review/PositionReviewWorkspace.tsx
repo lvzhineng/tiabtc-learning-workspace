@@ -19,6 +19,7 @@ import {
 } from 'lucide-react';
 import {
   fetchPositionReviewState,
+  fetchExnessImportStatus,
   fetchVenueCacheAudit,
   savePositionReviewCredentials,
   syncPositionReview,
@@ -26,6 +27,7 @@ import {
 import { ReviewPagination } from '@/ui/navigation/ReviewPagination';
 import { PositionReviewToolbar } from './PositionReviewToolbar';
 import { PositionReviewCredentialsModal } from './PositionReviewCredentialsModal';
+import { PositionAccountDrawer } from './PositionAccountDrawer';
 import {
   REVIEW_TIMEFRAMES,
   TIMEFRAME_DISPLAY_MAP,
@@ -39,17 +41,21 @@ import {
 import { PositionDashboardWorkspace } from '@/features/position-dashboard/PositionDashboardWorkspace';
 import { toast } from '@/ui/feedback/toast';
 import { writeLocalUiState } from '@/ui/persistence/local-ui-state';
+import { buildSymbolCountOptions } from '@/ui/symbol-count-options';
 import type {
   PositionReviewCredentialInput,
+  PositionReviewState,
   PositionReviewVenues,
   PositionTag,
   ReviewPosition,
   ReviewVenue,
 } from './position-review-types';
-import { positionKey, positionPnl, positionCurrency, venueLabel } from './position-review-types';
+import { positionKey, positionPnl, positionStatisticsCurrency, positionCurrencyLabel, venueLabel, isExnessUsdPosition, EXNESS_USD_STATISTICS_HINT } from './position-review-types';
 import { summarizePositions } from './position-stats';
 import { PositionReviewChart } from './PositionReviewChart';
 import { PositionReviewPanel } from './PositionReviewPanel';
+import { ExnessMarketConnectionPanel } from './ExnessMarketConnectionPanel';
+import type { ExnessMarketConnectionState } from '@/api/exness-market-api';
 import {
   DATE_RANGE_MS_MAP,
   POSITION_REVIEW_UI_STORAGE_KEY,
@@ -126,7 +132,9 @@ const PositionReviewListItem = memo(function PositionReviewListItem({
       >
         <div className="posrev-row-top">
           <div className="posrev-row-sym">
-            <strong>{item.chartSymbol}</strong>
+            <strong>
+              {item.venue === 'exness' ? item.unifiedSymbol : item.chartSymbol}
+            </strong>
             <span className={`posrev-exchange-badge ${item.venue}`}>
               {venueLabel(item.venue)}
             </span>
@@ -172,8 +180,9 @@ const PositionReviewListItem = memo(function PositionReviewListItem({
             )}
           </div>
           <div className="posrev-row-pnl">
-            <strong className={pnl >= 0 ? 'profit' : 'loss'}>
-              {item.venue === 'gate-cfd' && item.netPnl == null ? '—' : `${pnl >= 0 ? '+' : ''}${formatNumber(pnl)}`} {positionCurrency(item)}
+            <strong className={pnl >= 0 ? 'profit' : 'loss'}
+              title={item.venue === 'exness' && !item.currency ? '历史文件金额，币种待 Exness API 核对' : undefined}>
+              {item.venue === 'gate-cfd' && item.netPnl == null ? '—' : `${pnl >= 0 ? '+' : ''}${formatNumber(pnl)}`} {positionCurrencyLabel(item)}
             </strong>
             {roi != null && (
               <span
@@ -202,18 +211,29 @@ export function PositionReviewWorkspace({
   const [syncedAt, setSyncedAt] = useState<string | null>(null);
   const [balanceTotal, setBalanceTotal] = useState<number | null>(null);
   const [cfdBalanceTotal, setCfdBalanceTotal] = useState<number | null>(null);
+  const [exnessBalance, setExnessBalance] = useState<{ total: number | null; currency: string | null } | null>(null);
   const [positions, setPositions] = useState<ReviewPosition[]>([]);
   const [tags, setTags] = useState<PositionTag[]>([]);
   const [loading, setLoading] = useState(true);
   const [syncing, setSyncing] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [showCredentials, setShowCredentials] = useState(false);
+  const [showAccounts, setShowAccounts] = useState(false);
   const [savingVenue, setSavingVenue] = useState<ReviewVenue | null>(null);
   const [auditingCache, setAuditingCache] = useState(false);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
+  const [exnessImport, setExnessImport] = useState<PositionReviewState['exnessImport']>();
+  const [exnessMarket, setExnessMarket] = useState<ExnessMarketConnectionState>({ configured: false, currency: null, marketKey: null });
+  const [exnessSyncSupported, setExnessSyncSupported] = useState(false);
+  const [exnessConnecting, setExnessConnecting] = useState(false);
+  const exnessDetailsRef = useRef<HTMLDetailsElement>(null);
+  const [exnessMarketRevision, setExnessMarketRevision] = useState(0);
+  const [checkingFiles, setCheckingFiles] = useState(false);
+  const importedAtRef = useRef<string | null>(null);
+  const importCheckPendingRef = useRef(false);
 
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.defaultPrevented || document.querySelector('[aria-modal="true"]')) return;
       if (e.key === '[') {
         const target = e.target as HTMLElement | null;
         if (
@@ -294,27 +314,24 @@ export function PositionReviewWorkspace({
   const previousFilterSignatureRef = useRef(filterSignature);
 
   const applyState = useCallback(
-    (state: {
-      configured: boolean;
-      venues?: PositionReviewVenues;
-      syncedAt: string | null;
-      balance: { total: number | null } | null;
-      balances?: { 'gate-cfd'?: { total: number | null } | null };
-      positions: ReviewPosition[];
-      tags: PositionTag[];
-    }) => {
+    (state: PositionReviewState) => {
       setConfigured(state.configured);
+      setExnessSyncSupported(typeof state.venues?.exness === 'boolean');
       setVenues({
         bitget: Boolean(state.venues?.bitget),
         gate: Boolean(state.venues?.gate),
         'gate-cfd': Boolean(state.venues?.['gate-cfd']),
+        exness: Boolean(state.venues?.exness),
       });
       setSyncedAt(state.syncedAt);
       setBalanceTotal(state.balance?.total ?? null);
       setCfdBalanceTotal(state.balances?.['gate-cfd']?.total ?? null);
+      setExnessBalance(state.balances?.exness ?? null);
       setPositions(state.positions);
       setTags(state.tags);
-      setShowCredentials(!state.configured);
+      setExnessImport(state.exnessImport);
+      setExnessMarket(state.exnessMarket ?? { configured: false, currency: null, marketKey: null });
+      importedAtRef.current = state.exnessImport?.importedAt ?? null;
     },
     []
   );
@@ -341,6 +358,48 @@ export function PositionReviewWorkspace({
     };
   }, [applyState]);
 
+  useEffect(() => {
+    if (exnessMarket.configured) return;
+    let cancelled = false;
+    let pending = false;
+    const timer = window.setInterval(async () => {
+      if (pending || importCheckPendingRef.current) return;
+      pending = true;
+      try {
+        const status = await fetchExnessImportStatus();
+        if (cancelled) return;
+        setExnessImport(status);
+        if (status.importedAt !== importedAtRef.current) {
+          const state = await fetchPositionReviewState();
+          if (!cancelled) applyState(state);
+        }
+      } catch {
+        // The normal connection indicator handles unavailable backend services.
+      } finally {
+        pending = false;
+      }
+    }, 30_000);
+    return () => { cancelled = true; window.clearInterval(timer); };
+  }, [applyState, exnessMarket.configured]);
+
+  const handleCheckFiles = async () => {
+    if (importCheckPendingRef.current) return;
+    importCheckPendingRef.current = true;
+    setCheckingFiles(true);
+    try {
+      const status = await fetchExnessImportStatus(true);
+      if (status.importedAt !== importedAtRef.current) applyState(await fetchPositionReviewState());
+      else setExnessImport(status);
+      if (status.warning) toast.warning(status.warning);
+      else toast.success(`Exness：${status.positionCount} 笔仓位，${status.legCount} 条平仓明细`);
+    } catch (cause) {
+      toast.error(cause instanceof Error ? cause.message : '检查Exness文件失败');
+    } finally {
+      importCheckPendingRef.current = false;
+      setCheckingFiles(false);
+    }
+  };
+
   const symbols = useMemo(() => {
     return [...new Set(positions.map((item) => item.chartSymbol))].sort();
   }, [positions]);
@@ -358,18 +417,17 @@ export function PositionReviewWorkspace({
     }
   }, [loading, symbolFilter, symbols, tagFilter, tags]);
 
-  const filtered = useMemo(() => {
+  const symbolFilterCandidates = useMemo(() => {
     const query = deferredSearch.trim().toLowerCase();
     const tagId = tagFilter === 'all' ? null : Number(tagFilter);
     const cutoffMs =
       dateRange === 'all' ? 0 : Date.now() - DATE_RANGE_MS_MAP[dateRange];
 
-    const next = positions.filter((item) => {
+    return positions.filter((item) => {
       if (cutoffMs > 0) {
         const tradeTime = item.exitTimeMs || item.entryTimeMs;
         if (tradeTime < cutoffMs) return false;
       }
-      if (symbolFilter !== 'all' && item.chartSymbol !== symbolFilter) return false;
       if (venueFilter !== 'all' && item.venue !== venueFilter) return false;
       if (side !== 'all' && item.side !== side) return false;
       if (status !== 'all' && item.status !== status) return false;
@@ -388,6 +446,20 @@ export function PositionReviewWorkspace({
       }
       return true;
     });
+  }, [
+    dateRange, deferredSearch, noNote, noTag, positions, result, side,
+    status, tagFilter, tags, venueFilter,
+  ]);
+
+  const symbolOptions = useMemo(
+    () => buildSymbolCountOptions(symbolFilterCandidates, (item) => item.chartSymbol, symbols),
+    [symbolFilterCandidates, symbols]
+  );
+
+  const filtered = useMemo(() => {
+    const next = symbolFilterCandidates.filter((item) =>
+      symbolFilter === 'all' || item.chartSymbol === symbolFilter
+    );
     next.sort((left, right) => {
       const leftValue =
         sortField === 'netPnl' ? positionPnl(left) : left.entryTimeMs;
@@ -399,20 +471,10 @@ export function PositionReviewWorkspace({
     const closed = next.filter((item) => item.status !== 'open');
     return [...open, ...closed];
   }, [
-    dateRange,
-    deferredSearch,
     descending,
-    noNote,
-    noTag,
-    positions,
-    result,
-    side,
+    symbolFilterCandidates,
     sortField,
-    status,
     symbolFilter,
-    tagFilter,
-    tags,
-    venueFilter,
   ]);
 
   useEffect(() => {
@@ -432,6 +494,13 @@ export function PositionReviewWorkspace({
     pageTrades[0] ||
     null;
   const selectedPnl = selected ? positionPnl(selected) : 0;
+
+  useEffect(() => {
+    if (loading || !selectedId || selectedId.includes('::')) return;
+    const legacyMatches = positions.filter((item) => item.positionId === selectedId);
+    // A bare ID from older single-venue preferences is only safe when unique.
+    setSelectedId(legacyMatches.length === 1 ? positionKey(legacyMatches[0]) : null);
+  }, [loading, positions, selectedId]);
 
   useEffect(() => {
     if (!loading && page !== safePage) setPage(safePage);
@@ -583,9 +652,9 @@ export function PositionReviewWorkspace({
   }, [page, selected]);
 
   const stats = useMemo(() => summarizePositions(filtered), [filtered]);
-  const pnlByCurrency = useMemo(() => ['USDT', 'USD'].map((currency) => ({
+  const pnlByCurrency = useMemo(() => [...new Set(filtered.map(positionStatisticsCurrency))].map((currency) => ({
     currency,
-    positions: filtered.filter((item) => positionCurrency(item) === currency),
+    positions: filtered.filter((item) => positionStatisticsCurrency(item) === currency),
   })).filter((group) => group.positions.length).map((group) => ({
     currency: group.currency, stats: summarizePositions(group.positions),
   })), [filtered]);
@@ -627,8 +696,9 @@ export function PositionReviewWorkspace({
       applyState(state);
       const warning = typeof state.warning === 'string' ? state.warning.trim() : '';
       if (warning) {
+        setError(warning);
         toast.warning(
-          `同步完成，共获取 ${state.positions.length} 笔仓位。${warning}`,
+          `同步有提示，已保留 ${state.positions.length} 笔仓位。${warning}`,
           6000
         );
       } else {
@@ -725,13 +795,6 @@ export function PositionReviewWorkspace({
         <div className="bitlang-sidebar-title">
           <div>
             <strong>仓位复盘</strong>
-            <span>
-              {[venues.bitget && 'Bitget', venues.gate && 'Gate', venues['gate-cfd'] && 'Gate CFD']
-                .filter(Boolean)
-                .join(' · ') || '未配置交易所'}
-              {balanceTotal != null ? ` · ${formatNumber(balanceTotal)} USDT` : ''}
-              {cfdBalanceTotal != null ? ` · CFD ${formatNumber(cfdBalanceTotal)} USD` : ''}
-            </span>
           </div>
           <div className="posrev-view-switch">
             <button
@@ -768,7 +831,7 @@ export function PositionReviewWorkspace({
           isSyncStale={isSyncStale}
           error={error}
           onSync={handleSync}
-          onToggleCredentials={() => setShowCredentials((v) => !v)}
+          onManageAccounts={() => setShowAccounts(true)}
           search={search}
           onSearchChange={setSearch}
           side={side}
@@ -787,7 +850,7 @@ export function PositionReviewWorkspace({
           onDateRangeChange={setDateRange}
           symbolFilter={symbolFilter}
           onSymbolFilterChange={setSymbolFilter}
-          symbols={symbols}
+          symbolOptions={symbolOptions}
           sortField={sortField}
           onSortFieldChange={setSortField}
           descending={descending}
@@ -803,15 +866,12 @@ export function PositionReviewWorkspace({
           onToggleWeekendBands={() => setShowWeekendBands((v) => !v)}
         />
 
-        <PositionReviewCredentialsModal
-          isOpen={showCredentials}
-          venues={venues}
-          savingVenue={savingVenue}
-          auditingCache={auditingCache}
-          onClose={() => setShowCredentials(false)}
-          onSaveCredentials={handleSaveCredentials}
-          onAuditCache={handleCacheAudit}
-        />
+        {exnessImport?.warning && (
+          <details className="posrev-import-warning">
+            <summary>Exness 文件导入有提示 · 查看详情</summary>
+            <p>{exnessImport.warning}</p>
+          </details>
+        )}
 
         <div className="bitlang-progress posrev-stats-bar">
           <div className="posrev-stat-item">
@@ -824,8 +884,8 @@ export function PositionReviewWorkspace({
               <strong>{stats.count} 笔</strong>
             </div>
           )}
-          {pnlByCurrency.map((group) => <div key={group.currency} className="posrev-stat-item" title="已平仓净盈亏累计，不含当前持仓未实现盈亏">
-            <span>总盈亏</span>
+          {pnlByCurrency.map((group) => <div key={group.currency} className="posrev-stat-item" title={`已平仓利润累计；未提供净盈亏时使用已实现利润，不含当前持仓浮盈亏${group.currency === 'USDT' && filtered.some(isExnessUsdPosition) ? `；${EXNESS_USD_STATISTICS_HINT}` : ''}`}>
+            <span>{group.currency === '未标注币种' ? '文件利润' : '总盈亏'}</span>
             <strong className={group.stats.totalPnl >= 0 ? 'profit' : 'loss'}>
               {group.stats.totalPnl >= 0 ? '+' : ''}{formatNumber(group.stats.totalPnl)} {group.currency}
             </strong>
@@ -881,6 +941,49 @@ export function PositionReviewWorkspace({
         </div>
       </aside>
 
+      <PositionAccountDrawer open={showAccounts} onClose={() => setShowAccounts(false)}
+        busy={savingVenue !== null || exnessConnecting || auditingCache || checkingFiles}>
+        <div className="posrev-account-overview">
+          <p>{syncedAt ? `上次同步 ${formatShanghaiTime(Date.parse(syncedAt))}` : '尚未同步账户'}</p>
+          {isSyncStale && <p className="posrev-account-notice">上次同步超过24小时，可关闭此面板后手动同步。</p>}
+          {balanceTotal != null && <span>永续账户权益 · {formatNumber(balanceTotal)} USDT</span>}
+          {cfdBalanceTotal != null && <span>Gate CFD 权益 · {formatNumber(cfdBalanceTotal)} USD</span>}
+          {exnessBalance?.total != null && <span>Exness 权益 · {formatNumber(exnessBalance.total)} {exnessBalance.currency || '未标注币种'}</span>}
+          <small title={EXNESS_USD_STATISTICS_HINT}>统计口径：Exness USD 与 USDT 按 1:1 合并。</small>
+        </div>
+        <details ref={exnessDetailsRef} className="posrev-account-section">
+          <summary>Exness <span>{exnessMarket.configured ? '已配置' : '未连接'} · {positions.filter((item) => item.venue === 'exness').length} 笔交易</span></summary>
+          {exnessMarket.configured && !exnessSyncSupported && <p className="posrev-account-notice">重启后端以启用 Exness 交易同步。</p>}
+          {positions.some((item) => item.venue === 'exness' && !item.currency) && <p className="posrev-account-notice">历史文件金额保留原值，未标注币种的记录待 API 核对后才合并统计。</p>}
+          <ExnessMarketConnectionPanel state={exnessMarket}
+            onSavingChange={setExnessConnecting}
+            onClose={() => { if (exnessDetailsRef.current) exnessDetailsRef.current.open = false; }}
+            onConnected={(state) => {
+              if (state.marketKey !== exnessMarket.marketKey) setExnessBalance(null);
+              setExnessMarket(state);
+              if (exnessSyncSupported) {
+                setConfigured(true);
+                setVenues((current) => ({ ...current, exness: true }));
+              }
+              setExnessMarketRevision((value) => value + 1);
+              if (exnessDetailsRef.current) exnessDetailsRef.current.open = false;
+            }} />
+          {!exnessMarket.configured && (
+            <details className="posrev-account-file-tools">
+              <summary>本机 CSV 文件</summary>
+              <p>未连接 API 时，可检查本机 Exness 导出文件。</p>
+              <button type="button" disabled={checkingFiles} onClick={() => void handleCheckFiles()}>
+                <RefreshCw size={12} />{checkingFiles ? '检查中' : '检查文件'}
+              </button>
+            </details>
+          )}
+          {exnessImport?.warning && <p className="posrev-account-notice">{exnessImport.warning}</p>}
+        </details>
+        <PositionReviewCredentialsModal isOpen={showAccounts} embedded
+          venues={venues} savingVenue={savingVenue} auditingCache={auditingCache}
+          onClose={() => setShowAccounts(false)} onSaveCredentials={handleSaveCredentials} onAuditCache={handleCacheAudit} />
+      </PositionAccountDrawer>
+
       {viewMode === 'dashboard' ? (
         <section className="bitlang-chart-workspace posrev-dashboard-pane">
           <PositionDashboardWorkspace
@@ -890,6 +993,8 @@ export function PositionReviewWorkspace({
             configured={configured}
             balanceTotal={balanceTotal}
             cfdBalanceTotal={cfdBalanceTotal}
+            exnessBalanceTotal={exnessBalance?.total}
+            exnessBalanceCurrency={exnessBalance?.currency}
             syncing={syncing}
             onSync={handleSync}
             onNoteUpdated={(positionId, note) => {
@@ -911,7 +1016,7 @@ export function PositionReviewWorkspace({
             <header className="bitlang-chart-header">
               <div>
                 <div className="posrev-chart-title">
-                  <h2>{selected.chartSymbol}</h2>
+                  <h2>{selected.venue === 'exness' ? selected.unifiedSymbol : selected.chartSymbol}</h2>
                   <span className={`posrev-exchange-badge ${selected.venue}`}>
                     {venueLabel(selected.venue)}
                   </span>
@@ -920,13 +1025,14 @@ export function PositionReviewWorkspace({
                     {selected.leverage ? ` ${Math.round(selected.leverage)}x` : ''}
                   </span>
                   <strong
+                    title={selected.venue === 'exness' && !selected.currency ? '历史文件金额，币种待 Exness API 核对' : undefined}
                     className={`posrev-header-pnl ${
                       selectedPnl >= 0 ? 'profit' : 'loss'
                     }`}
                   >
                     {selected.venue === 'gate-cfd' && selected.netPnl == null
                       ? '—'
-                      : `${selectedPnl >= 0 ? '+' : ''}${formatNumber(selectedPnl)}`} {positionCurrency(selected)}
+                      : `${selectedPnl >= 0 ? '+' : ''}${formatNumber(selectedPnl)}`} {positionCurrencyLabel(selected)}
                   </strong>
                   <button
                     type="button"
@@ -985,6 +1091,8 @@ export function PositionReviewWorkspace({
               </div>
             </header>
             <PositionReviewChart
+              key={selected.venue === 'exness' ? `${exnessMarket.marketKey}:${exnessMarketRevision}` : 'position-chart'}
+              exnessMarketKey={selected.venue === 'exness' ? exnessMarket.marketKey : undefined}
               tagNames={selected.tagIds.map((id) => tags.find((tag) => tag.id === id)?.name || '').filter(Boolean)}
               position={selected}
               positions={positions}
@@ -1031,7 +1139,8 @@ export function PositionReviewWorkspace({
           <div className="bitlang-state">
             {configured
               ? '没有符合筛选条件的仓位。'
-              : '先保存 Bitget 或 Gate 只读密钥，再点同步。'}
+              : <><span>连接账户后同步交易记录，或在账户管理中检查本机文件。</span>
+                <button type="button" className="ui-btn" onClick={() => setShowAccounts(true)}>账户管理</button></>}
           </div>
         )}
       </section>

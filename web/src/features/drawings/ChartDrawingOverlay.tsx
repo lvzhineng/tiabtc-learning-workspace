@@ -8,14 +8,11 @@ import {
   type MouseEvent as ReactMouseEvent,
   type PointerEvent as ReactPointerEvent,
 } from 'react';
-import type { IChartApi, ISeriesApi, Logical } from 'lightweight-charts';
+import { flushSync } from 'react-dom';
+import type { IChartApi, ISeriesApi } from 'lightweight-charts';
 import type { Candlestick } from '@/domain/candle';
 import type { ReviewTimeframe } from '@/domain/timeframe';
 import { TIMEFRAME_SECONDS_MAP } from '@/domain/timeframe';
-import {
-  coordinateToChartTimestampMs,
-  timestampMsToUtcTimestamp,
-} from '@/chart/chart-time';
 import { formatPrice } from '@/chart/candlestick-readout';
 import {
   ANCHOR_COUNTS,
@@ -25,6 +22,14 @@ import {
 } from './drawing-types';
 import { DrawingQuickActionBar } from './DrawingQuickActionBar';
 import { getSavedDrawingStyle } from './drawing-style-storage';
+import {
+  constrainDrawingAngle,
+  coordinateToDrawingTimestamp,
+  drawingTimestampToCoordinate,
+} from './drawing-coordinates';
+
+const ANGLE_CONSTRAINED_TOOLS = new Set(['TrendLine', 'ExtendedLine', 'Ray', 'Arrow', 'path', 'Path']);
+type PointerPosition = { clientX: number; clientY: number; shiftKey?: boolean };
 
 function isPositionTool(toolType: string): boolean {
   return (
@@ -79,6 +84,8 @@ type Props = {
 type DragState = {
   drawing: DrawingToolState;
   origin: DrawingPoint;
+  originClientX: number;
+  originClientY: number;
   preview: DrawingToolState;
   pointIndex: number | null;
 };
@@ -142,56 +149,6 @@ function findNearestCandle(
     : right;
 }
 
-function timestampToChartCoordinate(
-  chart: IChartApi,
-  candles: Candlestick[],
-  timestampMs: number,
-  interval: ReviewTimeframe
-): number | null {
-  const directCoordinate = chart.timeScale().timeToCoordinate(
-    timestampMsToUtcTimestamp(timestampMs)
-  );
-  if (directCoordinate !== null) return directCoordinate;
-  if (candles.length === 0) return null;
-  if (candles.length === 1) {
-    const intervalMs = TIMEFRAME_SECONDS_MAP[interval] * 1000;
-    const logicalOffset =
-      (timestampMs - candles[0].timestampMs) / intervalMs;
-    return chart.timeScale().logicalToCoordinate(logicalOffset as Logical);
-  }
-
-  let low = 0;
-  let high = candles.length;
-  while (low < high) {
-    const middle = Math.floor((low + high) / 2);
-    if (candles[middle].timestampMs < timestampMs) low = middle + 1;
-    else high = middle;
-  }
-
-  let rightIndex = Math.min(
-    candles.length - 1,
-    Math.max(1, low)
-  );
-  while (rightIndex > 0) {
-    const leftCandle = candles[rightIndex - 1];
-    const rightCandle = candles[rightIndex];
-    const leftCoordinate = chart.timeScale().timeToCoordinate(
-      timestampMsToUtcTimestamp(leftCandle.timestampMs)
-    );
-    const rightCoordinate = chart.timeScale().timeToCoordinate(
-      timestampMsToUtcTimestamp(rightCandle.timestampMs)
-    );
-    if (leftCoordinate !== null && rightCoordinate !== null) {
-      const timeSpan = rightCandle.timestampMs - leftCandle.timestampMs;
-      if (timeSpan <= 0) return leftCoordinate;
-      const ratio = (timestampMs - leftCandle.timestampMs) / timeSpan;
-      return leftCoordinate + (rightCoordinate - leftCoordinate) * ratio;
-    }
-    rightIndex -= 1;
-  }
-  return null;
-}
-
 export function ChartDrawingOverlay({
   chart,
   series,
@@ -215,10 +172,21 @@ export function ChartDrawingOverlay({
   const [draftPoints, setDraftPoints] = useState<DrawingPoint[]>([]);
   const [hoverPoint, setHoverPoint] = useState<DrawingPoint | null>(null);
   const [drag, setDrag] = useState<DragState | null>(null);
+  const dragRef = useRef<DragState | null>(null);
+  const draftPointsRef = useRef(draftPoints);
+  const pointerFrameRef = useRef<number | null>(null);
+  const pendingPointerRef = useRef<PointerPosition[]>([]);
+  const lastPointerRef = useRef<PointerPosition | null>(null);
+  const magnetSnappedRef = useRef(false);
   const [textEditor, setTextEditor] = useState<TextEditorState | null>(null);
   const [viewportRevision, setViewportRevision] = useState(0);
   const redrawFrameRef = useRef<number | null>(null);
   candlesRef.current = candles;
+  draftPointsRef.current = draftPoints;
+
+  useEffect(() => () => {
+    if (pointerFrameRef.current !== null) window.cancelAnimationFrame(pointerFrameRef.current);
+  }, []);
 
   useEffect(() => {
     if (!textEditor) return;
@@ -228,6 +196,15 @@ export function ChartDrawingOverlay({
 
   useEffect(() => {
     setTextEditor(null);
+    if (pointerFrameRef.current !== null) window.cancelAnimationFrame(pointerFrameRef.current);
+    pointerFrameRef.current = null;
+    pendingPointerRef.current = [];
+    lastPointerRef.current = null;
+    dragRef.current = null;
+    draftPointsRef.current = [];
+    setDrag(null);
+    setDraftPoints([]);
+    setHoverPoint(null);
   }, [activeTool]);
 
   useEffect(() => {
@@ -237,13 +214,17 @@ export function ChartDrawingOverlay({
       redrawFrameRef.current = window.requestAnimationFrame(() => {
         redrawFrameRef.current = null;
         if (disposed) return;
-        setViewportRevision((revision) => revision + 1);
+        // Commit SVG coordinates before this frame is painted, alongside the
+        // chart's Canvas, rather than leaving a deferred React render behind it.
+        flushSync(() => setViewportRevision((revision) => revision + 1));
       });
     };
     const timeScale = chart.timeScale();
     const host = svgRef.current?.parentElement;
     let pointerActive = false;
-    const handlePointerDown = () => {
+    const handlePointerDown = (event: PointerEvent) => {
+      // Moving a drawing does not move the viewport. Keep other drawings memoized.
+      if (event.target instanceof Element && event.target.closest('.chart-drawing-overlay')) return;
       pointerActive = true;
       scheduleRedraw();
     };
@@ -255,24 +236,24 @@ export function ChartDrawingOverlay({
       pointerActive = false;
       scheduleRedraw();
     };
-    const pendingTimeouts: number[] = [];
-    const handleWheel = () => {
+    let trailingTimeout: number | null = null;
+    const handleDeferredRedraw = () => {
       scheduleRedraw();
-      pendingTimeouts.push(window.setTimeout(scheduleRedraw, 0));
-    };
-    const handleDoubleClick = () => {
-      scheduleRedraw();
-      pendingTimeouts.push(window.setTimeout(scheduleRedraw, 0));
+      if (trailingTimeout !== null) window.clearTimeout(trailingTimeout);
+      trailingTimeout = window.setTimeout(() => {
+        trailingTimeout = null;
+        scheduleRedraw();
+      }, 0);
     };
 
     timeScale.subscribeVisibleLogicalRangeChange(scheduleRedraw);
     timeScale.subscribeSizeChange(scheduleRedraw);
     host?.addEventListener('pointerdown', handlePointerDown, true);
     host?.addEventListener('pointermove', handlePointerMove, true);
-    host?.addEventListener('pointerup', handlePointerEnd, true);
-    host?.addEventListener('pointercancel', handlePointerEnd, true);
-    host?.addEventListener('wheel', handleWheel, true);
-    host?.addEventListener('dblclick', handleDoubleClick, true);
+    window.addEventListener('pointerup', handlePointerEnd, true);
+    window.addEventListener('pointercancel', handlePointerEnd, true);
+    host?.addEventListener('wheel', handleDeferredRedraw, true);
+    host?.addEventListener('dblclick', handleDeferredRedraw, true);
 
     return () => {
       disposed = true;
@@ -280,13 +261,11 @@ export function ChartDrawingOverlay({
       timeScale.unsubscribeSizeChange(scheduleRedraw);
       host?.removeEventListener('pointerdown', handlePointerDown, true);
       host?.removeEventListener('pointermove', handlePointerMove, true);
-      host?.removeEventListener('pointerup', handlePointerEnd, true);
-      host?.removeEventListener('pointercancel', handlePointerEnd, true);
-      host?.removeEventListener('wheel', handleWheel, true);
-      host?.removeEventListener('dblclick', handleDoubleClick, true);
-      for (const timeoutId of pendingTimeouts) {
-        window.clearTimeout(timeoutId);
-      }
+      window.removeEventListener('pointerup', handlePointerEnd, true);
+      window.removeEventListener('pointercancel', handlePointerEnd, true);
+      host?.removeEventListener('wheel', handleDeferredRedraw, true);
+      host?.removeEventListener('dblclick', handleDeferredRedraw, true);
+      if (trailingTimeout !== null) window.clearTimeout(trailingTimeout);
       if (redrawFrameRef.current !== null) {
         window.cancelAnimationFrame(redrawFrameRef.current);
         redrawFrameRef.current = null;
@@ -308,16 +287,9 @@ export function ChartDrawingOverlay({
   const coordinateRevision = `${viewportRevision}`;
   const isFreehandTool = activeTool === 'brush';
 
-  const displayedDrawings = useMemo(() => {
-    if (!drag) return drawings;
-    return drawings.map((drawing) =>
-      drawing.id === drag.preview.id ? drag.preview : drawing
-    );
-  }, [drag, drawings]);
-
   const drawingTimeBounds = useMemo(() => {
     const bounds = new Map<string, { minMs: number; maxMs: number }>();
-    for (const drawing of displayedDrawings) {
+    for (const drawing of drawings) {
       if (drawing.points.length === 0) continue;
       let minMs = drawing.points[0].timestampMs;
       let maxMs = minMs;
@@ -329,55 +301,54 @@ export function ChartDrawingOverlay({
       bounds.set(drawing.id, { minMs, maxMs });
     }
     return bounds;
-  }, [displayedDrawings]);
-
-  const snapPrice = useCallback(
-    (price: number, timestampMs: number) => {
-      if (!magnetEnabled || candlesRef.current.length === 0) return price;
-      const nearestCandle = findNearestCandle(candlesRef.current, timestampMs);
-      const candidates = [
-        nearestCandle.open,
-        nearestCandle.high,
-        nearestCandle.low,
-        nearestCandle.close,
-      ];
-      let best = price;
-      let minDiff = Number.POSITIVE_INFINITY;
-      for (const candidate of candidates) {
-        const diff = Math.abs(candidate - price);
-        if (diff < minDiff) {
-          minDiff = diff;
-          best = candidate;
-        }
-      }
-      return best;
-    },
-    [magnetEnabled]
-  );
+  }, [drawings]);
 
   const eventToPoint = useCallback(
-    (event: ReactPointerEvent<SVGElement>): DrawingPoint | null => {
+    (event: PointerPosition, allowMagnet = true, angleAnchor?: DrawingPoint): DrawingPoint | null => {
+      magnetSnappedRef.current = false;
       const svg = svgRef.current;
       if (!svg) return null;
       const rect = svg.getBoundingClientRect();
-      const clientX = event.clientX - rect.left;
-      const clientY = event.clientY - rect.top;
-      const lastCandleTimeMs =
-        candlesRef.current.length > 0
-          ? candlesRef.current[candlesRef.current.length - 1].timestampMs
-          : undefined;
-      const timestampMs = coordinateToChartTimestampMs(
+      let clientX = event.clientX - rect.left;
+      let clientY = event.clientY - rect.top;
+      const constrainAngle = Boolean(event.shiftKey && angleAnchor);
+      if (constrainAngle && angleAnchor) {
+        const x = drawingTimestampToCoordinate(chart, candlesRef.current, angleAnchor.timestampMs, interval);
+        const y = series.priceToCoordinate(angleAnchor.price);
+        if (x === null || y === null) return null;
+        const constrained = constrainDrawingAngle({ x, y: Number(y) }, { x: clientX, y: clientY });
+        clientX = constrained.x;
+        clientY = constrained.y;
+      }
+      const timestampMs = coordinateToDrawingTimestamp(
         chart,
+        candlesRef.current,
         clientX,
-        lastCandleTimeMs,
         interval
       );
       const rawPrice = series.coordinateToPrice(clientY);
       if (timestampMs === null || rawPrice === null) return null;
-      const price = snapPrice(Number(rawPrice), timestampMs);
+      let price = Number(rawPrice);
+      // Shift's angle takes precedence over magnetic snapping to candle OHLC.
+      if (magnetEnabled && allowMagnet && !constrainAngle && candlesRef.current.length > 0) {
+        const candle = findNearestCandle(candlesRef.current, timestampMs);
+        const x = drawingTimestampToCoordinate(chart, candlesRef.current, candle.timestampMs, interval);
+        let bestDistance = 10;
+        for (const candidate of [candle.open, candle.high, candle.low, candle.close]) {
+          const y = series.priceToCoordinate(candidate);
+          if (x === null || y === null) continue;
+          const distance = Math.hypot(x - clientX, Number(y) - clientY);
+          if (distance <= bestDistance) {
+            bestDistance = distance;
+            price = candidate;
+            magnetSnappedRef.current = true;
+          }
+        }
+        if (magnetSnappedRef.current) return { timestampMs: candle.timestampMs, price };
+      }
       return { timestampMs, price };
     },
-    [chart, interval, series, snapPrice]
+    [chart, interval, series, magnetEnabled]
   );
 
   const saveNewDrawing = (points: DrawingPoint[], text?: string) => {
@@ -395,10 +366,13 @@ export function ChartDrawingOverlay({
       extra: {
         ...(activeTool === 'half-retracement'
           ? { retracementVariant: 'half' }
-          : {}),
+          : activeTool === 'negative-half-retracement'
+            ? { retracementVariant: 'negative-half' }
+            : {}),
         lineStyle: savedStyle.lineStyle,
       },
     };
+    draftPointsRef.current = [];
     setDraftPoints([]);
     setHoverPoint(null);
     onSelectDrawing(drawing.id);
@@ -415,11 +389,14 @@ export function ChartDrawingOverlay({
       return;
     }
 
-    const point = eventToPoint(event);
+    lastPointerRef.current = { clientX: event.clientX, clientY: event.clientY, shiftKey: event.shiftKey };
+    const anchor = ANGLE_CONSTRAINED_TOOLS.has(activeTool) ? draftPointsRef.current.at(-1) : undefined;
+    const point = eventToPoint(event, true, anchor);
     if (!point) return;
     setHoverPoint(null);
     if (isFreehandTool) {
       event.currentTarget.setPointerCapture(event.pointerId);
+      draftPointsRef.current = [point];
       setDraftPoints([point]);
       return;
     }
@@ -438,6 +415,7 @@ export function ChartDrawingOverlay({
     const requiredPoints = ANCHOR_COUNTS[activeTool] || 2;
     const nextPoints = [...draftPoints, point];
     if (nextPoints.length < requiredPoints) {
+      draftPointsRef.current = nextPoints;
       setDraftPoints(nextPoints);
       return;
     }
@@ -454,59 +432,77 @@ export function ChartDrawingOverlay({
     event.stopPropagation();
     onSelectDrawing(drawing.id);
     if (activeTool !== 'select' || drawing.locked) return;
-    const origin = eventToPoint(event);
+    const origin = eventToPoint(event, pointIndex !== null);
     if (!origin) return;
     event.currentTarget.setPointerCapture(event.pointerId);
-    setDrag({ drawing, origin, preview: drawing, pointIndex });
+    lastPointerRef.current = { clientX: event.clientX, clientY: event.clientY, shiftKey: event.shiftKey };
+    dragRef.current = {
+      drawing, origin, preview: drawing, pointIndex,
+      originClientX: event.clientX, originClientY: event.clientY,
+    };
+    setDrag(dragRef.current);
   }, [activeTool, eventToPoint, onSelectDrawing]);
 
-  const handlePointerMove = (event: ReactPointerEvent<SVGSVGElement>) => {
+  const applyPointerMove = (event: PointerPosition) => {
+    const drag = dragRef.current;
     if (!drag) {
-      const current = eventToPoint(event);
+      if (activeTool === 'select') return;
+      const anchor = ANGLE_CONSTRAINED_TOOLS.has(activeTool) ? draftPointsRef.current.at(-1) : undefined;
+      const current = eventToPoint(event, true, anchor);
       if (!current) {
         setHoverPoint(null);
         return;
       }
-      if (activeTool !== 'select' && !isFreehandTool) {
+      if (!isFreehandTool) {
         setHoverPoint(current);
       }
-      if (draftPoints.length === 0) return;
+      if (draftPointsRef.current.length === 0) return;
       if (!isFreehandTool) return;
 
       const pointLimit = activeTool === 'brush' ? 1000 : 500;
-      setDraftPoints((points) => {
-        if (points.length >= pointLimit) return points;
-        const previous = points[points.length - 1];
-        if (
-          previous &&
-          previous.timestampMs === current.timestampMs &&
-          Math.abs(previous.price - current.price) <
-            Math.max(1e-8, current.price * 0.00001)
-        ) {
-          return points;
-        }
-        return [...points, current];
-      });
+      const points = draftPointsRef.current;
+      if (points.length >= pointLimit) return;
+      const previous = points[points.length - 1];
+      if (
+        previous &&
+        previous.timestampMs === current.timestampMs &&
+        Math.abs(previous.price - current.price) <
+          Math.max(1e-8, current.price * 0.00001)
+      ) return;
+      const nextPoints = [...points, current];
+      draftPointsRef.current = nextPoints;
+      setDraftPoints(nextPoints);
       return;
     }
-    event.preventDefault();
-    event.stopPropagation();
-    const current = eventToPoint(event);
+    if (
+      drag.preview === drag.drawing &&
+      event.clientX === drag.originClientX && event.clientY === drag.originClientY && !event.shiftKey
+    ) return;
+    const anchor = drag.pointIndex !== null && ANGLE_CONSTRAINED_TOOLS.has(drag.drawing.toolType)
+      ? drag.drawing.points[drag.pointIndex === 0 ? 1 : drag.pointIndex - 1]
+      : undefined;
+    const current = eventToPoint(event, drag.pointIndex !== null, anchor);
     if (!current) return;
+    setHoverPoint(magnetSnappedRef.current ? current : null);
     const deltaTime = current.timestampMs - drag.origin.timestampMs;
-    const deltaPrice = current.price - drag.origin.price;
     const toolType = drag.drawing.toolType;
 
-    let nextPoints = drag.drawing.points.map((point, index) =>
-      drag.pointIndex === null
-        ? {
-            timestampMs: point.timestampMs + deltaTime,
-            price: Math.max(Number.EPSILON, point.price + deltaPrice),
-          }
-        : index === drag.pointIndex
-        ? current
-        : point
-    );
+    let nextPoints = drag.drawing.points.map((point, index) => {
+      if (drag.pointIndex !== null) return index === drag.pointIndex ? current : point;
+      // Translate in screen space so logarithmic prices and weekend gaps do
+      // not stretch a whole drawing while it follows the pointer.
+      const x = drawingTimestampToCoordinate(chart, candlesRef.current, point.timestampMs, interval);
+      const y = series.priceToCoordinate(point.price);
+      if (x === null || y === null) return point;
+      const timestampMs = coordinateToDrawingTimestamp(
+        chart, candlesRef.current, x + event.clientX - drag.originClientX, interval
+      );
+      const price = series.coordinateToPrice(Number(y) + event.clientY - drag.originClientY);
+      return timestampMs === null || price === null ? point : {
+        timestampMs,
+        price: Math.max(Number.EPSILON, Number(price)),
+      };
+    });
 
     if (isPositionTool(toolType) && drag.pointIndex !== null && nextPoints.length >= 3) {
       if (drag.pointIndex === 0) {
@@ -563,29 +559,124 @@ export function ChartDrawingOverlay({
       }
     }
 
-    setDrag({
+    dragRef.current = {
       ...drag,
       preview: {
         ...drag.drawing,
         points: nextPoints,
       },
+    };
+    setDrag(dragRef.current);
+  };
+
+  const applyPointerMoveRef = useRef(applyPointerMove);
+  applyPointerMoveRef.current = applyPointerMove;
+
+  const queuePointerMove = (sample: PointerPosition) => {
+    lastPointerRef.current = sample;
+    if (isFreehandTool && draftPointsRef.current.length > 0) {
+      // Keep the brush path between frames; only its React render is coalesced.
+      pendingPointerRef.current.push(sample);
+    } else {
+      pendingPointerRef.current = [sample];
+    }
+    if (pointerFrameRef.current !== null) return;
+    pointerFrameRef.current = window.requestAnimationFrame(() => {
+      pointerFrameRef.current = null;
+      const pending = pendingPointerRef.current;
+      pendingPointerRef.current = [];
+      if (pending.length > 0) flushSync(() => {
+        for (const sample of pending) applyPointerMoveRef.current(sample);
+      });
     });
   };
 
-  const finishPointerInteraction = () => {
+  const queuePointerMoveRef = useRef(queuePointerMove);
+  queuePointerMoveRef.current = queuePointerMove;
+
+  useEffect(() => {
+    const updateShift = (pressed: boolean) => {
+      const pointer = lastPointerRef.current;
+      if (!pointer || Boolean(pointer.shiftKey) === pressed) return;
+      if (!dragRef.current && draftPointsRef.current.length === 0) return;
+      queuePointerMoveRef.current({ ...pointer, shiftKey: pressed });
+    };
+    const handleShift = (event: KeyboardEvent) => {
+      if (event.key !== 'Shift') return;
+      const target = document.activeElement;
+      if (target instanceof HTMLElement &&
+          (target.isContentEditable || target.closest('input, textarea, select'))) return;
+      if (document.querySelector('[aria-modal="true"]')) return;
+      updateShift(event.type === 'keydown');
+    };
+    const resetShift = () => updateShift(false);
+    const handleVisibility = () => { if (document.hidden) resetShift(); };
+    window.addEventListener('keydown', handleShift);
+    window.addEventListener('keyup', handleShift);
+    window.addEventListener('blur', resetShift);
+    document.addEventListener('visibilitychange', handleVisibility);
+    return () => {
+      window.removeEventListener('keydown', handleShift);
+      window.removeEventListener('keyup', handleShift);
+      window.removeEventListener('blur', resetShift);
+      document.removeEventListener('visibilitychange', handleVisibility);
+    };
+  }, []);
+
+  const handlePointerMove = (event: ReactPointerEvent<SVGSVGElement>) => {
+    if (dragRef.current) {
+      event.preventDefault();
+      event.stopPropagation();
+    } else if (activeTool === 'select') {
+      return;
+    }
+    queuePointerMove({ clientX: event.clientX, clientY: event.clientY, shiftKey: event.shiftKey });
+  };
+
+  const clearPendingPointer = () => {
+    if (pointerFrameRef.current !== null) window.cancelAnimationFrame(pointerFrameRef.current);
+    pointerFrameRef.current = null;
+    pendingPointerRef.current = [];
+  };
+
+  const finishPointerInteraction = (event: ReactPointerEvent<SVGSVGElement>) => {
+    const pending = pendingPointerRef.current;
+    clearPendingPointer();
+    // A pointerup can arrive before the queued frame. Save its exact position,
+    // not the previous rendered preview, and never save on each pointermove.
+    if (isFreehandTool && draftPointsRef.current.length > 0) {
+      for (const sample of pending) applyPointerMove(sample);
+    }
+    if (dragRef.current || (isFreehandTool && draftPointsRef.current.length > 0)) {
+      applyPointerMove(event);
+    }
+    const drag = dragRef.current;
     if (drag) {
       const updated = drag.preview;
+      dragRef.current = null;
       setDrag(null);
+      setHoverPoint(null);
       void onSaveDrawing(updated);
       return;
     }
-    if (isFreehandTool && draftPoints.length > 0) {
-      const completedPoints = draftPoints;
+    if (isFreehandTool && draftPointsRef.current.length > 0) {
+      const completedPoints = draftPointsRef.current;
+      draftPointsRef.current = [];
       setDraftPoints([]);
       if (completedPoints.length >= 2) {
         saveNewDrawing(completedPoints);
       }
     }
+  };
+
+  const cancelPointerInteraction = () => {
+    clearPendingPointer();
+    lastPointerRef.current = null;
+    dragRef.current = null;
+    draftPointsRef.current = [];
+    setDrag(null);
+    setDraftPoints([]);
+    setHoverPoint(null);
   };
 
   const handleContextMenu = (
@@ -594,14 +685,12 @@ export function ChartDrawingOverlay({
     if (activeTool === 'select') return;
     event.preventDefault();
     event.stopPropagation();
-    setDraftPoints([]);
-    setHoverPoint(null);
-    setDrag(null);
+    cancelPointerInteraction();
     onDrawingComplete();
   };
 
   const toTimeCoordinate = useCallback((timestampMs: number) => {
-    return timestampToChartCoordinate(
+    return drawingTimestampToCoordinate(
       chart,
       candlesRef.current,
       timestampMs,
@@ -614,6 +703,14 @@ export function ChartDrawingOverlay({
     const y = series.priceToCoordinate(point.price);
     return x === null || y === null ? null : { x, y: Number(y) };
   }, [series, toTimeCoordinate]);
+
+  const toPriceCoordinate = useCallback(
+    (price: number) => {
+      const y = series.priceToCoordinate(price);
+      return y === null ? null : Number(y);
+    },
+    [series]
+  );
 
   const textEditorCoordinate = textEditor ? toCoordinate(textEditor.point) : null;
   const saveTextEditor = () => {
@@ -662,9 +759,9 @@ export function ChartDrawingOverlay({
   const viewportWidth = chart.timeScale().width();
 
   const visibleDrawings = useMemo(() => {
-    if (viewportWidth <= 0) return displayedDrawings;
+    if (viewportWidth <= 0) return drawings;
     const bufferPx = Math.max(viewportWidth * 0.5, 160);
-    return displayedDrawings.filter((drawing) => {
+    return drawings.filter((drawing) => {
       if (drawing.id === selectedDrawingId) return true;
       if (
         drawing.toolType === 'HorizontalLine' ||
@@ -686,7 +783,7 @@ export function ChartDrawingOverlay({
     });
   }, [
     coordinateRevision,
-    displayedDrawings,
+    drawings,
     drawingTimeBounds,
     selectedDrawingId,
     toTimeCoordinate,
@@ -694,8 +791,11 @@ export function ChartDrawingOverlay({
   ]);
 
   const selectedDrawing = useMemo(
-    () => displayedDrawings.find((d) => d.id === selectedDrawingId) || null,
-    [displayedDrawings, selectedDrawingId]
+    () =>
+      (drag?.preview.id === selectedDrawingId
+        ? drag.preview
+        : drawings.find((drawing) => drawing.id === selectedDrawingId)) || null,
+    [drawings, drag, selectedDrawingId]
   );
 
   const quickBarPosition = useMemo(() => {
@@ -710,7 +810,7 @@ export function ChartDrawingOverlay({
     const maxX = Math.max(...points.map((p) => p.x));
     const minY = Math.min(...points.map((p) => p.y));
     return { x: (minX + maxX) / 2, y: minY };
-  }, [activeTool, drag, selectedDrawing, toCoordinate]);
+  }, [activeTool, coordinateRevision, drag, selectedDrawing, toCoordinate]);
 
   const hoverPointCoord = hoverPoint ? toCoordinate(hoverPoint) : null;
 
@@ -720,9 +820,20 @@ export function ChartDrawingOverlay({
         ref={svgRef}
         className="chart-drawing-overlay"
         onPointerMove={handlePointerMove}
-        onPointerLeave={() => setHoverPoint(null)}
+        onPointerLeave={() => {
+          if (!dragRef.current && draftPointsRef.current.length === 0) {
+            clearPendingPointer();
+            lastPointerRef.current = null;
+          }
+          setHoverPoint(null);
+        }}
         onPointerUp={finishPointerInteraction}
-        onPointerCancel={finishPointerInteraction}
+        onPointerCancel={cancelPointerInteraction}
+        onLostPointerCapture={() => {
+          if (dragRef.current || (isFreehandTool && draftPointsRef.current.length > 0)) {
+            cancelPointerInteraction();
+          }
+        }}
         onContextMenu={handleContextMenu}
         style={{
           position: 'absolute',
@@ -744,11 +855,12 @@ export function ChartDrawingOverlay({
         {visibleDrawings.map((drawing) => (
           <DrawingGeometry
             key={drawing.id}
-            drawing={drawing}
+            drawing={drag?.preview.id === drawing.id ? drag.preview : drawing}
             selected={drawing.id === selectedDrawingId}
             interactive={activeTool === 'select'}
             coordinateRevision={coordinateRevision}
             toCoordinate={toCoordinate}
+            toPriceCoordinate={toPriceCoordinate}
             onPointerDown={handleDrawingPointerDown}
           />
         ))}
@@ -760,6 +872,7 @@ export function ChartDrawingOverlay({
             interactive={false}
             coordinateRevision={coordinateRevision}
             toCoordinate={toCoordinate}
+            toPriceCoordinate={toPriceCoordinate}
             onPointerDown={() => {}}
           />
         )}
@@ -788,7 +901,7 @@ export function ChartDrawingOverlay({
         )}
 
         {/* Real-time Magnet snapping cursor guide */}
-        {magnetEnabled && hoverPointCoord && (activeTool !== 'select' || drag !== null) && (
+        {magnetEnabled && magnetSnappedRef.current && hoverPointCoord && (activeTool !== 'select' || drag !== null) && (
           <g pointerEvents="none">
             <circle
               cx={hoverPointCoord.x}
@@ -903,6 +1016,7 @@ const DrawingGeometry = memo(function DrawingGeometry({
   interactive,
   coordinateRevision,
   toCoordinate,
+  toPriceCoordinate,
   onPointerDown,
 }: {
   drawing: DrawingToolState;
@@ -910,6 +1024,7 @@ const DrawingGeometry = memo(function DrawingGeometry({
   interactive: boolean;
   coordinateRevision: string;
   toCoordinate: (point: DrawingPoint) => { x: number; y: number } | null;
+  toPriceCoordinate: (price: number) => number | null;
   onPointerDown: (
     event: ReactPointerEvent<SVGElement>,
     drawing: DrawingToolState,
@@ -953,13 +1068,38 @@ const DrawingGeometry = memo(function DrawingGeometry({
     geometry = (
       <line x1={first.x} y1={0} x2={first.x} y2="100%" {...common} />
     );
-  } else if (type === 'FibRetracement' || type === 'half-retracement') {
+  } else if (
+    type === 'FibRetracement' ||
+    type === 'half-retracement' ||
+    type === 'negative-half-retracement'
+  ) {
     const levels =
-      type === 'half-retracement' ? [0, 0.5, 1] : [0, 0.618, 0.66, 1];
+      type === 'negative-half-retracement'
+        ? [-0.5, 0, 0.5, 1]
+        : type === 'half-retracement'
+          ? [0, 0.5, 1]
+          : [0, 0.618, 0.66, 1];
     geometry = (
       <>
         {levels.map((level) => {
-          const y = second.y + (first.y - second.y) * level;
+          let y = second.y + (first.y - second.y) * level;
+          if (type === 'negative-half-retracement') {
+            const firstPrice = drawing.points[0]?.price;
+            const secondPrice = drawing.points[1]?.price;
+            if (
+              firstPrice === undefined ||
+              secondPrice === undefined ||
+              !Number.isFinite(firstPrice) ||
+              !Number.isFinite(secondPrice)
+            ) {
+              return null;
+            }
+            const levelPrice = secondPrice + (firstPrice - secondPrice) * level;
+            if (!Number.isFinite(levelPrice) || levelPrice <= 0) return null;
+            const levelY = toPriceCoordinate(levelPrice);
+            if (levelY === null || !Number.isFinite(levelY)) return null;
+            y = levelY;
+          }
           return (
             <g key={level}>
               <line

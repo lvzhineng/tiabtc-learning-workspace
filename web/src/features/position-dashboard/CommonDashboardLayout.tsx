@@ -1,8 +1,6 @@
-import type { ReactNode } from 'react';
+import { useMemo, type ReactNode } from 'react';
 import {
   Activity,
-  ArrowDownRight,
-  ArrowUpRight,
   Calendar,
   Clock,
   Coins,
@@ -20,7 +18,9 @@ import { TagAnalyticsCard } from './TagAnalyticsCard';
 import { SymbolLeaderboardCard } from './SymbolLeaderboardCard';
 import { TradingCalendarHeatmap } from './TradingCalendarHeatmap';
 import type { ReviewPosition } from '@/api/position-review-api';
-import type { summarizePositions } from '@/features/position-review/position-stats';
+import { summarizePositions } from '@/features/position-review/position-stats';
+import type { SymbolCountOption } from '@/ui/symbol-count-options';
+import { positionStatisticsCurrency, isExnessUsdPosition, EXNESS_USD_STATISTICS_HINT, type ReviewCurrency } from '@/features/position-review/position-review-types';
 import '@/styles/position-dashboard.css';
 
 export type DashboardKpi = ReturnType<typeof summarizePositions> & {
@@ -28,7 +28,11 @@ export type DashboardKpi = ReturnType<typeof summarizePositions> & {
 };
 
 export interface CommonDashboardLayoutProps {
-  currency?: 'USDT' | 'USD';
+  currency?: ReviewCurrency;
+  moneyCurrency?: string;
+  moneyCurrencies?: string[];
+  onMoneyCurrencyChange?: (currency: string) => void;
+  moneyPositions?: ReviewPosition[];
   title: string;
   subtitle: ReactNode;
 
@@ -39,7 +43,7 @@ export interface CommonDashboardLayoutProps {
 
   symbolFilter: string;
   onSymbolFilterChange: (sym: string) => void;
-  symbols: string[];
+  symbolOptions: SymbolCountOption[];
 
   sideFilter: string;
   onSideFilterChange: (side: any) => void;
@@ -92,6 +96,10 @@ function DashboardCardHeader({
 export function CommonDashboardLayout(props: CommonDashboardLayoutProps) {
   const {
     currency = 'USDT',
+    moneyCurrency,
+    moneyCurrencies,
+    onMoneyCurrencyChange,
+    moneyPositions: suppliedMoneyPositions,
     title,
     subtitle,
     dateRange,
@@ -100,7 +108,7 @@ export function CommonDashboardLayout(props: CommonDashboardLayoutProps) {
     dateRangeLabels = { '7d': '7 天', '30d': '30 天', '90d': '90 天', all: '全部' },
     symbolFilter,
     onSymbolFilterChange,
-    symbols,
+    symbolOptions,
     sideFilter,
     onSideFilterChange,
     tagFilter,
@@ -119,9 +127,40 @@ export function CommonDashboardLayout(props: CommonDashboardLayoutProps) {
     journalSubtitle = '入场依据与心得沉淀',
   } = props;
 
-  const isProfit = kpi.totalPnl >= 0;
   const decided = kpi.winCount + kpi.lossCount;
   const lossRate = decided > 0 ? 100 - kpi.winRate : 0;
+  const totalSymbolCount = symbolOptions.reduce(
+    (total, option) => total + option.count,
+    0
+  );
+  const groupedMoneyPositions = useMemo(() => {
+    const groups = new Map<string, ReviewPosition[]>();
+    for (const position of performancePositions) {
+      const unit = positionStatisticsCurrency(position);
+      const group = groups.get(unit);
+      if (group) group.push(position);
+      else groups.set(unit, [position]);
+    }
+    return [...groups.entries()].map(([unit, positions]) => ({
+      currency: unit,
+      positions,
+      stats: summarizePositions(positions),
+    }));
+  }, [performancePositions]);
+  const effectiveMoneyCurrency = moneyCurrency || currency;
+  const selectedMoneyPositions = suppliedMoneyPositions ?? groupedMoneyPositions.find((group) => group.currency === effectiveMoneyCurrency)?.positions ?? [];
+  const moneyStats = useMemo(() => summarizePositions(selectedMoneyPositions), [selectedMoneyPositions]);
+  const hasFees = selectedMoneyPositions.some((position) => position.openFee != null || position.closeFee != null);
+  const hasFunding = selectedMoneyPositions.some((position) => position.funding != null);
+  const includesExnessUsd = performancePositions.some(isExnessUsdPosition);
+  const selectedHasSwap = selectedMoneyPositions.some((position) => position.venue === 'exness' || position.venue === 'gate-cfd');
+  const selectedHasFunding = selectedMoneyPositions.some((position) => position.venue !== 'exness' && position.venue !== 'gate-cfd');
+  const holdingFeeLabel = selectedHasSwap ? (selectedHasFunding ? '资金费 / 隔夜费' : '隔夜费')
+    : effectiveMoneyCurrency === 'USDT' ? '资金费' : '费用';
+  const isProfit = moneyStats.totalPnl >= 0;
+  const displayedMoneyGroups = groupedMoneyPositions.length > 0
+    ? groupedMoneyPositions
+    : [{ currency, positions: [], stats: summarizePositions([]) }];
 
   return (
     <div className="posdash-container">
@@ -156,6 +195,25 @@ export function CommonDashboardLayout(props: CommonDashboardLayoutProps) {
               ))}
             </div>
           </div>
+
+          {onMoneyCurrencyChange && (moneyCurrencies?.length ?? 0) > 0 && (
+            <div className="posdash-filter-field">
+              <span className="posdash-filter-label">金额币种</span>
+              <select
+                aria-label="金额统计币种"
+                title="只切换金额类指标；交易列表、胜率和日历仍包含全部币种"
+                className="posdash-select"
+                value={effectiveMoneyCurrency}
+                onChange={(event) => onMoneyCurrencyChange(event.target.value)}
+              >
+                {(moneyCurrencies ?? []).map((unit) => (
+                  <option key={unit} value={unit}>
+                    {unit === '未标注币种' ? '文件原值（未标注币种）' : unit}
+                  </option>
+                ))}
+              </select>
+            </div>
+          )}
 
           <div className="posdash-filter-field">
             <span className="posdash-filter-label">方向</span>
@@ -196,10 +254,10 @@ export function CommonDashboardLayout(props: CommonDashboardLayoutProps) {
               onChange={(e) => onSymbolFilterChange(e.target.value)}
               className="posdash-select"
             >
-              <option value="all">全部交易对</option>
-              {symbols.map((sym) => (
-                <option key={sym} value={sym}>
-                  {sym}
+              <option value="all">全部交易对（{totalSymbolCount}条）</option>
+              {symbolOptions.map(({ symbol, count }) => (
+                <option key={symbol} value={symbol}>
+                  {symbol}（{count}条）
                 </option>
               ))}
             </select>
@@ -227,34 +285,19 @@ export function CommonDashboardLayout(props: CommonDashboardLayoutProps) {
       <section className="posdash-kpi-grid">
         <div className={`posdash-kpi-card hero ${isProfit ? 'profit-glow' : 'loss-glow'}`}>
           <div className="posdash-kpi-header">
-            <span className="posdash-kpi-title" title="已平仓净盈亏累计，与收益曲线终点相同">
-              累计净盈亏
-            </span>
+            <span className="posdash-kpi-title" title={includesExnessUsd ? EXNESS_USD_STATISTICS_HINT : '按币种分别累计，不将不同币种相加'}>累计盈亏 · 分币种</span>
             <span className={`posdash-kpi-icon-wrap ${isProfit ? 'profit' : 'loss'}`}>
               {isProfit ? <TrendingUp size={15} /> : <TrendingDown size={15} />}
             </span>
           </div>
-          <div className={`posdash-kpi-value ${isProfit ? 'posrev-profit' : 'posrev-loss'}`}>
-            {signed(kpi.totalPnl)}
-            <span className="posdash-currency-unit">{currency}</span>
+          <div className="posdash-currency-breakdown" title={includesExnessUsd ? EXNESS_USD_STATISTICS_HINT : undefined}>
+            {displayedMoneyGroups.map((group) => (
+              <span key={group.currency} className={`posdash-currency-total ${group.stats.totalPnl >= 0 ? 'posrev-profit' : 'posrev-loss'}`}>
+                {signed(group.stats.totalPnl)} <small>{group.currency === '未标注币种' ? '文件原值（未标注币种）' : group.currency}</small>
+              </span>
+            ))}
           </div>
-          <div className="posdash-kpi-sub">
-            <span
-              className={`posdash-sub-chip ${kpi.peakEquity >= 0 ? 'profit' : 'loss'}`}
-              title="累计净值最高点 (ATH)，与收益曲线同一序列"
-            >
-              <ArrowUpRight size={11} /> 峰值 {signed(kpi.peakEquity, 1)}
-            </span>
-            <span
-              className={`posdash-sub-chip ${kpi.valleyEquity > 0 ? 'profit' : 'loss'}`}
-              title="累计净值最低点，与收益曲线同一序列"
-            >
-              <ArrowDownRight size={11} /> 谷值 {signed(kpi.valleyEquity, 1)}
-            </span>
-            <span className="posdash-sub-chip neutral" title="峰值到其后低点的最大回落">
-              最大回撤 -{kpi.maxDrawdown.toFixed(1)}
-            </span>
-          </div>
+          <span className="posdash-kpi-footnote">净盈亏未提供时，按可用的已实现利润累计</span>
         </div>
 
         <div className="posdash-kpi-card">
@@ -288,13 +331,13 @@ export function CommonDashboardLayout(props: CommonDashboardLayoutProps) {
             </span>
           </div>
           <div className="posdash-kpi-value">
-            {kpi.profitFactor != null ? kpi.profitFactor.toFixed(2) : '--'}
+            {moneyStats.profitFactor != null ? moneyStats.profitFactor.toFixed(2) : '--'}
           </div>
           <div className="posdash-kpi-sub">
             <span>
               单笔期望{' '}
-              <strong className={kpi.expectancy >= 0 ? 'posrev-profit' : 'posrev-loss'}>
-                {signed(kpi.expectancy)} {currency === 'USD' ? '$' : 'U'}
+              <strong className={moneyStats.expectancy >= 0 ? 'posrev-profit' : 'posrev-loss'}>
+                {signed(moneyStats.expectancy)} {effectiveMoneyCurrency}
               </strong>
             </span>
           </div>
@@ -320,20 +363,20 @@ export function CommonDashboardLayout(props: CommonDashboardLayoutProps) {
 
         <div className="posdash-kpi-card">
           <div className="posdash-kpi-header">
-            <span className="posdash-kpi-title">手续费 / 资金费</span>
+            <span className="posdash-kpi-title">手续费 / 持仓费用</span>
             <span className="posdash-kpi-icon-wrap neutral">
               <Coins size={15} />
             </span>
           </div>
           <div className="posdash-kpi-value posdash-kpi-value-muted">
-            {(-Math.abs(kpi.totalFee)).toFixed(2)}
-            <span className="posdash-currency-unit">{currency}</span>
+            {hasFees ? (-Math.abs(moneyStats.totalFee)).toFixed(2) : '—'}
+            <span className="posdash-currency-unit">{effectiveMoneyCurrency}</span>
           </div>
           <div className="posdash-kpi-sub">
             <span>
-              {currency === 'USD' ? '隔夜费' : '资金费'}{' '}
-              <strong className={kpi.totalFunding >= 0 ? 'posrev-profit' : 'posrev-loss'}>
-                {signed(kpi.totalFunding)} {currency}
+              {holdingFeeLabel}{' '}
+              <strong className={moneyStats.totalFunding >= 0 ? 'posrev-profit' : 'posrev-loss'}>
+                {hasFunding ? signed(moneyStats.totalFunding) : '—'} {effectiveMoneyCurrency}
               </strong>
             </span>
           </div>
@@ -347,10 +390,10 @@ export function CommonDashboardLayout(props: CommonDashboardLayoutProps) {
           <DashboardCardHeader
             icon={<TrendingUp size={14} />}
             tone="blue"
-            title="累计收益曲线"
-            extra="按平仓顺序累加每笔净盈亏"
+            title="累计盈亏 / 已实现利润"
+            extra={`${effectiveMoneyCurrency} · 按平仓顺序累加`}
           />
-          <EquityCurveChart currency={currency} positions={performancePositions} />
+          <EquityCurveChart currency={effectiveMoneyCurrency} positions={selectedMoneyPositions} />
         </div>
 
         <div className="posdash-card">
@@ -376,7 +419,7 @@ export function CommonDashboardLayout(props: CommonDashboardLayoutProps) {
             icon={<Tags size={14} />}
             tone="amber"
             title="策略标签表现"
-            extra="按净盈亏排序"
+            extra="交易数与胜率按全部币种统计"
           />
           <TagAnalyticsCard currency={currency} positions={performancePositions} tags={tags as any} />
         </div>
@@ -386,7 +429,7 @@ export function CommonDashboardLayout(props: CommonDashboardLayoutProps) {
             icon={<Layers size={14} />}
             tone="green"
             title="交易对贡献榜"
-            extra="谁在赚钱，谁在亏钱"
+            extra="按交易数排序；盈亏逐币种显示"
           />
           <SymbolLeaderboardCard currency={currency} positions={performancePositions} />
         </div>

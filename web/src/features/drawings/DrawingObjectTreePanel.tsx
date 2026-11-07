@@ -29,6 +29,7 @@ const TOOL_DISPLAY_NAMES: Record<string, string> = {
   VerticalLine: '垂直线',
   FibRetracement: '斐波那契回撤',
   'half-retracement': '0.5 回撤',
+  'negative-half-retracement': '-0.5 延伸（2:1）',
   ExtendedLine: '延伸线',
   Arrow: '箭头线',
   Rectangle: '矩形',

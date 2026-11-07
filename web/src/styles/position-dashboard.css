@@ -49,6 +49,8 @@
 .posdash-header-actions {
   display: flex;
   align-items: center;
+  justify-content: flex-end;
+  flex-wrap: wrap;
   gap: 8px;
 }
 
@@ -385,6 +387,33 @@
   color: var(--text-muted);
   margin-left: 5px;
   letter-spacing: 0;
+}
+
+.posdash-currency-breakdown {
+  position: relative;
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 4px 14px;
+  margin: 4px 0 8px;
+  font-family: var(--font-mono, monospace);
+  font-size: 22px;
+  font-weight: 650;
+  font-variant-numeric: tabular-nums;
+}
+
+.posdash-currency-total small {
+  color: var(--text-muted);
+  font-family: inherit;
+  font-size: 11px;
+  font-weight: 500;
+}
+
+.posdash-kpi-footnote {
+  position: relative;
+  color: var(--text-muted);
+  font-size: 10.5px;
+  line-height: 1.4;
 }
 
 .posdash-kpi-sub {
@@ -909,8 +938,10 @@
 .posdash-tag-figures {
   display: flex;
   align-items: center;
+  justify-content: flex-end;
+  flex-wrap: wrap;
   gap: 8px;
-  flex-shrink: 0;
+  min-width: 0;
 }
 
 .posdash-pf-badge {
@@ -927,6 +958,13 @@
   font-size: 13px;
   font-weight: 600;
   font-family: var(--font-mono, monospace);
+  white-space: nowrap;
+}
+
+.posdash-tag-pnl-val small {
+  color: var(--text-muted);
+  font-size: 10px;
+  font-weight: 500;
 }
 
 .posdash-dual-track {
@@ -1032,6 +1070,13 @@
   justify-content: space-between;
   gap: 10px;
   width: 100%;
+}
+
+.posdash-symbol-content > div:last-child {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 4px 10px;
 }
 
 .posdash-symbol-main {

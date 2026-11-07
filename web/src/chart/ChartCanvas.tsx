@@ -1,5 +1,5 @@
 import type { TradingSession } from '@/chart/trading-sessions';
-import { memo, useEffect, useRef, useState } from 'react';
+import { memo, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import {
   createChart,
   ColorType,
@@ -7,6 +7,7 @@ import {
   CrosshairMode,
   LineStyle,
   type IChartApi,
+  type AutoscaleInfo,
   type ISeriesApi,
   type CandlestickData,
   type HistogramData,
@@ -39,10 +40,15 @@ import { CandleCountdownOverlay } from '@/chart/CandleCountdownOverlay';
 import { candlePriceFormat, formatPrice } from './chart-price';
 import { preserveCandleViewport } from './candle-retention';
 import { TradePricePrimitive, type TradePricePoint } from './TradePricePrimitive';
+import { EmaIndicators } from './EmaIndicators';
+import type { IndicatorScope } from './ema-preferences';
+import { BarCountOverlay } from './BarCountOverlay';
+import { PreviousDayRangePrimitive } from './PreviousDayRangePrimitive';
 
 interface ChartCanvasProps {
   candles: Candlestick[];
   symbol: string;
+  pricePrecision?: number;
   interval: ReviewTimeframe;
   viewportContextKey?: string;
   isLogScale?: boolean;
@@ -50,6 +56,7 @@ interface ChartCanvasProps {
   focusTimeMs?: number | null;
   focusRangeMs?: { from: number; to: number } | null;
   focusRevision?: number;
+  focusAnchorRatio?: number;
   initialVisibleSpan?: number;
   systemMarkers?: SeriesMarker<UTCTimestamp>[];
   tradePricePoints?: TradePricePoint[];
@@ -83,6 +90,15 @@ interface ChartCanvasProps {
   trajectoryPoints?: { time: UTCTimestamp; value: number }[] | null;
   /** Replay-time duration remaining until the current candle closes. */
   candleCountdownMs?: number | null;
+  indicatorScope?: IndicatorScope;
+  emaReady?: boolean;
+  emaLoading?: boolean;
+  emaWarning?: string | null;
+  emaWarmupCandles?: Candlestick[];
+  barCountSession?: { fromMs: number; toMs: number };
+  /** Known-history bounds only; callers must exclude unrevealed replay bars. */
+  fixedPriceRange?: { minValue: number; maxValue: number };
+  previousDayCandles?: Candlestick[];
 }
 
 function findNearestCandleIndex(
@@ -147,7 +163,7 @@ function logicalRangeForFocus(
   anchorRatio = FOCUS_VIEWPORT_RATIO
 ): { from: number; to: number } {
   const span = clampVisibleSpan(visibleSpan);
-  const ratio = Math.min(0.95, Math.max(0.5, anchorRatio));
+  const ratio = Math.min(0.95, Math.max(0.05, anchorRatio));
   return {
     from: focusIndex - span * ratio,
     to: focusIndex + span * (1 - ratio),
@@ -168,6 +184,7 @@ function chartThemeColors(themeMode: 'dark' | 'light') {
 export const ChartCanvas = memo(function ChartCanvas({
   candles,
   symbol,
+  pricePrecision,
   interval,
   viewportContextKey = '',
   isLogScale = false,
@@ -175,6 +192,7 @@ export const ChartCanvas = memo(function ChartCanvas({
   focusTimeMs = null,
   focusRangeMs = null,
   focusRevision = 0,
+  focusAnchorRatio = FOCUS_VIEWPORT_RATIO,
   initialVisibleSpan = 120,
   systemMarkers = [],
   tradePricePoints,
@@ -200,19 +218,33 @@ export const ChartCanvas = memo(function ChartCanvas({
   showWeekendBands = false,
   trajectoryPoints = null,
   candleCountdownMs = null,
+  indicatorScope = 'perpetual',
+  emaReady = true,
+  emaLoading = false,
+  emaWarning,
+  emaWarmupCandles,
+  barCountSession,
+  fixedPriceRange,
+  previousDayCandles,
 }: ChartCanvasProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const chartRef = useRef<IChartApi | null>(null);
+  const fixedPriceRangeRef = useRef(fixedPriceRange);
+  fixedPriceRangeRef.current = fixedPriceRange;
   const seriesRef = useRef<ISeriesApi<'Candlestick'> | null>(null);
   const volumeSeriesRef = useRef<ISeriesApi<'Histogram'> | null>(null);
   const trajectorySeriesRef = useRef<ISeriesApi<'Line'> | null>(null);
   const tradePricePrimitiveRef = useRef<TradePricePrimitive | null>(null);
+  const previousDayRangeRef = useRef<PreviousDayRangePrimitive | null>(null);
   const prevBarsCountRef = useRef<number>(0);
   const prevFirstTimestampRef = useRef<number | null>(null);
   const prevLastTimestampRef = useRef<number | null>(null);
   const prevCandlesRef = useRef<Candlestick[]>([]);
   const prevSeriesKeyRef = useRef<string>('');
   const pendingViewportResetRef = useRef(false);
+  const rangeBeforeDataUpdateRef = useRef<LogicalRange | null>(null);
+  const pendingVisibleRangeRef = useRef<LogicalRange | null>(null);
+  const visibleRangeFrameRef = useRef<number | null>(null);
   const lastVisibleSpanRef = useRef(clampVisibleSpan(initialVisibleSpan));
   const suppressVisibleRangeEventsRef = useRef(false);
   const suppressBoundaryLoadEventsRef = useRef(false);
@@ -239,12 +271,21 @@ export const ChartCanvas = memo(function ChartCanvas({
     chart: IChartApi,
     logicalRange: { from: number; to: number }
   ) => {
+    // LWC applies this range on its next animation frame. A cached candle
+    // response can render sooner; retain the requested range as the viewport
+    // until then instead of reading the old coordinates back from the chart.
+    pendingVisibleRangeRef.current = logicalRange as LogicalRange;
+    if (visibleRangeFrameRef.current !== null) window.cancelAnimationFrame(visibleRangeFrameRef.current);
     suppressBoundaryLoadEventsRef.current = true;
     try {
       chart.timeScale().setVisibleLogicalRange(logicalRange as LogicalRange);
     } finally {
       suppressBoundaryLoadEventsRef.current = false;
     }
+    visibleRangeFrameRef.current = window.requestAnimationFrame(() => {
+      pendingVisibleRangeRef.current = null;
+      visibleRangeFrameRef.current = null;
+    });
   };
 
   useEffect(() => {
@@ -364,6 +405,8 @@ export const ChartCanvas = memo(function ChartCanvas({
     });
 
     const series = chart.addCandlestickSeries({
+      autoscaleInfoProvider: (base: () => AutoscaleInfo | null) => fixedPriceRangeRef.current
+        ? { priceRange: fixedPriceRangeRef.current } : base(),
       upColor: '#089981',
       downColor: '#f23645',
       borderUpColor: '#089981',
@@ -415,6 +458,9 @@ export const ChartCanvas = memo(function ChartCanvas({
     const tradePricePrimitive = new TradePricePrimitive();
     series.attachPrimitive(tradePricePrimitive);
     tradePricePrimitiveRef.current = tradePricePrimitive;
+    const previousDayRange = new PreviousDayRangePrimitive();
+    series.attachPrimitive(previousDayRange);
+    previousDayRangeRef.current = previousDayRange;
     setChartReady(true);
 
     let pendingCrosshairCandle: Candlestick | null = null;
@@ -589,6 +635,9 @@ export const ChartCanvas = memo(function ChartCanvas({
       container.removeEventListener('dblclick', handleDoubleClick, true);
       if (boundaryLoadTimer !== null) window.clearTimeout(boundaryLoadTimer);
       if (crosshairNotifyTimer !== null) window.clearTimeout(crosshairNotifyTimer);
+      if (visibleRangeFrameRef.current !== null) window.cancelAnimationFrame(visibleRangeFrameRef.current);
+      visibleRangeFrameRef.current = null;
+      pendingVisibleRangeRef.current = null;
       resizeObserver.disconnect();
       setChartReady(false);
       chart.remove();
@@ -597,6 +646,7 @@ export const ChartCanvas = memo(function ChartCanvas({
       volumeSeriesRef.current = null;
       trajectorySeriesRef.current = null;
       tradePricePrimitiveRef.current = null;
+      previousDayRangeRef.current = null;
     };
   }, []); // Run once on mount
 
@@ -648,6 +698,25 @@ export const ChartCanvas = memo(function ChartCanvas({
     }
   }, [isLogScale]);
 
+  useEffect(() => {
+    // Refresh the provider when a new session arrives. Do not turn autoScale
+    // back on during playback, so manual price-axis adjustments remain intact.
+    seriesRef.current?.applyOptions({});
+  }, [fixedPriceRange?.minValue, fixedPriceRange?.maxValue]);
+
+  // Child EMA effects can prepend timestamps before this component's passive
+  // data effect. Capture the old candle viewport before either series changes,
+  // so the prepend offset is applied exactly once and first-load zoom is stable.
+  useLayoutEffect(() => {
+    rangeBeforeDataUpdateRef.current = pendingVisibleRangeRef.current ?? chartRef.current?.timeScale().getVisibleLogicalRange() ?? null;
+  }, [candles, focusRevision, focusAnchorRatio, interval, symbol, viewportContextKey]);
+
+  // Directory metadata can arrive after candles. Updating precision must not
+  // rebuild data or restore a viewport captured before the user panned.
+  useEffect(() => {
+    if (candles.length) seriesRef.current?.applyOptions({ priceFormat: candlePriceFormat(candles, pricePrecision) });
+  }, [candles, pricePrecision, themeMode, showVolume]);
+
   // Data update
   useEffect(() => {
     const series = seriesRef.current;
@@ -673,7 +742,7 @@ export const ChartCanvas = memo(function ChartCanvas({
     }
 
     const rememberVisibleSpan = () => {
-      const range = chart.timeScale().getVisibleLogicalRange();
+      const range = rangeBeforeDataUpdateRef.current;
       if (!range) return;
       const span = range.to - range.from;
       if (Number.isFinite(span) && span >= 10) {
@@ -697,11 +766,10 @@ export const ChartCanvas = memo(function ChartCanvas({
         0,
         findNearestCandleIndex(candles, targetTimeMs)
       );
-      // Replay cut-in / explicit focus must stay at ~80% even when the focused
-      // candle is also the last visible bar (future candles are masked).
+      // Keep the configured anchor even when future candles are masked.
       setProgrammaticVisibleLogicalRange(
         chart,
-        logicalRangeForFocus(focusIndex, lastVisibleSpanRef.current)
+        logicalRangeForFocus(focusIndex, lastVisibleSpanRef.current, focusAnchorRatio)
       );
       return focusIndex;
     };
@@ -723,9 +791,6 @@ export const ChartCanvas = memo(function ChartCanvas({
       return;
     }
 
-    series.applyOptions({
-      priceFormat: candlePriceFormat(candles),
-    });
     const firstCandle = candles[0];
     const lastCandle = candles[candles.length - 1];
     const previousCandles = prevCandlesRef.current;
@@ -745,8 +810,7 @@ export const ChartCanvas = memo(function ChartCanvas({
       canAppendIncrementally &&
       appendedCount <= MAX_INCREMENTAL_APPEND_BARS
     ) {
-      const visibleRangeBeforeAppend =
-        chart.timeScale().getVisibleLogicalRange();
+      const visibleRangeBeforeAppend = rangeBeforeDataUpdateRef.current;
       for (
         let index = prevBarsCountRef.current;
         index < candles.length;
@@ -833,7 +897,7 @@ export const ChartCanvas = memo(function ChartCanvas({
       });
     }
 
-    const prevLogicalRange = chart.timeScale().getVisibleLogicalRange();
+    const prevLogicalRange = rangeBeforeDataUpdateRef.current;
     const firstTimestamp = firstCandle.timestampMs;
 
     // Lightweight Charts briefly exposes an auto-fitted range during setData.
@@ -859,7 +923,7 @@ export const ChartCanvas = memo(function ChartCanvas({
         // the trade window; avoid a conflicting right-align flash here.
       } else if (pendingFocusTimeMs !== null) {
         applyFocusTimeViewport(sortedData.length, pendingFocusTimeMs);
-        lastAppliedFocusKeyRef.current = `${symbol}:${interval}:${pendingFocusTimeMs}:::${focusRevision}`;
+        lastAppliedFocusKeyRef.current = `${symbol}:${interval}:${pendingFocusTimeMs}:::${focusRevision}:${focusAnchorRatio}`;
       } else {
         applyRightAlignedViewport(sortedData.length);
       }
@@ -872,7 +936,7 @@ export const ChartCanvas = memo(function ChartCanvas({
     prevFirstTimestampRef.current = firstTimestamp;
     prevLastTimestampRef.current = lastCandle.timestampMs;
     prevCandlesRef.current = candles;
-  }, [candles, focusRevision, interval, symbol, viewportContextKey]);
+  }, [candles, focusRevision, focusAnchorRatio, interval, symbol, viewportContextKey]);
 
   // Keep the replay cut-in candle visible after future candles are masked.
   useEffect(() => {
@@ -888,7 +952,7 @@ export const ChartCanvas = memo(function ChartCanvas({
 
     const focusKey = `${symbol}:${interval}:${focusTimeMs ?? ''}:${
       focusRangeMs?.from ?? ''
-    }:${focusRangeMs?.to ?? ''}:${focusRevision}`;
+    }:${focusRangeMs?.to ?? ''}:${focusRevision}:${focusAnchorRatio}`;
     if (lastAppliedFocusKeyRef.current === focusKey) return;
 
     if (focusRangeMs) {
@@ -937,7 +1001,7 @@ export const ChartCanvas = memo(function ChartCanvas({
       findNearestCandleIndex(candles, resolvedFocusTimeMs)
     );
 
-    const currentRange = chart.timeScale().getVisibleLogicalRange();
+    const currentRange = pendingVisibleRangeRef.current ?? chart.timeScale().getVisibleLogicalRange();
     if (currentRange) {
       const span = currentRange.to - currentRange.from;
       if (Number.isFinite(span) && span >= 10) {
@@ -947,7 +1011,7 @@ export const ChartCanvas = memo(function ChartCanvas({
     const frame = window.requestAnimationFrame(() => {
       setProgrammaticVisibleLogicalRange(
         chart,
-        logicalRangeForFocus(focusIndex, lastVisibleSpanRef.current)
+        logicalRangeForFocus(focusIndex, lastVisibleSpanRef.current, focusAnchorRatio)
       );
       lastAppliedFocusKeyRef.current = focusKey;
     });
@@ -956,6 +1020,7 @@ export const ChartCanvas = memo(function ChartCanvas({
     candles,
     focusRangeMs,
     focusRevision,
+    focusAnchorRatio,
     focusTimeMs,
     interval,
     symbol,
@@ -967,6 +1032,10 @@ export const ChartCanvas = memo(function ChartCanvas({
   }, [tradePricePoints, chartReady]);
 
   useEffect(() => {
+    previousDayRangeRef.current?.setCandles(previousDayCandles ?? []);
+  }, [previousDayCandles, chartReady]);
+
+  useEffect(() => {
     const series = seriesRef.current;
     if (!series) return;
     series.setMarkers(systemMarkers);
@@ -975,6 +1044,7 @@ export const ChartCanvas = memo(function ChartCanvas({
   return (
     <div
       className="chart-canvas-stack"
+      data-indicator-scope={indicatorScope}
       style={{
         width: '100%',
         height: '100%',
@@ -1024,6 +1094,18 @@ export const ChartCanvas = memo(function ChartCanvas({
               themeMode={themeMode}
             />
           )}
+        {chartReady && chartRef.current && (
+          <EmaIndicators key={indicatorScope} chart={chartRef.current} chartOwner={chartRef} candles={candles}
+            scope={indicatorScope} pricePrecision={pricePrecision} ready={emaReady}
+            loading={emaLoading} warning={emaWarning} warmupCandles={emaWarmupCandles}
+            excludeFromAutoscale={Boolean(fixedPriceRange)}
+            contextKey={`${symbol}:${interval}:${viewportContextKey}`} />
+        )}
+        {chartReady && chartRef.current && seriesRef.current && barCountSession && (
+          <BarCountOverlay chart={chartRef.current} series={seriesRef.current} candles={candles}
+            interval={interval} sessionStartMs={barCountSession.fromMs} sessionEndMs={barCountSession.toMs}
+            every={2} themeMode={themeMode} isLogScale={isLogScale} />
+        )}
         {chartReady && chartRef.current && seriesRef.current && (
           <ChartDrawingOverlay
             key={`${drawingVideoId}:${symbol}:${interval}`}

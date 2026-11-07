@@ -9,6 +9,7 @@ import {
 } from 'react';
 import * as serverDrawingApi from '@/api/drawing-api';
 import * as cfdDrawingApi from '@/api/cfd-drawing-api';
+import { reviewSessionDrawingApi } from '@/api/review-session-api';
 import {
   deleteBitlangDrawing,
   fetchBitlangDrawings,
@@ -64,22 +65,29 @@ type DrawingWorkspace = {
   toggleLockDrawing: (id: string) => Promise<void>;
   undo: () => Promise<void>;
   redo: () => Promise<void>;
+  flushDrawingSaves: () => Promise<void>;
+  savingDrawings: boolean;
 };
 
 const DRAWING_SCOPE = '__global__';
 const DRAWING_UI_STORAGE_KEY = 'tiabtc-drawing-ui-v1';
 const MAX_HISTORY_ENTRIES = 100;
-type DrawingPersistence = 'server' | 'memory' | 'position' | 'bitlang' | 'cfd';
-type ExtraDrawingScope = PositionDrawingScope | BitlangDrawingScope;
+type DrawingPersistence = 'server' | 'memory' | 'position' | 'bitlang' | 'cfd' | 'session';
+type ExtraDrawingScope = PositionDrawingScope | BitlangDrawingScope | { reviewSessionId: string };
 
 export function useDrawingWorkspace(
   symbol: string,
   timeframe: ReviewTimeframe,
   persistence: DrawingPersistence = 'server',
-  extraScope?: ExtraDrawingScope
+  extraScope?: ExtraDrawingScope,
+  suspended = false
 ): DrawingWorkspace {
+  const reviewSessionId = extraScope && 'reviewSessionId' in extraScope ? extraScope.reviewSessionId : '';
+  const [drawingSaveCount, setDrawingSaveCount] = useState(0);
+  const onDrawingMutation = useCallback((delta: 1 | -1) => setDrawingSaveCount((count) => Math.max(0, count + delta)), []);
+  const sessionApi = useMemo(() => reviewSessionDrawingApi(reviewSessionId, onDrawingMutation), [reviewSessionId, onDrawingMutation]);
   const { clearAllDrawingsForSymbol, deleteDrawing, fetchDrawings, replaceDrawings, saveDrawing } =
-    persistence === 'cfd' ? cfdDrawingApi : serverDrawingApi;
+    persistence === 'session' ? sessionApi : persistence === 'cfd' ? cfdDrawingApi : serverDrawingApi;
   const positionVenue =
     extraScope && 'venue' in extraScope ? extraScope.venue : '';
   const positionId =
@@ -87,7 +95,9 @@ export function useDrawingWorkspace(
   const bitlangTradeId =
     extraScope && 'tradeId' in extraScope ? extraScope.tradeId : '';
   const drawingWorkspaceKey =
-    persistence === 'memory'
+    persistence === 'session'
+      ? `session:${reviewSessionId}:${symbol}`
+      : persistence === 'memory'
       ? `${persistence}:${symbol}:${timeframe}`
       : persistence === 'position'
         ? `${persistence}:${positionVenue}:${positionId}:${symbol}`
@@ -101,6 +111,7 @@ export function useDrawingWorkspace(
       false
     )
   );
+  const [ctrlMagnetEnabled, setCtrlMagnetEnabled] = useState(false);
   const [drawings, setDrawings] = useState<DrawingToolState[]>([]);
   const [selectedDrawingId, setSelectedDrawingId] = useState<string | null>(
     null
@@ -113,7 +124,7 @@ export function useDrawingWorkspace(
   const [undoStack, setUndoStack] = useState<DrawingToolState[][]>([]);
   const [redoStack, setRedoStack] = useState<DrawingToolState[][]>([]);
   const [hydratedWorkspaceKey, setHydratedWorkspaceKey] = useState('');
-  const ready = hydratedWorkspaceKey === drawingWorkspaceKey;
+  const ready = hydratedWorkspaceKey === drawingWorkspaceKey && !suspended;
 
   useEffect(() => {
     writeLocalUiState(DRAWING_UI_STORAGE_KEY, { magnetEnabled });
@@ -123,10 +134,61 @@ export function useDrawingWorkspace(
   const confirmedDrawingsRef = useRef<DrawingToolState[]>([]);
   const saveChainsRef = useRef<Record<string, Promise<void>>>({});
   const saveRevisionsRef = useRef<Record<string, number>>({});
+  const pendingMutationsRef = useRef(new Map<string, Set<Promise<unknown>>>());
   const workspaceRevisionRef = useRef(0);
   const historyOperationRef = useRef(false);
   const readyRef = useRef(ready);
   readyRef.current = ready;
+
+  const trackPendingMutation = useCallback(<T,>(operation: Promise<T>) => {
+    const workspaceKey = drawingWorkspaceKey;
+    let pending = pendingMutationsRef.current.get(workspaceKey);
+    if (!pending) {
+      pending = new Set();
+      pendingMutationsRef.current.set(workspaceKey, pending);
+    }
+    pending.add(operation);
+    const remove = () => {
+      pending?.delete(operation);
+      if (pending?.size === 0) pendingMutationsRef.current.delete(workspaceKey);
+    };
+    void operation.then(remove, remove);
+    return operation;
+  }, [drawingWorkspaceKey]);
+  useEffect(() => {
+    const isEditing = (target: EventTarget | null) => target instanceof HTMLElement &&
+      (target.isContentEditable || Boolean(target.closest('input, textarea, select')));
+    const updateCtrlMagnet = (event: KeyboardEvent | PointerEvent) => {
+      setCtrlMagnetEnabled(
+        event.ctrlKey && readyRef.current &&
+        !isEditing(event.target) && !isEditing(document.activeElement) &&
+        !document.querySelector('[aria-modal="true"]')
+      );
+    };
+    const resetCtrlMagnet = () => setCtrlMagnetEnabled(false);
+    const handleVisibilityChange = () => {
+      if (document.hidden) resetCtrlMagnet();
+    };
+    const handleFocusIn = (event: FocusEvent) => {
+      if (isEditing(event.target) || document.querySelector('[aria-modal="true"]')) {
+        resetCtrlMagnet();
+      }
+    };
+    window.addEventListener('keydown', updateCtrlMagnet);
+    window.addEventListener('keyup', updateCtrlMagnet);
+    window.addEventListener('pointermove', updateCtrlMagnet);
+    window.addEventListener('blur', resetCtrlMagnet);
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+    document.addEventListener('focusin', handleFocusIn);
+    return () => {
+      window.removeEventListener('keydown', updateCtrlMagnet);
+      window.removeEventListener('keyup', updateCtrlMagnet);
+      window.removeEventListener('pointermove', updateCtrlMagnet);
+      window.removeEventListener('blur', resetCtrlMagnet);
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
+      document.removeEventListener('focusin', handleFocusIn);
+    };
+  }, []);
   const loadScopeRef = useRef({
     symbol,
     timeframe,
@@ -237,7 +299,7 @@ export function useDrawingWorkspace(
         workspaceRevisionRef.current += 1;
       }
     };
-  }, [drawingWorkspaceKey, persistence, replaceLocalDrawings]);
+  }, [drawingWorkspaceKey, persistence, replaceLocalDrawings, fetchDrawings]);
 
   const saveDrawingState = useCallback(
     async (toolState: DrawingToolState) => {
@@ -343,6 +405,7 @@ export function useDrawingWorkspace(
       positionId,
       positionVenue,
       replaceLocalDrawings,
+      saveDrawing,
     ]
   );
 
@@ -367,40 +430,42 @@ export function useDrawingWorkspace(
     }
 
     try {
-      await saveChainsRef.current[selectedDrawingId]?.catch(() => undefined);
-      if (persistence === 'position') {
-        await deletePositionDrawing(
-          { venue: positionVenue, positionId },
-          symbol,
-          timeframe,
-          selectedDrawingId
+      await trackPendingMutation((async () => {
+        await saveChainsRef.current[selectedDrawingId]?.catch(() => undefined);
+        if (persistence === 'position') {
+          await deletePositionDrawing(
+            { venue: positionVenue, positionId },
+            symbol,
+            timeframe,
+            selectedDrawingId
+          );
+        } else if (persistence === 'bitlang') {
+          await deleteBitlangDrawing(
+            { tradeId: bitlangTradeId },
+            symbol,
+            timeframe,
+            selectedDrawingId
+          );
+        } else {
+          await deleteDrawing(
+            selectedDrawingId,
+            DRAWING_SCOPE,
+            symbol,
+            timeframe
+          );
+        }
+        if (workspaceRevisionRef.current !== workspaceRevision) return;
+        confirmedDrawingsRef.current = confirmedDrawingsRef.current.filter(
+          (drawing) => drawing.id !== selectedDrawingId
         );
-      } else if (persistence === 'bitlang') {
-        await deleteBitlangDrawing(
-          { tradeId: bitlangTradeId },
-          symbol,
-          timeframe,
-          selectedDrawingId
+        const current = drawingsRef.current;
+        commitLocalChange(
+          current.filter((drawing) => drawing.id !== selectedDrawingId),
+          current
         );
-      } else {
-        await deleteDrawing(
-          selectedDrawingId,
-          DRAWING_SCOPE,
-          symbol,
-          timeframe
-        );
-      }
-      if (workspaceRevisionRef.current !== workspaceRevision) return;
-      confirmedDrawingsRef.current = confirmedDrawingsRef.current.filter(
-        (drawing) => drawing.id !== selectedDrawingId
-      );
-      const current = drawingsRef.current;
-      commitLocalChange(
-        current.filter((drawing) => drawing.id !== selectedDrawingId),
-        current
-      );
-      setSelectedDrawingId(null);
-      toast.success('已删除画图 (可按 Ctrl+Z 恢复)');
+        setSelectedDrawingId(null);
+        toast.success('已删除画图 (可按 Ctrl+Z 恢复)');
+      })());
     } catch (deleteError) {
       toast.error(
         `删除画图记录失败: ${
@@ -417,6 +482,7 @@ export function useDrawingWorkspace(
     selectedDrawingId,
     symbol,
     timeframe,
+    trackPendingMutation,
   ]);
 
   const clearAllDrawings = useCallback(async () => {
@@ -447,31 +513,33 @@ export function useDrawingWorkspace(
     }
 
     try {
-      await Promise.all(
-        Object.values(saveChainsRef.current).map((request) =>
-          request.catch(() => undefined)
-        )
-      );
-      if (persistence === 'position') {
-        await deletePositionDrawing(
-          { venue: positionVenue, positionId },
-          symbol,
-          timeframe
+      await trackPendingMutation((async () => {
+        await Promise.all(
+          Object.values(saveChainsRef.current).map((request) =>
+            request.catch(() => undefined)
+          )
         );
-      } else if (persistence === 'bitlang') {
-        await deleteBitlangDrawing(
-          { tradeId: bitlangTradeId },
-          symbol,
-          timeframe
-        );
-      } else {
-        await clearAllDrawingsForSymbol(DRAWING_SCOPE, symbol, timeframe);
-      }
-      if (workspaceRevisionRef.current !== workspaceRevision) return;
-      confirmedDrawingsRef.current = [];
-      commitLocalChange([], drawingsRef.current);
-      setSelectedDrawingId(null);
-      toast.success('已清空所有画图记录 (可按 Ctrl+Z 恢复)');
+        if (persistence === 'position') {
+          await deletePositionDrawing(
+            { venue: positionVenue, positionId },
+            symbol,
+            timeframe
+          );
+        } else if (persistence === 'bitlang') {
+          await deleteBitlangDrawing(
+            { tradeId: bitlangTradeId },
+            symbol,
+            timeframe
+          );
+        } else {
+          await clearAllDrawingsForSymbol(DRAWING_SCOPE, symbol, timeframe);
+        }
+        if (workspaceRevisionRef.current !== workspaceRevision) return;
+        confirmedDrawingsRef.current = [];
+        commitLocalChange([], drawingsRef.current);
+        setSelectedDrawingId(null);
+        toast.success('已清空所有画图记录 (可按 Ctrl+Z 恢复)');
+      })());
     } catch (clearError) {
       toast.error(
         `清空画图失败: ${
@@ -487,6 +555,7 @@ export function useDrawingWorkspace(
     positionVenue,
     symbol,
     timeframe,
+    trackPendingMutation,
   ]);
 
   const deleteDrawingById = useCallback(
@@ -510,40 +579,42 @@ export function useDrawingWorkspace(
       }
 
       try {
-        await saveChainsRef.current[targetId]?.catch(() => undefined);
-        if (persistence === 'position') {
-          await deletePositionDrawing(
-            { venue: positionVenue, positionId },
-            symbol,
-            timeframe,
-            targetId
+        await trackPendingMutation((async () => {
+          await saveChainsRef.current[targetId]?.catch(() => undefined);
+          if (persistence === 'position') {
+            await deletePositionDrawing(
+              { venue: positionVenue, positionId },
+              symbol,
+              timeframe,
+              targetId
+            );
+          } else if (persistence === 'bitlang') {
+            await deleteBitlangDrawing(
+              { tradeId: bitlangTradeId },
+              symbol,
+              timeframe,
+              targetId
+            );
+          } else {
+            await deleteDrawing(
+              targetId,
+              DRAWING_SCOPE,
+              symbol,
+              timeframe
+            );
+          }
+          if (workspaceRevisionRef.current !== workspaceRevision) return;
+          confirmedDrawingsRef.current = confirmedDrawingsRef.current.filter(
+            (drawing) => drawing.id !== targetId
           );
-        } else if (persistence === 'bitlang') {
-          await deleteBitlangDrawing(
-            { tradeId: bitlangTradeId },
-            symbol,
-            timeframe,
-            targetId
+          const current = drawingsRef.current;
+          commitLocalChange(
+            current.filter((drawing) => drawing.id !== targetId),
+            current
           );
-        } else {
-          await deleteDrawing(
-            targetId,
-            DRAWING_SCOPE,
-            symbol,
-            timeframe
-          );
-        }
-        if (workspaceRevisionRef.current !== workspaceRevision) return;
-        confirmedDrawingsRef.current = confirmedDrawingsRef.current.filter(
-          (drawing) => drawing.id !== targetId
-        );
-        const current = drawingsRef.current;
-        commitLocalChange(
-          current.filter((drawing) => drawing.id !== targetId),
-          current
-        );
-        if (selectedDrawingId === targetId) setSelectedDrawingId(null);
-        toast.success('已删除画图 (可按 Ctrl+Z 恢复)');
+          if (selectedDrawingId === targetId) setSelectedDrawingId(null);
+          toast.success('已删除画图 (可按 Ctrl+Z 恢复)');
+        })());
       } catch (deleteError) {
         toast.error(
           `删除画图记录失败: ${
@@ -561,6 +632,7 @@ export function useDrawingWorkspace(
       selectedDrawingId,
       symbol,
       timeframe,
+      trackPendingMutation,
     ]
   );
 
@@ -620,6 +692,29 @@ export function useDrawingWorkspace(
       )
     );
   }, []);
+  const flushDrawingSaves = useCallback(async () => {
+    const workspaceKey = drawingWorkspaceKey;
+    let waitedForMutation = false;
+    while (true) {
+      const saves = Object.values(saveChainsRef.current);
+      const mutations = [...(pendingMutationsRef.current.get(workspaceKey) ?? [])];
+      const sessionMutations = sessionApi.flushMutations();
+      if (saves.length === 0 && mutations.length === 0) {
+        await sessionMutations;
+        break;
+      }
+      waitedForMutation = true;
+      await Promise.all([...saves, ...mutations, sessionMutations]);
+    }
+    if (waitedForMutation) {
+      // ChartWorkspace publishes its archive snapshot from a passive effect.
+      // Let that effect observe the committed local drawing state before the
+      // archive transition reads the snapshot after this promise resolves.
+      await new Promise<void>((resolve) => window.requestAnimationFrame(() =>
+        window.requestAnimationFrame(() => window.setTimeout(resolve, 0))
+      ));
+    }
+  }, [drawingWorkspaceKey, sessionApi]);
 
   const reconcileSelection = useCallback(
     (nextDrawings: DrawingToolState[]) => {
@@ -654,39 +749,41 @@ export function useDrawingWorkspace(
         reconcileSelection(previous);
         return;
       }
-      await waitForPendingSaves();
-      if (workspaceRevisionRef.current !== workspaceRevision) return;
-      const serialized = previous.map(serializeDrawing);
-      const saved =
-        persistence === 'position'
-          ? await replacePositionDrawings(
-              { venue: positionVenue, positionId },
-              symbol,
-              timeframe,
-              serialized
-            )
-          : persistence === 'bitlang'
-            ? await replaceBitlangDrawings(
-                { tradeId: bitlangTradeId },
+      await trackPendingMutation((async () => {
+        await waitForPendingSaves();
+        if (workspaceRevisionRef.current !== workspaceRevision) return;
+        const serialized = previous.map(serializeDrawing);
+        const saved =
+          persistence === 'position'
+            ? await replacePositionDrawings(
+                { venue: positionVenue, positionId },
                 symbol,
                 timeframe,
                 serialized
               )
-            : await replaceDrawings(
-                DRAWING_SCOPE,
-                symbol,
-                timeframe,
-                serialized
-              );
-      if (workspaceRevisionRef.current !== workspaceRevision) return;
-      setRedoStack((stack) =>
-        [...stack, current].slice(-MAX_HISTORY_ENTRIES)
-      );
-      setUndoStack((stack) => stack.slice(0, -1));
-      const restored = saved.map(deserializeDrawing);
-      confirmedDrawingsRef.current = restored;
-      replaceLocalDrawings(restored);
-      reconcileSelection(restored);
+            : persistence === 'bitlang'
+              ? await replaceBitlangDrawings(
+                  { tradeId: bitlangTradeId },
+                  symbol,
+                  timeframe,
+                  serialized
+                )
+              : await replaceDrawings(
+                  DRAWING_SCOPE,
+                  symbol,
+                  timeframe,
+                  serialized
+                );
+        if (workspaceRevisionRef.current !== workspaceRevision) return;
+        setRedoStack((stack) =>
+          [...stack, current].slice(-MAX_HISTORY_ENTRIES)
+        );
+        setUndoStack((stack) => stack.slice(0, -1));
+        const restored = saved.map(deserializeDrawing);
+        confirmedDrawingsRef.current = restored;
+        replaceLocalDrawings(restored);
+        reconcileSelection(restored);
+      })());
     } catch (undoError) {
       if (workspaceRevisionRef.current === workspaceRevision) {
         toast.error(
@@ -711,6 +808,7 @@ export function useDrawingWorkspace(
     timeframe,
     undoStack,
     waitForPendingSaves,
+    trackPendingMutation,
   ]);
 
   const redo = useCallback(async () => {
@@ -735,39 +833,41 @@ export function useDrawingWorkspace(
         reconcileSelection(next);
         return;
       }
-      await waitForPendingSaves();
-      if (workspaceRevisionRef.current !== workspaceRevision) return;
-      const serialized = next.map(serializeDrawing);
-      const saved =
-        persistence === 'position'
-          ? await replacePositionDrawings(
-              { venue: positionVenue, positionId },
-              symbol,
-              timeframe,
-              serialized
-            )
-          : persistence === 'bitlang'
-            ? await replaceBitlangDrawings(
-                { tradeId: bitlangTradeId },
+      await trackPendingMutation((async () => {
+        await waitForPendingSaves();
+        if (workspaceRevisionRef.current !== workspaceRevision) return;
+        const serialized = next.map(serializeDrawing);
+        const saved =
+          persistence === 'position'
+            ? await replacePositionDrawings(
+                { venue: positionVenue, positionId },
                 symbol,
                 timeframe,
                 serialized
               )
-            : await replaceDrawings(
-                DRAWING_SCOPE,
-                symbol,
-                timeframe,
-                serialized
-              );
-      if (workspaceRevisionRef.current !== workspaceRevision) return;
-      setUndoStack((stack) =>
-        [...stack, current].slice(-MAX_HISTORY_ENTRIES)
-      );
-      setRedoStack((stack) => stack.slice(0, -1));
-      const restored = saved.map(deserializeDrawing);
-      confirmedDrawingsRef.current = restored;
-      replaceLocalDrawings(restored);
-      reconcileSelection(restored);
+            : persistence === 'bitlang'
+              ? await replaceBitlangDrawings(
+                  { tradeId: bitlangTradeId },
+                  symbol,
+                  timeframe,
+                  serialized
+                )
+              : await replaceDrawings(
+                  DRAWING_SCOPE,
+                  symbol,
+                  timeframe,
+                  serialized
+                );
+        if (workspaceRevisionRef.current !== workspaceRevision) return;
+        setUndoStack((stack) =>
+          [...stack, current].slice(-MAX_HISTORY_ENTRIES)
+        );
+        setRedoStack((stack) => stack.slice(0, -1));
+        const restored = saved.map(deserializeDrawing);
+        confirmedDrawingsRef.current = restored;
+        replaceLocalDrawings(restored);
+        reconcileSelection(restored);
+      })());
     } catch (redoError) {
       if (workspaceRevisionRef.current === workspaceRevision) {
         toast.error(
@@ -792,6 +892,7 @@ export function useDrawingWorkspace(
     symbol,
     timeframe,
     waitForPendingSaves,
+    trackPendingMutation,
   ]);
 
   useEffect(() => {
@@ -876,7 +977,7 @@ export function useDrawingWorkspace(
     ready,
     activeTool,
     setActiveTool,
-    magnetEnabled,
+    magnetEnabled: magnetEnabled || ctrlMagnetEnabled,
     toggleMagnet,
     drawings: visibleDrawings,
     allDrawings: scopedDrawings,
@@ -896,5 +997,7 @@ export function useDrawingWorkspace(
     toggleLockDrawing,
     undo,
     redo,
+    flushDrawingSaves,
+    savingDrawings: drawingSaveCount > 0,
   };
 }

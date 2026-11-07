@@ -11,6 +11,7 @@ const TOOL_DEFAULTS: Record<string, Partial<DrawingStylePreferences>> = {
   'arrow-mark-down': { color: '#f23645', lineWidth: 2 },
   FibRetracement: { color: '#2962ff', lineWidth: 1 },
   'half-retracement': { color: '#facc15', lineWidth: 1 },
+  'negative-half-retracement': { color: '#f97316', lineWidth: 1 },
 };
 
 const BASE_DEFAULT: DrawingStylePreferences = {

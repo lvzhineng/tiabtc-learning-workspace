@@ -108,8 +108,10 @@ export function formatPrice(
   }).format(value);
 }
 
-export function candlePriceFormat(candles: Candlestick[]): PriceFormatCustom {
-  const precision = candlePricePrecision(candles);
+export function candlePriceFormat(candles: Candlestick[], precisionOverride?: number): PriceFormatCustom {
+  const precision = precisionOverride !== undefined && Number.isInteger(precisionOverride)
+    && precisionOverride >= 0 && precisionOverride <= MAX_PRICE_PRECISION
+    ? precisionOverride : candlePricePrecision(candles);
   const minMove = Number((10 ** -precision).toFixed(precision));
   return {
     type: 'custom',

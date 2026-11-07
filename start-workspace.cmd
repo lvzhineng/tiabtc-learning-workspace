@@ -1,6 +1,6 @@
 @echo off
 chcp 65001 >nul
-title TiaBTC Learning Workspace
+title 观烛复盘
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File "%~dp0start-workspace.ps1" -Page learning
 if errorlevel 1 (
   echo.

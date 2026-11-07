@@ -35,8 +35,15 @@ function seriesKey(
 
 export function positionCandleCacheVenue(
   symbol: string,
-  positionVenue?: string | null
+  positionVenue?: string | null,
+  exnessMarketKey?: string | null
 ): string {
+  if (positionVenue === 'exness') {
+    if (['NAS100', 'USTEC', 'USTECM', 'US500', 'US500M', 'JP225', 'JP225M'].includes(symbol.toUpperCase())) {
+      return 'gate-cfd:exness-reference';
+    }
+    return exnessMarketKey || 'exness:unconfigured';
+  }
   if (positionVenue === 'gate-cfd') return 'gate-cfd';
   const compact = String(symbol || '').trim().toUpperCase();
   if (compact === 'BTCUSDT' || compact === 'ETHUSDT') return 'bybit';
@@ -244,6 +251,8 @@ export function sliceCachedCandleWindow(
 }
 
 export function candleVenueLabel(venue: string | null | undefined): string {
+  if (venue === 'gate-cfd:exness-reference') return 'K 线来源 Gate CFD · 参考行情';
+  if (venue?.startsWith('exness:')) return 'K 线来源 Exness · Bid';
   if (venue === 'gate-cfd') return 'K 线来源 Gate CFD';
   if (venue === 'bitget') return 'K 线来源 Bitget';
   if (venue === 'gate') return 'K 线来源 Gate';

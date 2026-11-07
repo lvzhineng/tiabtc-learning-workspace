@@ -5,6 +5,7 @@ import math
 import re
 import threading
 import time
+from pathlib import Path
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlencode
 from urllib.request import Request, urlopen
@@ -12,14 +13,21 @@ from urllib.request import Request, urlopen
 
 CFD_SYMBOLS = {
     "XAUUSD": {"symbol": "XAUUSD", "name": "黄金", "quote": "USD"},
+    "XAGUSD": {"symbol": "XAGUSD", "name": "白银", "quote": "USD"},
     "NAS100": {"symbol": "NAS100", "name": "纳斯达克100", "quote": "USD"},
+    "US500": {"symbol": "US500", "name": "标普500", "quote": "USD"},
     "JPN225": {"symbol": "JPN225", "name": "日经225", "quote": "JPY"},
 }
+CFD_CATEGORY_NAMES = {1: "金属", 2: "股票及 ETF", 3: "指数", 4: "外汇", 5: "大宗商品"}
+for _symbol, _item in CFD_SYMBOLS.items():
+    _category = 1 if _symbol in {"XAUUSD", "XAGUSD"} else 3
+    _item.update(categoryId=_category, categoryName=CFD_CATEGORY_NAMES[_category], isBase=True)
 CFD_TIMEFRAMES = {"1": "1m", "5": "5m", "15": "15m", "60": "1h", "240": "4h", "D": "1d", "W": "7d"}
 CFD_INTERVAL_MS = {"1": 60_000, "5": 300_000, "15": 900_000, "60": 3_600_000, "240": 14_400_000, "D": 86_400_000, "W": 604_800_000}
 
 
 def validate_cfd_scope(symbol, interval):
+    validate_cfd_position_scope(symbol, interval)
     if symbol not in CFD_SYMBOLS:
         raise ValueError("不支持该 CFD 品种")
     if interval not in CFD_TIMEFRAMES:
@@ -27,9 +35,8 @@ def validate_cfd_scope(symbol, interval):
 
 
 def validate_cfd_position_scope(symbol, interval):
-    # Account symbols may include forex, stocks and broker suffixes. Global
-    # markets still uses the explicit three-symbol whitelist above.
-    if not isinstance(symbol, str) or not re.fullmatch(r"[A-Z0-9][A-Z0-9._-]{1,39}", symbol):
+    # Symbols are opaque upstream IDs: never strip numeric leverage suffixes.
+    if not isinstance(symbol, str) or not re.fullmatch(r"[A-Z0-9][A-Z0-9._-]{0,39}", symbol):
         raise ValueError("CFD 仓位品种无效")
     if interval not in CFD_TIMEFRAMES:
         raise ValueError("不支持该 CFD K 线周期")
@@ -47,6 +54,26 @@ class GateCfdMarketDataProvider:
     def __init__(self):
         self.request_lock = threading.Lock()
         self.next_request_at = 0.0
+
+    def fetch_directory(self, categories=False):
+        suffix = "/categories" if categories else ""
+        url = f"https://api.gateio.ws/api/v4/tradfi/symbols{suffix}"
+        try:
+            with self.request_lock:
+                time.sleep(max(0, self.next_request_at - time.monotonic()))
+                self.next_request_at = time.monotonic() + 0.25
+                request = Request(url, headers={"Accept": "application/json", "User-Agent": "TiaBTC-CFD-Replay/1.0"})
+                with urlopen(request, timeout=12) as response:
+                    encoded = response.read(5_000_001)
+            if len(encoded) > 5_000_000:
+                raise ValueError("oversized directory")
+            payload = json.loads(encoded)
+            rows = payload.get("data", {}).get("list")
+            if payload.get("label") or not isinstance(rows, list) or not rows:
+                raise ValueError("invalid directory")
+            return rows
+        except (OSError, ValueError, TypeError, AttributeError) as error:
+            raise RuntimeError("Gate 品种目录暂时无法获取，使用本机已有目录") from error
 
     def _request(self, symbol, params):
         url = f"https://api.gateio.ws/api/v4/tradfi/symbols/{symbol}/klines?{urlencode(params)}"
@@ -127,3 +154,155 @@ class GateCfdMarketDataProvider:
                 item["close"] = row["close"]
             result = sorted(grouped.values(), key=lambda row: row["timestamp"])
             return result[-limit:] if limit else result
+
+
+class GateCfdSymbolCatalog:
+    """Public directory with bounded refresh and an atomic, non-sensitive snapshot.
+
+    Previously seen symbols remain valid for cached candles, drawings and archives.
+    Only this directory refresh extends the global-market allowlist.
+    """
+
+    TTL_SECONDS = 3600
+    RETRY_SECONDS = 60
+    CATEGORY_TRANSLATIONS = {
+        "metals": "金属", "stocks": "股票及 ETF", "indices": "指数",
+        "forex": "外汇", "commodities": "大宗商品",
+    }
+    DISPLAY_NAMES = {
+        "XAUUSD": "黄金", "XAGUSD": "白银", "NAS100": "纳斯达克100",
+        "US500": "标普500", "JPN225": "日经225", "US30": "道琼斯30",
+        "GER40": "德国DAX40", "HK50": "恒生50", "UK100": "英国富时100",
+        "US2000": "罗素2000", "CHCUSD": "中国A50", "XTIUSD": "WTI原油",
+        "XBRUSD": "布伦特原油", "NG": "天然气", "GAS": "汽油",
+        "WHEAT": "小麦", "SOYBEAN": "大豆", "XCU": "铜", "XNI": "镍",
+        "XPDUSD": "钯金", "XPTUSD": "铂金", "XAL": "铝", "XPB": "铅",
+        "AAPL": "苹果", "NVDA": "英伟达", "TSLA": "特斯拉", "MSFT": "微软",
+        "AMZN": "亚马逊", "META": "Meta", "GOOGL": "谷歌", "BABA": "阿里巴巴",
+        "TENCENT": "腾讯", "XIAOMI": "小米", "QQQ": "纳指100 ETF",
+    }
+    CURRENCY_NAMES = {
+        "EUR": "欧元", "USD": "美元", "GBP": "英镑", "JPY": "日元",
+        "AUD": "澳元", "NZD": "纽元", "CAD": "加元", "CHF": "瑞郎",
+        "CNH": "离岸人民币", "HKD": "港元", "SGD": "新加坡元",
+    }
+
+    def __init__(self, provider, cache_file):
+        self.provider = provider
+        self.cache_file = Path(cache_file)
+        self.lock = threading.Lock()
+        self.fetched_at = 0.0
+        self.next_attempt_at = 0.0
+        self.active_symbols = set(CFD_SYMBOLS)
+        self.warning = None
+        try:
+            with self.cache_file.open("rb") as stream:
+                encoded = stream.read(5_000_001)
+            if len(encoded) > 5_000_000:
+                raise ValueError("oversized snapshot")
+            snapshot = json.loads(encoded)
+            items = snapshot["symbols"]
+            if not isinstance(items, list) or not 1 <= len(items) <= 10000:
+                raise ValueError("invalid snapshot")
+            restored = {}
+            for item in items:
+                validate_cfd_position_scope(item["symbol"], "1")
+                if not isinstance(item.get("categoryId"), int) or not isinstance(item.get("name"), str):
+                    raise ValueError("invalid snapshot item")
+                if not isinstance(item.get("categoryName"), str) or not isinstance(item.get("isBase"), bool):
+                    raise ValueError("invalid snapshot category")
+                restored[item["symbol"]] = item
+            active = snapshot["activeSymbols"]
+            if not isinstance(active, list) or not active or any(symbol not in restored for symbol in active):
+                raise ValueError("invalid active symbols")
+            fetched_at = float(snapshot["fetchedAt"])
+            if not math.isfinite(fetched_at) or not 0 < fetched_at <= time.time():
+                raise ValueError("invalid snapshot time")
+            CFD_SYMBOLS.update(restored)
+            self.active_symbols = set(active)
+            self.fetched_at = fetched_at
+        except (OSError, ValueError, TypeError, KeyError, AttributeError):
+            pass
+
+    def _normalize(self, rows, categories):
+        if len(rows) > 10000:
+            raise RuntimeError("Gate 品种目录超出数量限制，使用本机已有目录")
+        symbols = {}
+        for row in rows:
+            symbol = row.get("symbol")
+            validate_cfd_position_scope(symbol, "1")
+            category_id = int(row["category_id"])
+            description = str(row.get("symbol_desc") or symbol)[:200]
+            name = self.DISPLAY_NAMES.get(symbol, description)
+            if categories.get(category_id) == "外汇" and len(symbol) == 6:
+                currencies = [self.CURRENCY_NAMES.get(symbol[:3]), self.CURRENCY_NAMES.get(symbol[3:])]
+                if all(currencies):
+                    name = "/".join(currencies)
+            precision = row.get("price_precision")
+            symbols[symbol] = {
+                "symbol": symbol, "name": name, "description": description,
+                "categoryId": category_id, "categoryName": categories.get(category_id, "其他"),
+                # This is the upstream settlement currency, not an inferred quote.
+                "settlementCurrency": str(row.get("settlement_currency") or ""),
+                "pricePrecision": precision if isinstance(precision, int) and 0 <= precision <= 8 else None,
+                "status": str(row.get("status") or "unknown"),
+                "isBase": row.get("is_base") is not False,
+                "tradeMode": str(row.get("trade_mode") or ""),
+            }
+        if not symbols:
+            raise RuntimeError("Gate 品种目录为空，使用本机已有目录")
+        return symbols
+
+    def remember(self, symbols):
+        """Keep historical scopes usable even when the directory snapshot is lost."""
+        with self.lock:
+            for symbol in symbols:
+                try:
+                    validate_cfd_position_scope(symbol, "1")
+                except ValueError:
+                    continue
+                CFD_SYMBOLS.setdefault(symbol, {
+                    "symbol": symbol, "name": self.DISPLAY_NAMES.get(symbol, symbol),
+                    "categoryId": -1, "categoryName": "历史品种", "isBase": True,
+                    "status": "unavailable",
+                })
+
+    def get(self, *, refresh=False, offline=False):
+        with self.lock:
+            now = time.time()
+            if not offline and now >= self.next_attempt_at and (refresh or now - self.fetched_at >= self.TTL_SECONDS):
+                self.next_attempt_at = now + self.RETRY_SECONDS
+                try:
+                    categories = dict(CFD_CATEGORY_NAMES)
+                    # Category failure must not hide otherwise usable symbols.
+                    try:
+                        for item in self.provider.fetch_directory(categories=True):
+                            if not item.get("is_favorite"):
+                                name = str(item["category_name"])
+                                categories[int(item["category_id"])] = self.CATEGORY_TRANSLATIONS.get(name.lower(), name)
+                    except RuntimeError:
+                        pass
+                    symbols = self._normalize(self.provider.fetch_directory(), categories)
+                    CFD_SYMBOLS.update(symbols)
+                    self.active_symbols = set(symbols)
+                    self.fetched_at = now
+                    self.warning = None
+                    try:
+                        self.cache_file.parent.mkdir(parents=True, exist_ok=True)
+                        temporary = self.cache_file.with_suffix(".tmp")
+                        temporary.write_text(json.dumps({
+                            "symbols": list(CFD_SYMBOLS.values()),
+                            "activeSymbols": sorted(self.active_symbols), "fetchedAt": now,
+                        }, ensure_ascii=False), encoding="utf-8")
+                        temporary.replace(self.cache_file)
+                    except OSError:
+                        self.warning = "目录已更新，但本机目录快照未能保存"
+                except (RuntimeError, ValueError, TypeError, KeyError, AttributeError):
+                    self.warning = "Gate 品种目录暂时无法获取，使用本机已有目录；稍后可刷新重试"
+            symbols = [dict(item) if symbol in self.active_symbols else {**item, "status": "unavailable"}
+                       for symbol, item in CFD_SYMBOLS.items()]
+            return {
+                "symbols": symbols, "source": "gate-cfd", "updatedAt": self.fetched_at * 1000 or None,
+                "stale": offline or now - self.fetched_at >= self.TTL_SECONDS,
+                "warning": "离线模式：使用本机已有品种目录" if offline else self.warning,
+            }

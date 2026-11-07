@@ -1,5 +1,7 @@
 import { REVIEW_TIMEFRAMES, type ReviewTimeframe } from '@/domain/timeframe';
-import { CFD_SYMBOLS } from '@/api/cfd-api';
+import { isCfdSymbol } from '@/api/cfd-api';
+import type { UsDayReplay } from '@/features/replay/us-day-replay';
+import { getFullUsEquitySession } from '@/features/replay/us-equity-session';
 import { storedTradingSessions, type TradingSession } from '@/chart/trading-sessions';
 import { readLocalUiState, storedBoolean, storedString, writeLocalUiState } from '@/ui/persistence/local-ui-state';
 export const REVIEW_LOCATION_STORAGE_KEY = 'tiabtc-review-location-v1';
@@ -14,20 +16,25 @@ export type ReviewUiPreferences = {
   isLogScale: boolean;
   sessionBands: TradingSession[];
   showWeekendBands: boolean;
+  /** Legacy input retained until the chart mounts and migrates its EMA preferences. */
+  showEma20: boolean;
+  showBarCount: boolean;
 };
 
 export function loadReviewUiPreferences(market: 'perpetual' | 'cfd'): ReviewUiPreferences {
   const stored = readLocalUiState(market === 'cfd' ? 'tiabtc-cfd-ui-v1' : REVIEW_UI_STORAGE_KEY);
   const fallback = market === 'cfd' ? 'XAUUSD' : 'BTCUSDT';
-  const symbol = storedString(stored.symbol, fallback, undefined, 32).toUpperCase();
+  const symbol = storedString(stored.symbol, fallback, undefined, 40).toUpperCase();
   const valid = market === 'cfd'
-    ? CFD_SYMBOLS.some((item) => item.symbol === symbol)
+    ? isCfdSymbol(symbol)
     : /^[A-Z0-9]{1,24}USDT$/.test(symbol);
   return {
     symbol: valid ? symbol : fallback,
     isLogScale: storedBoolean(stored.isLogScale, false),
     sessionBands: storedTradingSessions(stored),
     showWeekendBands: storedBoolean(stored.showWeekendBands, false),
+    showEma20: storedBoolean(stored.showEma20, true),
+    showBarCount: storedBoolean(stored.showBarCount, true),
   };
 }
 
@@ -42,6 +49,7 @@ export type StoredFreeReplay = {
   startTimeMs: number;
   cursorTimeMs: number;
   speed: number;
+  daySession?: UsDayReplay;
 };
 
 export function normalizeReviewVisibleSpan(value: unknown): number {
@@ -68,11 +76,24 @@ export function normalizeStoredFreeReplay(value: unknown): StoredFreeReplay | nu
   ) {
     return null;
   }
+  const day = normalizeDaySession(raw.daySession, startTimeMs, cursorTimeMs);
+  if (raw.daySession !== undefined && !day.daySession) return null;
   return {
     startTimeMs: Math.round(startTimeMs),
     cursorTimeMs: Math.round(cursorTimeMs),
     speed: [1, 2, 5, 10].includes(speed) ? speed : 1,
+    ...day,
   };
+}
+
+function normalizeDaySession(value: unknown, start: number, cursor: number): { daySession?: UsDayReplay } {
+  if (!value || typeof value !== 'object') return {};
+  const raw = value as Partial<UsDayReplay>;
+  if (typeof raw.date !== 'string') return {};
+  const session = getFullUsEquitySession(raw.date);
+  return session && raw.fromMs === session.fromMs && raw.toMs === session.toMs &&
+    start === session.fromMs && cursor >= start && cursor <= session.toMs
+    ? { daySession: { date: raw.date, ...session } } : {};
 }
 
 export function loadStoredReviewLocation(market: 'perpetual' | 'cfd'): StoredReviewLocation | null {

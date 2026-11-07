@@ -22,6 +22,7 @@ import {
   positionPnl,
   venueLabel,
   positionCurrency,
+  isCfdPosition,
   type PositionTag,
   type ReviewPosition,
 } from './position-review-types';
@@ -114,7 +115,7 @@ export function PositionReviewPanel({
 
   const pnl = positionPnl(position);
   const currency = positionCurrency(position);
-  const isCfd = position.venue === 'gate-cfd';
+  const isCfd = isCfdPosition(position);
   const roi = calculatePositionRoi(position);
   const totalFee = (position.openFee || 0) + (position.closeFee || 0);
   const displayedPricePrecision = pricePrecision([
@@ -166,8 +167,8 @@ export function PositionReviewPanel({
       value: formatNumber(position.contracts, 4),
     },
     {
-      label: `已实现净盈亏 (${currency})`,
-      value: isCfd && position.netPnl == null ? '—' : `${pnl >= 0 ? '+' : ''}${formatNumber(pnl)}`,
+      label: `${position.venue === 'exness' && position.netPnl == null ? '已实现利润' : '已实现净盈亏'} (${currency})`,
+      value: position.venue === 'gate-cfd' && position.netPnl == null ? '—' : `${pnl >= 0 ? '+' : ''}${formatNumber(pnl)}`,
       isProfit: pnl > 0,
       isLoss: pnl < 0,
     },
@@ -191,6 +192,9 @@ export function PositionReviewPanel({
     <div className="bitlang-review-panel posrev-panel">
       <section className="posrev-overview" aria-label="仓位概览">
         <h3 className="posrev-detail-section-title">概览</h3>
+        {position.venue === 'exness' && <p className="posrev-note-label">{position.currency
+          ? '交易来自 Exness API；利润与费用分别展示，未提供的杠杆与保证金不推算。'
+          : '历史文件利润保留原值；API 核对对应仓位后补齐币种与成交明细。'}</p>}
         <div className="bitlang-metrics posrev-metrics-grid">
           {metrics.map((item) => (
             <div key={item.label}>

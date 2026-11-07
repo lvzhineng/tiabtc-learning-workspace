@@ -272,12 +272,13 @@ export function FreeReplayPanel({
       <div style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '12px', color: 'var(--accent-orange)', fontWeight: 600 }}>
         <Clock size={14} />
         <span>
-          {isPlaying ? '播放中' : activeReplay.status === 'completed' ? '回放完结' : '自由复盘'}
+          {isPlaying ? '播放中' : activeReplay.status === 'completed' ? '回放完结' : activeReplay.daySession ? '美股单日复盘' : '自由复盘'}
         </span>
       </div>
 
       {/* Progress Date Display */}
       <div style={{ fontSize: '12px', fontFamily: 'var(--font-mono)', color: 'var(--text-primary)' }}>
+        {activeReplay.daySession && <span title="纽约交易日；下方揭示时间为北京时间">{activeReplay.daySession.date} · 纽约09:30–16:00 · </span>}
         揭示至: {formatChartTime(activeReplay.cursorTimeMs, activeTimeframe)}
       </div>
 
@@ -304,6 +305,7 @@ export function FreeReplayPanel({
 
         <button
           onClick={onTogglePlay}
+          disabled={Boolean(activeReplay.daySession && activeReplay.cursorTimeMs >= activeReplay.daySession.toMs)}
           title={isPlaying ? '暂停 (Space)' : '自动播放 (Space)'}
           style={{
             background: isPlaying ? 'var(--accent-orange)' : 'var(--accent-blue)',
@@ -325,6 +327,7 @@ export function FreeReplayPanel({
 
         <button
           onClick={onNextBar}
+          disabled={Boolean(activeReplay.daySession && activeReplay.cursorTimeMs >= activeReplay.daySession.toMs)}
           title="下一根 (Right Arrow)"
           style={{
             background: 'var(--bg-dark-700)',

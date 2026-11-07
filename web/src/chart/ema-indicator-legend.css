@@ -1,0 +1,183 @@
+.ema-legend {
+  position: absolute;
+  z-index: 6;
+  --ema-legend-base-top: 8px;
+  top: var(--ema-legend-base-top);
+  left: 12px;
+  max-width: calc(100% - 24px);
+  pointer-events: none;
+  color: var(--text-primary);
+  font-size: 12px;
+  line-height: 1.25;
+  user-select: none;
+}
+
+.ema-legend__panel {
+  min-width: 148px;
+  padding: 5px 6px 6px;
+  border: 1px solid color-mix(in srgb, var(--border-color) 76%, transparent);
+  border-radius: var(--radius-sm);
+  background: color-mix(in srgb, var(--bg-dark-800) 88%, transparent);
+  box-shadow: 0 2px 8px rgb(0 0 0 / 16%);
+  backdrop-filter: blur(8px);
+  pointer-events: none;
+}
+
+.ema-legend__panel.is-collapsed {
+  min-width: 0;
+  padding: 2px;
+}
+
+.ema-legend__header,
+.ema-legend__header-actions,
+.ema-legend__row {
+  display: flex;
+  align-items: center;
+}
+
+.ema-legend__header {
+  min-height: 22px;
+  justify-content: space-between;
+  gap: 6px;
+}
+
+.ema-legend__header-actions {
+  gap: 3px;
+}
+
+.ema-legend__rows {
+  display: grid;
+  gap: 1px;
+  margin-top: 2px;
+}
+
+.ema-legend__row {
+  min-height: 21px;
+  gap: 7px;
+  border-radius: 4px;
+  padding-left: 4px;
+  pointer-events: auto;
+}
+
+.ema-legend__row.is-hidden {
+  opacity: 0.52;
+}
+
+.ema-legend__label {
+  min-width: 48px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.ema-legend__value {
+  flex: 1;
+  overflow: hidden;
+  color: var(--text-primary);
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ema-legend button {
+  display: inline-flex;
+  min-width: 22px;
+  min-height: 22px;
+  align-items: center;
+  justify-content: center;
+  border: 0;
+  border-radius: 4px;
+  padding: 0 3px;
+  background: transparent;
+  color: var(--text-secondary);
+  cursor: pointer;
+  font: inherit;
+  pointer-events: auto;
+}
+
+.ema-legend button:hover {
+  background: var(--accent-soft);
+  color: var(--text-primary);
+}
+
+.ema-legend button:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring);
+  color: var(--text-primary);
+}
+
+.ema-legend button svg,
+.ema-legend__warning svg {
+  width: 13px;
+  height: 13px;
+  flex: none;
+}
+
+.ema-legend__collapse {
+  gap: 3px;
+  font-weight: 600 !important;
+  color: var(--text-primary) !important;
+}
+
+.ema-legend__all-toggle,
+.ema-legend__warning {
+  color: var(--text-muted) !important;
+}
+
+.ema-legend__visibility {
+  width: 22px;
+  height: 22px;
+  opacity: 0;
+}
+
+.ema-legend__row:hover .ema-legend__visibility,
+.ema-legend__row:focus-within .ema-legend__visibility,
+.ema-legend__visibility:focus-visible {
+  opacity: 1;
+}
+
+.ema-legend__loading {
+  color: var(--text-muted);
+  font-size: 10px;
+  white-space: nowrap;
+}
+
+.ema-legend__warning {
+  display: inline-flex;
+  width: 20px;
+  height: 20px;
+  align-items: center;
+  justify-content: center;
+  cursor: help;
+  pointer-events: auto;
+}
+
+/* These workspaces reserve the first row for the candle time/OHLC readout. */
+.chart-canvas-stack[data-indicator-scope='position'] .ema-legend,
+.chart-canvas-stack[data-indicator-scope='bitlang'] .ema-legend {
+  --ema-legend-base-top: 40px;
+}
+
+@media (hover: none), (pointer: coarse) {
+  .ema-legend__visibility {
+    opacity: 1;
+  }
+}
+
+@media (max-width: 480px) {
+  .ema-legend {
+    --ema-legend-base-top: 6px;
+    left: 6px;
+    font-size: 11px;
+  }
+
+  .ema-legend__panel {
+    min-width: 138px;
+    padding: 4px 5px 5px;
+  }
+
+  .ema-legend__row {
+    gap: 5px;
+  }
+}
